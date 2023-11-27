@@ -1,0 +1,5 @@
+# Link the base Stratcona dependencies
+-r requirements.txt
+
+# Required for testing the package
+pytest >= 7.3.1
