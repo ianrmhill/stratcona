@@ -124,4 +124,4 @@ def boed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, log
             i_max = i
 
     # Return either just the best design found or a full dataframe reporting the designs and EIGs
-    return eig_pairs[i_max][0] if return_best_only else pd.DataFrame(eig_pairs, columns=['design', 'eig'])
+    return eig_pairs[i_max] if return_best_only else pd.DataFrame(eig_pairs, columns=['design', 'eig'])
