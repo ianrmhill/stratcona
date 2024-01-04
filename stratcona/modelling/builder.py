@@ -39,13 +39,13 @@ class LatentVariable():
                 raise NotImplementedError
 
     def get_dist_type(self):
-        if self.dist.rv_op.name in ['normal', 'gamma']:
+        if self.dist.rv_op.name in ['normal', 'gamma', 'halfcauchy']:
             return 'continuous'
         elif self.dist.rv_op.name in ['binomial']:
             return 'discrete'
         else:
             actual_type = type(self.dist)
-            raise NotImplementedError
+            raise NotImplementedError(f"Distribution of type {actual_type} is not yet supported.")
 
 
 class ModelBuilder():
@@ -79,7 +79,7 @@ class ModelBuilder():
     def set_variable_observed(self, var_name, variability):
         self.observes[var_name] = {'variability': variability}
 
-    def _normalize_latent_space(self):
+    def _normalize_latent_space(self, normalization_strategy = None):
         """
         Normalizes the variance of the latent variable space to make the entropy approximately equal for each variable.
         This reduces the bias of EIG calculation towards variables with higher entropy. Note that this is not the best
@@ -100,13 +100,32 @@ class ModelBuilder():
             if ltnt.dist_type == 'continuous':
                 ltnt.variance_to_prms(target_variance)
 
+    def extract_experiment_params(self):
+        # Retrieve the experiment values from the shared variable which will be in a numpy array format
+        exps = self.experiment_handle.get_value()
+        num_prms = len(self.experiment_params)
+        # We place the parameter values, bundled across multiple experiments, into a dict for easy keyword args passing
+        extracted = {}
+        for i in range(num_prms):
+            extracted[self.experiment_params[i]] = exps[:, i]
+        return extracted
+
     def extract_priors(self):
+        """Transforms the tensor-formatted priors handle into a dictionary format for name-based assignment."""
         prior_vals = self.priors_handle.get_value()
         extracted = {}
         for i, var in enumerate(self.latents):
             extracted[var] = {}
             for j, prm in enumerate(self.latents[var].prms):
                 extracted[var][prm] = prior_vals[i][j]
+        return extracted
+
+    def extract_observed(self):
+        """Retrieves the tensor-formatted observed data for all the observed variables into dictionary format."""
+        obs_vals = self.observed_handle.get_value()
+        extracted = {}
+        for i, var in enumerate(self.observes):
+            extracted[var] = obs_vals[i]
         return extracted
 
     def update_priors(self):
@@ -118,24 +137,16 @@ class ModelBuilder():
         self.samples_per_experiment = samples_per_experiment
         self.dims = {'devices': np.arange(samples_per_experiment), 'tests': np.arange(simultaneous_experiments)}
 
-    def extract_experiment_params(self):
-        # Retrieve the experiment values from the shared variable which will be in a numpy array format
-        exps = self.experiment_handle.get_value()
-        num_prms = len(self.experiment_params)
-        # We place the parameter values, bundled across multiple experiments, into a dict for easy keyword args passing
-        extracted = {}
-        for i in range(num_prms):
-            extracted[self.experiment_params[i]] = exps[:, i]
-        return extracted
-
-    def build_model(self):
+    def build_model(self, ltnt_normalization: str = None):
         # First we must configure the latent variable space as ensuring uncertainty is relatively balanced between the
         # set of variables is crucial to avoiding extremely biased optimal experiment design results
-        self._normalize_latent_space()
+        self._normalize_latent_space(ltnt_normalization)
         priors_formatted = np.array([list(var.prms.values()) for var in self.latents.values()])
 
         exp_dims = (self.num_experiments, len(self.experiment_params))
-        self.experiment_handle, self.priors_handle = define_shared_vars(exp_dims, priors_formatted)
+        obs_dims = (len(self.observes.keys()), self.samples_per_experiment, self.num_experiments)
+        self.experiment_handle, self.priors_handle, self.observed_handle =\
+            define_shared_vars(exp_dims, priors_formatted, obs_dims)
 
         # Build the PyMC model now that all elements have been prepped
         with pymc.Model(coords=self.dims) as mdl:
@@ -150,10 +161,21 @@ class ModelBuilder():
             for name, dep in self.dependents.items():
                 deps[name] = dep(**ltnts, **experiment_params)
 
+            obs_data_mapped = self.extract_observed()
             observes = {}
+            inf_observes = {}
             for name, obs in self.observes.items():
+                # One key challenge with PyMC is that it treats observed and unobserved variables differently in the
+                # underlying PyTensor compute graph. We need the unobserved version for the BOED runner, but the
+                # observed version for standard inference. We thus define each observed variable twice, once in each
+                # form, which allows for both BOED and inference using 'different' variables that are equivalent
                 observes[name] = pymc.Normal(name, deps[name], np.full(self.num_experiments, obs['variability']),
                                              shape=tuple([len(dim) for dim in self.dims.values()]),
                                              dims=tuple(self.dims.keys()))
+                inf_observes[name + '_obs'] = pymc.Normal(name + '_obs', deps[name],
+                                                          np.full(self.num_experiments, obs['variability']),
+                                                          observed=obs_data_mapped[name],
+                                                          shape=tuple([len(dim) for dim in self.dims.values()]),
+                                                          dims=tuple(self.dims.keys()))
 
         return mdl, list(ltnts.values()), list(observes.values())

@@ -30,15 +30,25 @@ def wearout_boed():
 
     builder.define_experiment_params(['temp', 'vdd', 'time'], simultaneous_experiments=2, samples_per_experiment=10)
 
+    # TODO: We will use the predicted lifespan confidence as our optimization target and basis for latent normalization
+    failure_threshold, field_temp, field_vdd = 0.015, 300, 0.9
+    def predict_lifespan(a0, e_aa, alpha, n):
+        # Computes the time required to reach a given deltaVth threshold under the determined field use conditions
+        val = (1/a0) * np.exp(-e_aa / (boltz_ev * field_temp)) * (field_vdd ** -alpha)
+        return np.emath.logn(n, val * failure_threshold)
+
+    #builder.add_dependent_variable('FieldLifespan', predict_lifespan)
     builder.add_dependent_variable('Delta_Vth', bti_vth_shift_empirical)
     builder.set_variable_observed('Delta_Vth', variability=0.02)
 
-    mdl, ltnt_list, obs_list = builder.build_model()
+    mdl, ltnt_list, obs_list = builder.build_model(ltnt_normalization=None)
 
     # 2. Create the necessary samplers and probability compute graphs
+    # Define a proposal for the marginal probability (the distribution of vth shift across all tests and latent values)
     with pymc.Model() as marg_proposal:
         y_int = pymc.Normal('vth_shift_expected', [0.01, 0.008], [0.01, 0.008], shape=(10, 2))
     y_sampler = pymc.compile_pymc([], y_int, name='marg_sampler')
+    # Compile the model samplers needed for BOED
     prior_sampler = shorthand_compile('ltnt_sampler', mdl, ltnt_list, obs_list)
     ltnt_logp = shorthand_compile('ltnt_logp', mdl, ltnt_list, obs_list)
     obs_logp = shorthand_compile('obs_logp', mdl, ltnt_list, obs_list)
@@ -56,10 +66,13 @@ def wearout_boed():
     print(f"Best test: {best_test[0]} with EIG: {best_test[1]} nats")
 
     # 4. Run Gerabaldi simulation to emulate running the test and getting observations
-
+    # TODO: Run simulation
+    builder.observed_handle.set_value(np.array([[[0.02, 0.024], [0.021, 0.021], [0.021, 0.018], [0.021, 0.021],
+                                                 [0.021, 0.021], [0.02, 0.021], [0.021, 0.021], [0.024, 0.026],
+                                                 [0.017, 0.022], [0.021, 0.021]]]))
 
     # 5. Infer the posterior for the model based on the observed data
-
+    idata = pymc.sample(model=mdl)
 
     # 6. Repeat and visualize results
 
