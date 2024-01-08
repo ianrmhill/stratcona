@@ -65,7 +65,7 @@ class ModelBuilder():
         self.experiment_params = None
         self.num_experiments = None
         self.samples_per_experiment = None
-        self.experiment_handle, self.priors_handle = None, None
+        self.experiment_handle, self.priors_handle, self.observed_handle = None, None, None
         self.dims = {}
 
     def add_latent_variable(self, var_name, distribution, prior):

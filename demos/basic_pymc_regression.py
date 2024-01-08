@@ -12,7 +12,7 @@ import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from stratcona.modelling.builder import LatentVariable # noqa: ImportNotAtTopOfFile
-from stratcona.engine.inference import fit_latent_params_to_posterior_samples # noqa: ImportNotAtTopOfFile
+from stratcona.engine.inference import inference_model, fit_latent_params_to_posterior_samples # noqa: ImportNotAtTopOfFile
 
 
 def do_inference():
@@ -47,9 +47,9 @@ def do_inference():
             # Define likelihood
             likelihood = pymc.Normal("y", mu=intercept + slope * x, sigma=sigma, observed=y)
 
-            # Inference!
-            # draw 3000 posterior samples using NUTS sampling
-            idata = pymc.sample(3000)
+        # Inference!
+        # draw 3000 posterior samples using NUTS sampling
+        idata = inference_model(model, num_samples=3000)
         idata.to_netcdf('lin_regress.nc')
     else:
         idata = arviz.from_netcdf('lin_regress.nc')
@@ -57,7 +57,7 @@ def do_inference():
     latent_vars = {'sigma': LatentVariable('sigma', pymc.HalfCauchy, {'beta': 10}),
                    'intercept': LatentVariable('intercept', pymc.Normal, {'mu': 0, 'sigma': 20}),
                    'slope': LatentVariable('slope', pymc.Normal, {'mu': 0, 'sigma': 20})}
-    new_prms = fit_latent_params_to_posterior_samples(latent_vars, idata)
+    new_prms = fit_latent_params_to_posterior_samples(latent_vars, idata, run_fit_analysis=True)
     #arviz.plot_trace(idata)
     #plt.show()
 
