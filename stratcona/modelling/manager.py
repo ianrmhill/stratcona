@@ -49,4 +49,4 @@ class TestDesignManager:
         if not 'life_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['life_sampler'] =\
                 shorthand_compile('life_sampler', self._test_model, self.latents_info, self.observed_info)
-        bound = worst_case_quantile_credible_interval(self._compiled_funcs['life_sampler'], 90)
+        bound = worst_case_quantile_credible_region(self._compiled_funcs['life_sampler'], 90)

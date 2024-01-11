@@ -6,6 +6,7 @@ import pytensor as pt
 import pymc
 
 from .variables import define_shared_vars
+from .tensor_dict_translator import *
 
 __all__ = ['ModelBuilder']
 
@@ -41,11 +42,10 @@ class LatentVariable():
     def get_dist_type(self):
         if self.dist.rv_op.name in ['normal', 'gamma', 'halfcauchy']:
             return 'continuous'
-        elif self.dist.rv_op.name in ['binomial']:
+        elif self.dist.rv_op.name in ['binomial', 'categorical', 'hypergeometric']:
             return 'discrete'
         else:
-            actual_type = type(self.dist)
-            raise NotImplementedError(f"Distribution of type {actual_type} is not yet supported.")
+            raise NotImplementedError(f"Distribution of type {self.dist.rv_op.name} is not yet supported.")
 
 
 class ModelBuilder():
@@ -66,6 +66,7 @@ class ModelBuilder():
         self.num_experiments = None
         self.samples_per_experiment = None
         self.experiment_handle, self.priors_handle, self.observed_handle = None, None, None
+        self.experiment_map, self.priors_map, self.observed_map = None, None, None
         self.dims = {}
 
     def add_latent_variable(self, var_name, distribution, prior):
@@ -110,15 +111,15 @@ class ModelBuilder():
             extracted[self.experiment_params[i]] = exps[:, i]
         return extracted
 
-    def extract_priors(self):
-        """Transforms the tensor-formatted priors handle into a dictionary format for name-based assignment."""
-        prior_vals = self.priors_handle.get_value()
-        extracted = {}
-        for i, var in enumerate(self.latents):
-            extracted[var] = {}
-            for j, prm in enumerate(self.latents[var].prms):
-                extracted[var][prm] = prior_vals[i][j]
-        return extracted
+    def _prep_priors(self):
+        # First gather the prior values from all the latent variables in the model into a dict
+        priors = {}
+        for ltnt in self.latents:
+            priors[ltnt] = self.latents[ltnt].prms
+        # Now determine how to define a tensor that will fit the prior values
+        self.priors_map = gen_priors_mapping(priors)
+        # Now generate the tensor form for the priors
+        return translate_priors(priors, self.priors_map)
 
     def extract_observed(self):
         """Retrieves the tensor-formatted observed data for all the observed variables into dictionary format."""
@@ -141,16 +142,17 @@ class ModelBuilder():
         # First we must configure the latent variable space as ensuring uncertainty is relatively balanced between the
         # set of variables is crucial to avoiding extremely biased optimal experiment design results
         self._normalize_latent_space(ltnt_normalization)
-        priors_formatted = np.array([list(var.prms.values()) for var in self.latents.values()])
+        #priors_formatted = np.array([list(var.prms.values()) for var in self.latents.values()])
+        priors_tensor = self._prep_priors()
 
         exp_dims = (self.num_experiments, len(self.experiment_params))
         obs_dims = (len(self.observes.keys()), self.samples_per_experiment, self.num_experiments)
         self.experiment_handle, self.priors_handle, self.observed_handle =\
-            define_shared_vars(exp_dims, priors_formatted, obs_dims)
+            define_shared_vars(exp_dims, priors_tensor, obs_dims)
 
         # Build the PyMC model now that all elements have been prepped
         with pymc.Model(coords=self.dims) as mdl:
-            priors_mapped = self.extract_priors()
+            priors_mapped = translate_priors(self.priors_handle.get_value(), self.priors_map)
             ltnts = {}
             for name, ltnt in self.latents.items():
                 ltnts[name] = ltnt.dist(name, **priors_mapped[name])
@@ -177,5 +179,8 @@ class ModelBuilder():
                                                           observed=obs_data_mapped[name],
                                                           shape=tuple([len(dim) for dim in self.dims.values()]),
                                                           dims=tuple(self.dims.keys()))
+
+            # Finally, add the lifespan estimate variables that constitute our prediction under field use conditions
+            # TODO
 
         return mdl, list(ltnts.values()), list(observes.values())
