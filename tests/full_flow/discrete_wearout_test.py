@@ -27,7 +27,8 @@ def test_discrete():
 
     tm = stratcona.TestDesignManager(mb)
 
-    tm.estimate_reliability()
+    field_use_conditions = None
+    tm.estimate_reliability(field_use_conditions)
     tm.determine_best_test()
     tm.infer_model()
     tm.estimate_reliability()

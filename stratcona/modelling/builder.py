@@ -101,15 +101,17 @@ class ModelBuilder():
             if ltnt.dist_type == 'continuous':
                 ltnt.variance_to_prms(target_variance)
 
-    def extract_experiment_params(self):
-        # Retrieve the experiment values from the shared variable which will be in a numpy array format
-        exps = self.experiment_handle.get_value()
-        num_prms = len(self.experiment_params)
-        # We place the parameter values, bundled across multiple experiments, into a dict for easy keyword args passing
-        extracted = {}
-        for i in range(num_prms):
-            extracted[self.experiment_params[i]] = exps[:, i]
-        return extracted
+    def define_experiment_params(self, prm_list, simultaneous_experiments, samples_per_experiment):
+        self.experiment_params = prm_list
+        # TODO: Enhance to allow for named experiments
+        self.num_experiments = simultaneous_experiments
+        self.samples_per_experiment = samples_per_experiment
+        self.dims = {'devices': np.arange(samples_per_experiment), 'tests': np.arange(simultaneous_experiments)}
+
+    def _prep_experiments(self):
+        # First determine the experiment dict to tensor mapping based on the experiment parameter info
+        self.experiment_map = gen_experiment_mapping(self.num_experiments, self.experiment_params)
+        return self.experiment_map['dims']
 
     def _prep_priors(self):
         # First gather the prior values from all the latent variables in the model into a dict
@@ -121,34 +123,23 @@ class ModelBuilder():
         # Now generate the tensor form for the priors
         return translate_priors(priors, self.priors_map)
 
-    def extract_observed(self):
-        """Retrieves the tensor-formatted observed data for all the observed variables into dictionary format."""
-        obs_vals = self.observed_handle.get_value()
-        extracted = {}
-        for i, var in enumerate(self.observes):
-            extracted[var] = obs_vals[i]
-        return extracted
+    def _prep_observations(self):
+        # TODO: Currently the number of samples has to match for all observed variables, augment this
+        sample_counts = {var: self.samples_per_experiment for var in self.observes}
+        self.observed_map = gen_observation_mapping(sample_counts, self.num_experiments)
+        return self.observed_map['dims']
 
     def update_priors(self):
         pass
-
-    def define_experiment_params(self, prm_list, simultaneous_experiments, samples_per_experiment):
-        self.experiment_params = prm_list
-        self.num_experiments = simultaneous_experiments
-        self.samples_per_experiment = samples_per_experiment
-        self.dims = {'devices': np.arange(samples_per_experiment), 'tests': np.arange(simultaneous_experiments)}
 
     def build_model(self, ltnt_normalization: str = None):
         # First we must configure the latent variable space as ensuring uncertainty is relatively balanced between the
         # set of variables is crucial to avoiding extremely biased optimal experiment design results
         self._normalize_latent_space(ltnt_normalization)
-        #priors_formatted = np.array([list(var.prms.values()) for var in self.latents.values()])
-        priors_tensor = self._prep_priors()
 
-        exp_dims = (self.num_experiments, len(self.experiment_params))
-        obs_dims = (len(self.observes.keys()), self.samples_per_experiment, self.num_experiments)
-        self.experiment_handle, self.priors_handle, self.observed_handle =\
-            define_shared_vars(exp_dims, priors_tensor, obs_dims)
+        # Determine dict->tensor mappings then allocate the shared tensor variables used to swap data dynamically
+        pri_t, exp_dims, obs_dims = self._prep_priors(), self._prep_experiments(), self._prep_observations()
+        self.experiment_handle, self.priors_handle, self.observed_handle = define_shared_vars(exp_dims, pri_t, obs_dims)
 
         # Build the PyMC model now that all elements have been prepped
         with pymc.Model(coords=self.dims) as mdl:
@@ -157,13 +148,13 @@ class ModelBuilder():
             for name, ltnt in self.latents.items():
                 ltnts[name] = ltnt.dist(name, **priors_mapped[name])
 
-            experiment_params = self.extract_experiment_params()
+            experiment_params = translate_experiment(self.experiment_handle.get_value(), self.experiment_map)
 
             deps = {}
             for name, dep in self.dependents.items():
                 deps[name] = dep(**ltnts, **experiment_params)
 
-            obs_data_mapped = self.extract_observed()
+            obs_data_mapped = translate_observations(self.observed_handle.get_value(), self.observed_map)
             observes = {}
             inf_observes = {}
             for name, obs in self.observes.items():

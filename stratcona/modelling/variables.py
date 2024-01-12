@@ -28,6 +28,5 @@ def define_shared_vars(exp_dims: tuple | np.ndarray, prior_dims: tuple | np.ndar
     """
     exp_handle = pt.shared(np.zeros(exp_dims) if type(exp_dims) == tuple else exp_dims)
     prior_handle = pt.shared(np.zeros(prior_dims) if type(prior_dims) == tuple else prior_dims)
-    # TODO: What if we measure different numbers of devices for different observed variables?
     obs_handle = pt.shared(np.zeros(obs_dims) if type(obs_dims) == tuple else obs_dims)
     return exp_handle, prior_handle, obs_handle
