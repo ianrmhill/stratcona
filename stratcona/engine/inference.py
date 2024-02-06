@@ -50,13 +50,13 @@ def fit_latent_params_to_posterior_samples(latents: dict, idata: arviz.Inference
     post_data = idata.posterior
     posterior_params = {}
     for ltnt in latents:
-        sampled = post_data[ltnt].values.flatten()
-        dist_to_fit = pymc_to_scipy(latents[ltnt].dist.rv_op.name)
+        sampled = post_data[ltnt.name].values.flatten()
+        dist_to_fit = pymc_to_scipy(ltnt.owner.op.name)
         scipy_dist = getattr(scipy.stats, dist_to_fit)
         params = scipy_dist.fit(sampled)
-        posterior_params[ltnt] = {'mu': params[0], 'sigma': params[1]}
+        posterior_params[ltnt.name] = {'mu': params[0], 'sigma': params[1]}
         if run_fit_analysis:
-            check_fit_quality(ltnt, sampled, scipy_dist, posterior_params[ltnt])
+            check_fit_quality(ltnt.name, sampled, scipy_dist, posterior_params[ltnt])
 
     return posterior_params
 

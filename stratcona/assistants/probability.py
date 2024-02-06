@@ -7,7 +7,8 @@ import pymc
 __all__ = ['shorthand_compile']
 
 
-def shorthand_compile(which_func: str, model: pymc.Model, ltnt_vars: list[TensorVariable], obs_vars: list[TensorVariable]):
+def shorthand_compile(which_func: str, model: pymc.Model,
+                      ltnt_vars: list[TensorVariable], obs_vars: list[TensorVariable], pred_vars: list[TensorVariable]):
     # The most complicated part of understanding model compilation is differentiating the three different graph nodes
     # associated with each random variable. Each random variable can be randomly sampled, can have a specific value, and
     # has a specific log probability of taking any specific value. The correct nodes must be provided to the PyMC
@@ -22,6 +23,9 @@ def shorthand_compile(which_func: str, model: pymc.Model, ltnt_vars: list[Tensor
     if which_func == 'ltnt_sampler':
         # No need for inputs, just get latent variable sample outputs based on the prior distribution
         outs = ltnt_vars
+    elif which_func == 'obs_sampler':
+        # No need for inputs, just get latent variable sample outputs based on the prior distribution
+        outs = obs_vars
     elif which_func == 'ltnt_logp':
         # Need to input the specific values that were sampled for the latent variables, output the logp of those values
         ins = ltnt_setpoint_nodes
@@ -30,6 +34,8 @@ def shorthand_compile(which_func: str, model: pymc.Model, ltnt_vars: list[Tensor
         # Need to also input the specific values for the observed variables, output the logp of the observations
         ins = ltnt_setpoint_nodes + obs_setpoint_nodes
         outs = model.logp(vars=obs_vars)
+    elif which_func == 'life_sampler':
+        outs = pred_vars
     else:
         raise NotImplementedError
 

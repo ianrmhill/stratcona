@@ -61,11 +61,12 @@ class ModelBuilder():
         self.latents = {}
         self.discrete_latent_entropy = []
         self.dependents = {}
+        self.predictors = {}
         self.observes = {}
         self.experiment_params = None
         self.num_experiments = None
         self.samples_per_experiment = None
-        self.experiment_handle, self.priors_handle, self.observed_handle = None, None, None
+        self.experiment_handle, self.priors_handle, self.observed_handles = None, None, None
         self.experiment_map, self.priors_map, self.observed_map = None, None, None
         self.dims = {}
 
@@ -76,6 +77,9 @@ class ModelBuilder():
         # TODO: dependent variables could also be RVs, so instead of a compute function could be a distribution
         # TODO: compute function may not require all latents and experiment params, need to filter like in Gerabaldi
         self.dependents[var_name] = compute_func
+
+    def add_lifespan_variable(self, var_name, compute_func):
+        self.predictors[var_name] = compute_func
 
     def set_variable_observed(self, var_name, variability):
         self.observes[var_name] = {'variability': variability}
@@ -124,10 +128,10 @@ class ModelBuilder():
         return translate_priors(priors, self.priors_map)
 
     def _prep_observations(self):
-        # TODO: Currently the number of samples has to match for all observed variables, augment this
-        sample_counts = {var: self.samples_per_experiment for var in self.observes}
-        self.observed_map = gen_observation_mapping(sample_counts, self.num_experiments)
-        return self.observed_map['dims']
+        self.observed_map = {}
+        for var in self.observes:
+            self.observed_map[var] = (self.samples_per_experiment, self.num_experiments)
+        return self.observed_map
 
     def update_priors(self):
         pass
@@ -139,22 +143,27 @@ class ModelBuilder():
 
         # Determine dict->tensor mappings then allocate the shared tensor variables used to swap data dynamically
         pri_t, exp_dims, obs_dims = self._prep_priors(), self._prep_experiments(), self._prep_observations()
-        self.experiment_handle, self.priors_handle, self.observed_handle = define_shared_vars(exp_dims, pri_t, obs_dims)
+        self.experiment_handle, self.priors_handle, self.observed_handles = define_shared_vars(exp_dims, pri_t, obs_dims)
 
         # Build the PyMC model now that all elements have been prepped
+        # TODO: Try to extend shared variable dynamic configuration to the model dimensionality, this would allow for
+        #       experiments with different sample sizes
         with pymc.Model(coords=self.dims) as mdl:
-            priors_mapped = translate_priors(self.priors_handle.get_value(), self.priors_map)
+            # First set up the latent independent variables
+            priors_mapped = translate_priors(self.priors_handle, self.priors_map)
             ltnts = {}
             for name, ltnt in self.latents.items():
                 ltnts[name] = ltnt.dist(name, **priors_mapped[name])
 
-            experiment_params = translate_experiment(self.experiment_handle.get_value(), self.experiment_map)
+            # Build out the dictionary of experimental conditions
+            experiment_params = translate_experiment(self.experiment_handle, self.experiment_map)
 
+            # Now set up the dependent variables
             deps = {}
             for name, dep in self.dependents.items():
                 deps[name] = dep(**ltnts, **experiment_params)
 
-            obs_data_mapped = translate_observations(self.observed_handle.get_value(), self.observed_map)
+            # Next, set up the observed variables that can be measured during a test
             observes = {}
             inf_observes = {}
             for name, obs in self.observes.items():
@@ -167,11 +176,15 @@ class ModelBuilder():
                                              dims=tuple(self.dims.keys()))
                 inf_observes[name + '_obs'] = pymc.Normal(name + '_obs', deps[name],
                                                           np.full(self.num_experiments, obs['variability']),
-                                                          observed=obs_data_mapped[name],
+                                                          observed=self.observed_handles[name],
                                                           shape=tuple([len(dim) for dim in self.dims.values()]),
                                                           dims=tuple(self.dims.keys()))
 
-            # Finally, add the lifespan estimate variables that constitute our prediction under field use conditions
-            # TODO
+            # Finally are lifespan variables that are special dependent variables predicting reliability
+            preds = {}
+            for name, pred in self.predictors.items():
+                # TODO: make operating conditions a standalone object similar to experiment params or latents rather
+                #       than baked into the predictive function
+                preds[name] = pred(**ltnts)
 
-        return mdl, list(ltnts.values()), list(observes.values())
+        return mdl, list(ltnts.values()), list(observes.values()), list(preds.values())
