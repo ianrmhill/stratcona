@@ -52,11 +52,23 @@ def fit_latent_params_to_posterior_samples(latents: dict, idata: arviz.Inference
     for ltnt in latents:
         sampled = post_data[ltnt.name].values.flatten()
         dist_to_fit = pymc_to_scipy(ltnt.owner.op.name)
-        scipy_dist = getattr(scipy.stats, dist_to_fit)
-        params = scipy_dist.fit(sampled)
-        posterior_params[ltnt.name] = {'mu': params[0], 'sigma': params[1]}
-        if run_fit_analysis:
-            check_fit_quality(ltnt.name, sampled, scipy_dist, posterior_params[ltnt])
+        if dist_to_fit == 'categorical':
+            # For discrete variables we have to perform the updates manually. We transform everything into a
+            # categorical distribution to form a distribution that can fit any sampled dataset perfectly.
+            total_samples = sampled.size
+            # Count the number of occurrences of each value then normalize to get the posterior probabilities
+            # FIXME: Currently a parameter length issue will occur if converting from non-categorical distributions,
+            #        as the shared variable tensor used to store the parameters may not be large enough
+            updated = np.bincount(sampled) / total_samples
+            posterior_params[ltnt.name] = {'p': updated}
+        else:
+            scipy_dist = getattr(scipy.stats, dist_to_fit)
+            params = scipy_dist.fit(sampled)
+            posterior_params[ltnt.name] = {'mu': params[0], 'sigma': params[1]}
+            # Fit analysis only useful for continuous variables since the categorical distribution will fit every
+            # set of discrete samples perfectly
+            if run_fit_analysis:
+                check_fit_quality(ltnt.name, sampled, scipy_dist, posterior_params[ltnt])
 
     return posterior_params
 

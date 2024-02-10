@@ -119,6 +119,7 @@ def boed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, log
         # Now we can estimate EIG(d) and add it to the list
         eig = eig_sampled(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely)
         eig_pairs.append([d, eig])
+        print(f"Exp {i}: {eig} nats")
         # Track which is the best experiment from an expected information gain perspective
         if i_max is None or eig > eig_pairs[i_max][1]:
             i_max = i

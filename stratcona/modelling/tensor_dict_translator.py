@@ -37,7 +37,14 @@ def translate_priors(priors, map):
         # Translate from dictionary to tensor
         for i, ltnt in enumerate(map['prms']):
             for j, prm in enumerate(map['prms'][ltnt]):
-                t[i][j][:map['prms'][ltnt][prm]] = priors[ltnt][prm]
+                try:
+                    t[i][j][:map['prms'][ltnt][prm]] = priors[ltnt][prm]
+                except ValueError:
+                    # This is used for categorical RVs, as the number of possible values take may have decreased
+                    # in the posterior, thus we need to pad out zeros to keep the probability weights array the same
+                    # length as before
+                    pad_len = map['prms'][ltnt][prm] - len(priors[ltnt][prm])
+                    t[i][j][:map['prms'][ltnt][prm]] = np.pad(priors[ltnt][prm], (0, pad_len))
         return t
     else:
         # Translate from tensor to dictionary

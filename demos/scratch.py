@@ -3,6 +3,12 @@ import pytensor as pt
 import pymc
 
 
+prms = {'vdd': [0.2, 0.3], 'temp': [300, 350]}
+for prm in prms:
+    prms[prm] = np.expand_dims(prms[prm], axis=1)
+print('Wow')
+
+
 latents = pt.shared(np.ones((2, 2)))
 obs = pt.shared(np.array([1.1, 2.0]))
 

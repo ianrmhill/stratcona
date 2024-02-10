@@ -9,12 +9,15 @@
 
 from datetime import timedelta
 import pytensor as pt
+import pymc
+from matplotlib import pyplot as plt
 
 from gerabaldi.models.reports import TestSimReport
 import gracefall
 
 from stratcona.assistants.probability import shorthand_compile # noqa: ImportNotAtTopOfFile
 from stratcona.engine.inference import *
+from stratcona.engine.boed import *
 from stratcona.engine.metrics import *
 from stratcona.modelling.builder import ModelBuilder
 from stratcona.modelling.tensor_dict_translator import *
@@ -34,7 +37,7 @@ class TestDesignManager:
         self._maps['pri'] = model_builder.priors_map
         self._compiled_funcs = {}
 
-    def determine_best_test(self):
+    def determine_best_test(self, exp_sampler, obs_range):
         # First compile any of the required graph computations that have not already been done
         if not 'ltnt_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['ltnt_sampler'] =\
@@ -46,14 +49,29 @@ class TestDesignManager:
             self._compiled_funcs['obs_logp'] =\
                 shorthand_compile('obs_logp', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
 
-        best_test = None
-        self._handlers['exp'].set_value(best_test)
+        def rand_exp():
+            return translate_experiment(exp_sampler(), self._maps['exp'])
+
+        def obs_sampler():
+            centre_vals = np.random.uniform(obs_range[0], obs_range[1], size=(2, 2))
+            #all_vals = np.random.normal(centre_vals, (obs_range[1] - obs_range[0]) / 5)
+            return centre_vals
+        # TODO: Compute EIG for all the proposed tests
+        eigs = boed_runner(10, 100, 100, rand_exp, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
+                           obs_sampler, self._compiled_funcs['ltnt_logp'], self._compiled_funcs['obs_logp'])
+        # Optionally plot them all
+        print(eigs)
+        best_test = eigs.iloc[eigs['eig'].idxmax()]
+        # Extract the best EIG test
+        print(f"Best experiment: {best_test['design']} with EIG of {best_test['eig']} nats")
+        #self._handlers['exp'].set_value(as_tensor)
 
     def infer_model(self, observations):
         for var in self.observed_info:
             self._handlers['obs'][var.name].set_value(observations[var.name])
         idata = inference_model(self._test_model, num_samples=3000)
-        self._handlers['pri'].set_value(fit_latent_params_to_posterior_samples(self.latents_info, idata))
+        posterior_prms = fit_latent_params_to_posterior_samples(self.latents_info, idata)
+        self._handlers['pri'].set_value(translate_priors(posterior_prms, self._maps['pri']))
 
     def set_experiment_conditions(self, conditions):
         as_tensor = translate_experiment(conditions, self._maps['exp'])
@@ -85,18 +103,27 @@ class TestDesignManager:
         """
         match attribute:
             case 'prior_predictive':
+                gv = pymc.model_to_graphviz(self._test_model)
+                gv.format = 'png'
+                gv.render(filename='model_graph')
+                plt.show()
                 if not 'obs_sampler' in self._compiled_funcs.keys():
                     self._compiled_funcs['obs_sampler'] = \
                         shorthand_compile('obs_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
                     pt.printing.pydotprint(self._compiled_funcs['obs_sampler'], 'func.png')
-                # Turn into a Gerabaldi report for passing to visualization generators
+                # Use a Gerabaldi report for passing to visualization generators
                 report = TestSimReport(name='prior_predictive')
+
                 # Generate the samples
                 sampled = [self._compiled_funcs['obs_sampler']() for _ in range(num_samples)]
-                # TODO: Change gerabaldi reports to avoid having to double array wrap the sampled values
-                sampled = np.array(sampled).reshape((1, 1, -1))
-                as_dataframe = TestSimReport.format_measurements(sampled, 'observed', timedelta(), 0)
-                report.add_measurements(as_dataframe)
+                sampled = np.array(sampled)
+                num_experiments = sampled.shape[2]
+                sampled = np.split(sampled, num_experiments, axis=2)
+                for exp in range(num_experiments):
+                    # TODO: Change gerabaldi reports to avoid having to double array wrap the sampled values
+                    exp_samples = sampled[exp].reshape((1, 1, -1))
+                    as_dataframe = TestSimReport.format_measurements(exp_samples, f"exp{exp}", timedelta(), 0)
+                    report.add_measurements(as_dataframe)
                 gracefall.static.gen_stripplot_generic(report.measurements)
             case 'latents':
                 if not 'ltnt_sampler' in self._compiled_funcs.keys():

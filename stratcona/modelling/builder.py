@@ -5,6 +5,7 @@ import numpy as np
 import pytensor as pt
 import pymc
 
+from stratcona.assistants.dist_translate import convert_to_categorical
 from .variables import define_shared_vars
 from .tensor_dict_translator import *
 
@@ -17,9 +18,18 @@ class LatentVariable():
         self.variance_norm_factor = None
         self.dist = distribution
         self.dist_type = self.get_dist_type()
+        if self.dist_type == 'discrete' and self.dist.rv_op.name != 'categorical':
+            # Since categorical distributions are by far the easiest to work with for the application, convert every
+            # discrete distribution into a categorical via sampling immediately
+            prob_weights = convert_to_categorical(self.dist.rv_op.name, prior_params)
+            self.dist = pymc.Categorical
+            self.user_facing_prms = {'p': prob_weights}
+            self.prms = {'p': prob_weights}
+        else:
+            self.dist = distribution
+            self.user_facing_prms = prior_params
+            self.prms = prior_params
         self.name = name
-        self.user_facing_prms = prior_params
-        self.prms = prior_params
         self.entropy = None
 
     def compute_prior_entropy(self):
@@ -42,7 +52,7 @@ class LatentVariable():
     def get_dist_type(self):
         if self.dist.rv_op.name in ['normal', 'gamma', 'halfcauchy']:
             return 'continuous'
-        elif self.dist.rv_op.name in ['binomial', 'categorical', 'hypergeometric']:
+        elif self.dist.rv_op.name in ['binomial', 'categorical', 'hypergeometric', 'discrete_uniform']:
             return 'discrete'
         else:
             raise NotImplementedError(f"Distribution of type {self.dist.rv_op.name} is not yet supported.")
@@ -110,7 +120,7 @@ class ModelBuilder():
         # TODO: Enhance to allow for named experiments
         self.num_experiments = simultaneous_experiments
         self.samples_per_experiment = samples_per_experiment
-        self.dims = {'devices': np.arange(samples_per_experiment), 'tests': np.arange(simultaneous_experiments)}
+        self.dims = {'tests': np.arange(simultaneous_experiments), 'devices': np.arange(samples_per_experiment)}
 
     def _prep_experiments(self):
         # First determine the experiment dict to tensor mapping based on the experiment parameter info
@@ -145,9 +155,9 @@ class ModelBuilder():
         pri_t, exp_dims, obs_dims = self._prep_priors(), self._prep_experiments(), self._prep_observations()
         self.experiment_handle, self.priors_handle, self.observed_handles = define_shared_vars(exp_dims, pri_t, obs_dims)
 
-        # Build the PyMC model now that all elements have been prepped
+        ### Build the PyMC model now that all elements have been prepped ###
         # TODO: Try to extend shared variable dynamic configuration to the model dimensionality, this would allow for
-        #       experiments with different sample sizes
+        #       experiments and parameters with different sample sizes
         with pymc.Model(coords=self.dims) as mdl:
             # First set up the latent independent variables
             priors_mapped = translate_priors(self.priors_handle, self.priors_map)
@@ -157,10 +167,15 @@ class ModelBuilder():
 
             # Build out the dictionary of experimental conditions
             experiment_params = translate_experiment(self.experiment_handle, self.experiment_map)
+            # Add a dimension to allow for broadcasting along the number of devices axis
+            for prm in experiment_params:
+                experiment_params[prm] = pt.tensor.reshape(experiment_params[prm], (self.num_experiments, 1))
 
             # Now set up the dependent variables
             deps = {}
             for name, dep in self.dependents.items():
+                # FIXME: Currently all dependent variable equations need to accept all latent variables as arguments
+                #        or this errors out
                 deps[name] = dep(**ltnts, **experiment_params)
 
             # Next, set up the observed variables that can be measured during a test
@@ -171,11 +186,11 @@ class ModelBuilder():
                 # underlying PyTensor compute graph. We need the unobserved version for the BOED runner, but the
                 # observed version for standard inference. We thus define each observed variable twice, once in each
                 # form, which allows for both BOED and inference using 'different' variables that are equivalent
-                observes[name] = pymc.Normal(name, deps[name], np.full(self.num_experiments, obs['variability']),
+                observes[name] = pymc.Normal(name, deps[name], np.full(self.num_experiments, obs['variability']).reshape((self.num_experiments, 1)),
                                              shape=tuple([len(dim) for dim in self.dims.values()]),
                                              dims=tuple(self.dims.keys()))
                 inf_observes[name + '_obs'] = pymc.Normal(name + '_obs', deps[name],
-                                                          np.full(self.num_experiments, obs['variability']),
+                                                          np.full(self.num_experiments, obs['variability']).reshape((self.num_experiments, 1)),
                                                           observed=self.observed_handles[name],
                                                           shape=tuple([len(dim) for dim in self.dims.values()]),
                                                           dims=tuple(self.dims.keys()))

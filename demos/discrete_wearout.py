@@ -19,35 +19,56 @@ import stratcona
 def discrete_wearout_demo():
     mb = stratcona.ModelBuilder(mdl_name='Discrete Degradation')
 
-    def param_reduction(a, b, c, temp, time):
-        return -1 * (a + 1) * np.exp((b * temp) / 1000) * (time ** (c / 100))
+    def happy_little_linear_degradation(a, b, c, d, vdd, temp, time):
+        return -1 * ((a / 10) + 0.8) * (b * vdd) * (c * (temp / 100)) * (d * (time / 1000))
 
-    mb.add_latent_variable('a', pymc.Categorical, {'p': [0.0, 0.2, 0.3, 0.3, 0.1, 0.1]})
+    mb.add_latent_variable('a', pymc.Categorical, {'p': [0.1, 0.1, 0.3, 0.3, 0.1, 0.1]})
     mb.add_latent_variable('b', pymc.Categorical, {'p': [0.0, 0.2, 0.3, 0.3, 0.2, 0.0]})
-    mb.add_latent_variable('c', pymc.Categorical, {'p': [0.0, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]})
+    mb.add_latent_variable('c', pymc.Binomial, {'n': 10, 'p': 0.5})
+    mb.add_latent_variable('d', pymc.Binomial, {'n': 10, 'p': 0.5})
 
-    mb.define_experiment_params(['temp', 'time'], simultaneous_experiments=1, samples_per_experiment=10)
+    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=2, samples_per_experiment=2)
 
-    mb.add_dependent_variable('deg', param_reduction)
-    mb.set_variable_observed('deg', variability=0.001)
+    mb.add_dependent_variable('deg', happy_little_linear_degradation)
+    mb.set_variable_observed('deg', variability=10)
 
     # This function is the inverse of the degradation mechanism with a set failure point
-    def lifespan(a, b, c):
-        fail_point, temp = -5, 300
+    def lifespan(a, b, c, d):
+        fail_point, temp, vdd = -150, 300, 0.8
         # Time is the output, this means we may have to numerically estimate the inverse equation for many mechanisms :(
-        time = (fail_point / (-1 * (a + 1) * np.exp((b * temp) / 1000))) ** (100 / c)
+        time = 1000 * (fail_point / (-1 * d * ((a / 10) + 0.8) * (b * vdd) * (c * (temp / 100))))
         return time
     mb.add_lifespan_variable('fail_point', lifespan)
 
     tm = stratcona.TestDesignManager(mb)
-    #tm.examine('latents')
-    #plt.show()
+    tm.set_experiment_conditions({'exp1': {'vdd': 0.8, 'temp': 300, 'time': 500},
+                                  'exp2': {'vdd': 0.9, 'temp': 350, 'time': 500}})
+    tm.examine('prior_predictive')
+    plt.show()
 
-    tm.set_experiment_conditions({'exp1': {'temp': 300, 'time': 1000}})
     estimate = tm.estimate_reliability()
     print(estimate)
-    #tm.determine_best_test()
-    tm.infer_model({'deg': np.array([[-4], [-5], [-4], [-5], [-6], [-7], [-5], [-6], [-4], [-4]])})
+
+    ### Determine Best Experiment Step ###
+    def exp_sampler():
+        vdds_possible = [0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+        temps_possible = [275, 300, 325, 350, 375, 400]
+        times_possible = [100, 300, 500, 700, 900]
+        as_dict = {}
+        for exp in range(2):
+            as_dict[f"exp{exp+1}"] = {'vdd': np.random.choice(vdds_possible),
+                                    'temp': np.random.choice(temps_possible),
+                                    'time': np.random.choice(times_possible)}
+        return as_dict
+    tm.determine_best_test(exp_sampler, (-400, 0))
+
+    ### Simulate the Experiment Step ###
+
+    ### Inference Step ###
+    tm.set_experiment_conditions({'exp1': {'vdd': 0.8, 'temp': 300, 'time': 500},
+                                  'exp2': {'vdd': 0.9, 'temp': 350, 'time': 500}})
+    tm.infer_model({'deg': np.array([[-40, -49],
+                                     [-47, -79]])})
     new_estimate = tm.estimate_reliability()
     print(new_estimate)
 
