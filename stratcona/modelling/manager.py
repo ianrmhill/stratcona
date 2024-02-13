@@ -20,7 +20,6 @@ from stratcona.engine.inference import *
 from stratcona.engine.boed import *
 from stratcona.engine.metrics import *
 from stratcona.modelling.builder import ModelBuilder
-from stratcona.modelling.tensor_dict_translator import *
 
 
 class TestDesignManager:
@@ -32,7 +31,7 @@ class TestDesignManager:
         self._maps = {}
         self._handlers['exp'] = model_builder.experiment_handle
         self._handlers['pri'] = model_builder.priors_handle
-        self._handlers['obs'] = model_builder.observed_handles
+        self._handlers['obs'] = model_builder.observation_handle
         self._maps['exp'] = model_builder.experiment_map
         self._maps['pri'] = model_builder.priors_map
         self._compiled_funcs = {}
@@ -49,37 +48,37 @@ class TestDesignManager:
             self._compiled_funcs['obs_logp'] =\
                 shorthand_compile('obs_logp', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
 
-        def rand_exp():
-            return translate_experiment(exp_sampler(), self._maps['exp'])
-
+        # TODO: The biggest inefficiency of the sampling BOED method used is that many obs samples will be completely
+        #       unrealistic for the given test. Can we have the obs_sampler take the experiment as input?!?! This could
+        #       make the value of a given sample much higher
         def obs_sampler():
             centre_vals = np.random.uniform(obs_range[0], obs_range[1], size=(2, 2))
             #all_vals = np.random.normal(centre_vals, (obs_range[1] - obs_range[0]) / 5)
             return centre_vals
-        # TODO: Compute EIG for all the proposed tests
-        eigs = boed_runner(10, 100, 100, rand_exp, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
+        eigs = boed_runner(10, 50, 50, exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
                            obs_sampler, self._compiled_funcs['ltnt_logp'], self._compiled_funcs['obs_logp'])
+
         # Optionally plot them all
-        print(eigs)
+        # TODO: Sort the designs for plotting somehow?!
+        gracefall.static.eig_plot(eigs)
+        plt.show()
+
         best_test = eigs.iloc[eigs['eig'].idxmax()]
         # Extract the best EIG test
+        # TODO: Find a way to map experiments to some identifying names so that plotting and such are less cluttered
         print(f"Best experiment: {best_test['design']} with EIG of {best_test['eig']} nats")
-        #self._handlers['exp'].set_value(as_tensor)
 
     def infer_model(self, observations):
-        for var in self.observed_info:
-            self._handlers['obs'][var.name].set_value(observations[var.name])
+        self._handlers['obs'].set_observed(observations)
         idata = inference_model(self._test_model, num_samples=3000)
         posterior_prms = fit_latent_params_to_posterior_samples(self.latents_info, idata)
-        self._handlers['pri'].set_value(translate_priors(posterior_prms, self._maps['pri']))
+        self._handlers['pri'].set_params(posterior_prms)
 
     def set_experiment_conditions(self, conditions):
-        as_tensor = translate_experiment(conditions, self._maps['exp'])
-        self._handlers['exp'].set_value(as_tensor)
+        self._handlers['exp'].set_experimental_params(conditions)
 
     def set_priors(self, priors):
-        as_tensor = translate_priors(priors, self._maps['pri'])
-        self._handlers['pri'].set_value(as_tensor)
+        self._handlers['pri'].set_params(priors)
 
     def set_observations(self, var_name, observed):
         self._handlers['obs'][var_name].set_value(observed)

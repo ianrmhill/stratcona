@@ -115,7 +115,7 @@ def boed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, log
     for i in range(l):
         d = exp_sampler()
         # Crucial to set the experimental design within the model first, as otherwise the EIG won't correspond to 'd'
-        exp_handle.set_value(d)
+        exp_handle.set_experimental_params(d)
         # Now we can estimate EIG(d) and add it to the list
         eig = eig_sampled(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely)
         eig_pairs.append([d, eig])

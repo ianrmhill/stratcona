@@ -27,7 +27,8 @@ def discrete_wearout_demo():
     mb.add_latent_variable('c', pymc.Binomial, {'n': 10, 'p': 0.5})
     mb.add_latent_variable('d', pymc.Binomial, {'n': 10, 'p': 0.5})
 
-    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=2, samples_per_experiment=2)
+    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=['one', 'two'],
+                                samples_per_experiment={'all': 2})
 
     mb.add_dependent_variable('deg', happy_little_linear_degradation)
     mb.set_variable_observed('deg', variability=10)
@@ -41,8 +42,8 @@ def discrete_wearout_demo():
     mb.add_lifespan_variable('fail_point', lifespan)
 
     tm = stratcona.TestDesignManager(mb)
-    tm.set_experiment_conditions({'exp1': {'vdd': 0.8, 'temp': 300, 'time': 500},
-                                  'exp2': {'vdd': 0.9, 'temp': 350, 'time': 500}})
+    tm.set_experiment_conditions({'one': {'vdd': 0.8, 'temp': 300, 'time': 500},
+                                  'two': {'vdd': 0.9, 'temp': 350, 'time': 500}})
     tm.examine('prior_predictive')
     plt.show()
 
@@ -55,20 +56,19 @@ def discrete_wearout_demo():
         temps_possible = [275, 300, 325, 350, 375, 400]
         times_possible = [100, 300, 500, 700, 900]
         as_dict = {}
-        for exp in range(2):
-            as_dict[f"exp{exp+1}"] = {'vdd': np.random.choice(vdds_possible),
-                                    'temp': np.random.choice(temps_possible),
-                                    'time': np.random.choice(times_possible)}
+        for exp in ['one', 'two']:
+            as_dict[exp] = {'vdd': np.random.choice(vdds_possible),
+                            'temp': np.random.choice(temps_possible),
+                            'time': np.random.choice(times_possible)}
         return as_dict
     tm.determine_best_test(exp_sampler, (-400, 0))
 
     ### Simulate the Experiment Step ###
 
     ### Inference Step ###
-    tm.set_experiment_conditions({'exp1': {'vdd': 0.8, 'temp': 300, 'time': 500},
-                                  'exp2': {'vdd': 0.9, 'temp': 350, 'time': 500}})
-    tm.infer_model({'deg': np.array([[-40, -49],
-                                     [-47, -79]])})
+    tm.set_experiment_conditions({'one': {'vdd': 0.8, 'temp': 300, 'time': 500},
+                                  'two': {'vdd': 0.9, 'temp': 350, 'time': 500}})
+    tm.infer_model({'one': {'deg': np.array([-40, -49])}, 'two': {'deg': np.array([-47, -79])}})
     new_estimate = tm.estimate_reliability()
     print(new_estimate)
 

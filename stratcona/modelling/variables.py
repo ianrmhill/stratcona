@@ -4,34 +4,128 @@
 import numpy as np
 import pytensor as pt
 
-__all__ = ['define_shared_vars']
+__all__ = ['LatentParameterHandler', 'ExperimentHandler', 'ObservationHandler']
 
 
-def define_shared_vars(exp_dims: tuple | np.ndarray, prior_dims: tuple | np.ndarray, obs_dims: dict[tuple | np.ndarray]):
+# TODO: The internal optimizations of pytensor can be dangerous. Because of the internal optimizations, if you set
+#       shared tensor values in specific ways, entire sections of the compute graph can be optimized away incorrectly
+#       since internally PyTensor thinks these are constants. Essentially you can't compile the compute function
+#       without risking errors until you've set non-unitary values for the shared variable values. Need to ensure this
+#       behaviour for the user so they don't have to worry about it.
+class ExperimentHandler():
     """
-    By placing the experimental conditions, prior distribution info, and observed data within shared tensor
-    variables we are able to change these values without having to then redefine the model and recompile the compute
-    functions needed for BOED and inference algorithms.
-
-    Parameters
-    ----------
-    exp_dims: tuple or ndarray
-        Either the experimental values themselves, or the dimensions. Dim #1: number of experiments, dim #2: number of
-        conditions (e.g. temperature, voltage, humidity) that each experiment defines.
-    prior_dims: tuple or ndarray
-        Either the prior values or the dimensions of the values. Dim #1: number of latent variables, dim #2: max number
-        of parameters used to define the latent variable distributions (e.g., a Normal distribution needs 2 parameters,
-        while a Triangular needs 3 to define the distribution).
-    obs_dims: tuple or ndarray
-        Either the observed data or the dimensions of the observations. Dim #1: number of observed variables, dim #2:
-        number of experiments, dim #3: number of devices sampled per experiment.
+    Class to manage the PyTensor shared variables needed to dynamically change experimental stress conditions without
+    recompiling the model. Dimensions are <number of experiments> x <number of condition parameters>
     """
-    # FIXME: The internal behaviour of pytensor is WILD. Because of the internal optimizations, if you set these
-    #        shared values in specific ways, entire sections of the compute graph can be optimized away incorrectly
-    #        since internally PyTensor thinks these are constants. Essentially you can't compile the compute function
-    #        without risking errors until you've set non-unitary values for the shared variable values
-    exp_handle = pt.shared(np.zeros(exp_dims) if type(exp_dims) == tuple else exp_dims)
-    prior_handle = pt.shared(np.zeros(prior_dims) if type(prior_dims) == tuple else prior_dims)
-    # PyMC does not let us use sub-tensors of shared variables for observed variables, each needs a unique shared tensor
-    obs_handles = {var: pt.shared(np.zeros(obs_dims[var])) for var in obs_dims}
-    return exp_handle, prior_handle, obs_handles
+    def __init__(self, experiments, condition_params):
+        self.exp_order = tuple(experiments)
+        self.cond_order = tuple(condition_params)
+        self.dims = (len(experiments), len(condition_params))
+        # Create the shared variable tensor, initialize all conditional parameters to 2 to avoid compilation functions
+        # from optimizing away operations if the parameters happen to be unitary operations
+        self.tensor = pt.shared(np.full(self.dims, 2.0))
+
+    def set_experimental_params(self, conditions):
+        self.tensor.set_value(self._d_to_t(conditions))
+
+    def get_experimental_params(self):
+        return self._t_to_d()
+
+    def _t_to_d(self):
+        d = {}
+        # We get the conditions from all experiments as that is what is required by the PyMC model
+        for i, cond in enumerate(self.cond_order):
+            # Also add a dimension to the end to enable broadcasting across the device sample dimension
+            d[cond] = pt.tensor.reshape(self.tensor[:, i], (self.dims[0], 1))
+        return d
+
+    def _d_to_t(self, conditions):
+        t = np.zeros(self.dims)
+        for i, exp in enumerate(self.exp_order):
+            for j, cond in enumerate(self.cond_order):
+                t[i, j] = conditions[exp][cond]
+        return t
+
+
+class LatentParameterHandler():
+    """
+    Class to manage the PyTensor shared variables needed to dynamically change model priors without recompiling the
+    model. Each latent variable gets a shared variable that stores the distribution parameterization with a
+    dimensionality of <num_params> x <max_vals_per_param>. For example, a Normal distribution with mu and sigma would be
+    2x1, a categorical distribution with N possible values is 1xN, and a distribution with prm1: [x, y, z] and prm2: [w]
+    would be 2x3. Note that this dimensionality must be fixed at declaration, so a categorical distribution cannot be
+    dynamically updated with more possible values, only shrink with unused values getting probability 0.
+    """
+    def __init__(self, latent_vars):
+        self.tensors = {}
+        self.map = {}
+        self.dims = {}
+        for ltnt in latent_vars:
+            self.map[ltnt] = {}
+            num_prms = len(latent_vars[ltnt].prms.keys())
+            max_prm_len = 1
+            for prm, val in latent_vars[ltnt].prms.items():
+                if type(val) in [int, float]:
+                    self.map[ltnt][prm] = 1
+                # Some distribution parameters are lists (such as the pymc.Categorical 'p' parameter)
+                else:
+                    if len(val) > max_prm_len:
+                        max_prm_len = len(val)
+                    self.map[ltnt][prm] = len(val)
+            self.dims[ltnt] = (num_prms, max_prm_len)
+            # Declare the PyTensor shared variable with the prior values set accordingly
+            self.tensors[ltnt] = pt.shared(self._d_to_t(ltnt, latent_vars[ltnt].prms))
+
+    def get_params(self, ltnt):
+        return self._t_to_d(ltnt)
+
+    def set_params(self, vals):
+        for ltnt in self.map:
+            self.tensors[ltnt].set_value(self._d_to_t(ltnt, vals[ltnt]))
+
+    def _t_to_d(self, ltnt):
+        d = {}
+        for i, prm in enumerate(self.map[ltnt]):
+            d[prm] = self.tensors[ltnt][i, :self.map[ltnt][prm]]
+        return d
+
+    def _d_to_t(self, ltnt, vals):
+        t = np.zeros(self.dims[ltnt])
+        for i, prm in enumerate(self.map[ltnt]):
+            try:
+                t[i, :self.map[ltnt][prm]] = vals[prm]
+            except ValueError:
+                # This is used for categorical RVs, as the number of possible values take may have decreased, thus we
+                # need to pad out zeros to keep the probability weights array the same length as before
+                pad_len = self.map[ltnt][prm] - len(vals[prm])
+                t[i, :self.map[ltnt][prm]] = np.pad(vals[prm], (0, pad_len))
+        return t
+
+
+class ObservationHandler():
+    def __init__(self, observed_vars, devices_per_var, experiments):
+        self.tensors = {}
+        self.map = {}
+        self.exp_order = tuple(experiments)
+        self.dims = {}
+        for var in observed_vars:
+            self.map[var] = devices_per_var[var] if var in devices_per_var.keys() else devices_per_var['all']
+            self.dims[var] = (len(self.exp_order), self.map[var])
+            self.tensors[var] = pt.shared(np.full(self.dims[var], 2.0))
+
+    def get_observed(self, var):
+        return self._t_to_d(var)
+
+    def set_observed(self, observations):
+        self._d_to_t(observations)
+
+    def _t_to_d(self, var):
+        return self.tensors[var]
+
+    def _d_to_t(self, observations):
+        ts = {}
+        for var in self.map.keys():
+            ts[var] = np.zeros(self.dims[var])
+            for i, exp in enumerate(self.exp_order):
+                ts[var][i, :] = observations[exp][var]
+        return ts
