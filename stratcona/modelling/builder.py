@@ -1,6 +1,7 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import numpy as np
 import pytensor as pt
 import pymc
@@ -38,6 +39,9 @@ class LatentVariable():
         match self.dist.rv_op.name:
             case 'normal':
                 return self.prms['sigma']**2
+            case 'beta':
+                a, b = self.prms['alpha'], self.prms['beta']
+                return (a * b) / (((a + b)**2) * (a + b + 1))
             case _:
                 raise NotImplementedError
 
@@ -45,11 +49,17 @@ class LatentVariable():
         match self.dist.rv_op.name:
             case 'normal':
                 self.prms['sigma'] = new_variance**0.5
+            case 'beta':
+                a, b = self.prms['alpha'], self.prms['beta']
+                mean = a / (a + b)
+                v = ((mean * (1 - mean)) / new_variance) - 1
+                self.prms['alpha'] = mean * v
+                self.prms['beta'] = (1 - mean) * v
             case _:
                 raise NotImplementedError
 
     def get_dist_type(self):
-        if self.dist.rv_op.name in ['normal', 'gamma', 'halfcauchy']:
+        if self.dist.rv_op.name in ['normal', 'gamma', 'halfcauchy', 'beta']:
             return 'continuous'
         elif self.dist.rv_op.name in ['binomial', 'categorical', 'hypergeometric', 'discrete_uniform']:
             return 'discrete'
@@ -102,6 +112,8 @@ class ModelBuilder():
         future to use a better approach based on sensitivity analysis once output quantities of interest and sensitivity
         analysis have been implemented (TODO).
         """
+        if normalization_strategy is None:
+            return
         # 1. Check if any latents are discrete, as their entropy cannot be adjusted, unlike the differential entropy
         if len(self.discrete_latent_entropy) > 0:
             target_variance = 1.0 # TODO: Get mean entropy of discrete latent variables, target is the variance of a Gaussian with that differential entropy
@@ -159,18 +171,21 @@ class ModelBuilder():
         with pymc.Model(coords=self.model_dims) as mdl:
             # First set up the latent independent variables
             ltnts = {}
+            ls = {}
             for name, ltnt in self.latents.items():
                 ltnts[name] = ltnt.dist(name, **self.priors_handle.get_params(name))
+                # Reshape the variables for broadcasting, can't do using the 'shape' argument for dist as it causes
+                # certain distributions to error out when compiling
+                ls[name] = pt.tensor.reshape(ltnts[name], (1, 1))
 
             # Build out the dictionary of experimental conditions
             experiment_params = self.experiment_handle.get_experimental_params()
-
-            # Now set up the dependent variables
+            # Now set up the dependent variables, only providing the necessary inputs to each function
             deps = {}
             for name, dep in self.dependents.items():
-                # FIXME: Currently all dependent variable equations need to accept all latent variables as arguments
-                #        or this errors out
-                deps[name] = dep(**ltnts, **experiment_params)
+                compute_args = inspect.signature(dep).parameters.keys()
+                dep_args = {arg: val for arg, val in {**ls, **experiment_params}.items() if arg in compute_args}
+                deps[name] = dep(**dep_args)
 
             # Next, set up the observed variables that can be measured during a test
             observes = {}
@@ -196,6 +211,6 @@ class ModelBuilder():
             for name, pred in self.predictors.items():
                 # TODO: make operating conditions a standalone object similar to experiment params or latents rather
                 #       than baked into the predictive function
-                preds[name] = pred(**ltnts)
+                preds[name] = pred(**ls)
 
         return mdl, list(ltnts.values()), list(observes.values()), list(preds.values())

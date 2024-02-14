@@ -54,23 +54,11 @@ def eig_sampled(n: int, m: int, theta_sampler, y_sampler, p_prior, p_likely):
     # Across 'n' observation space samples
     for _ in range(n):
         y = y_sampler()
-        # FIXME: Seems inefficient and silly
-        # Check if the observation space is single-valued, convert to list if so to make unpacking not throw an error
-        try:
-            iter(y)
-        except TypeError:
-            y = [y]
         # Initialize accumulators for information gain and marginal probability and associated normalization constants
         ig, ig_norm, marg, marg_norm = 0, 0, 0, 0
         # Across 'm' latent variable space samples
         for _ in range(m):
             i = theta_sampler()
-            # FIXME: Seems inefficient and silly
-            # Check if the latent space is single-valued, convert to list if so to make unpacking not throw an error
-            try:
-                iter(i)
-            except TypeError:
-                i = [i]
             # Compute the probabilities for the latent variable space sample [p(theta)] and observation given the latent
             # variable space sample [p(y|theta)], noting that this is implicitly p(y|theta, d) where d is the experiment
             p_i = np.exp(p_prior(*i))

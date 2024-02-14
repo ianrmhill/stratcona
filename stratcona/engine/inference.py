@@ -37,7 +37,7 @@ def inference_model(model, num_samples: int = None, num_chains: int = None, seed
     return trace
 
 
-def fit_latent_params_to_posterior_samples(latents: dict, idata: arviz.InferenceData, run_fit_analysis=False):
+def fit_latent_params_to_posterior_samples(latents: dict, prm_map: dict, idata: arviz.InferenceData, run_fit_analysis=False):
     """
     After PyMC runs a sampling algorithm we end up with many samples from the posterior. What PyMC does not do, however,
     is update the parameterized latent variables based on the posterior. Here we do this manually using the generated
@@ -64,7 +64,10 @@ def fit_latent_params_to_posterior_samples(latents: dict, idata: arviz.Inference
         else:
             scipy_dist = getattr(scipy.stats, dist_to_fit)
             params = scipy_dist.fit(sampled)
-            posterior_params[ltnt.name] = {'mu': params[0], 'sigma': params[1]}
+            new_prms = {}
+            for i, prm in enumerate(prm_map[ltnt.name]):
+                new_prms[prm] = params[i]
+            posterior_params[ltnt.name] = new_prms
             # Fit analysis only useful for continuous variables since the categorical distribution will fit every
             # set of discrete samples perfectly
             if run_fit_analysis:

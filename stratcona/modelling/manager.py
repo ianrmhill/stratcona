@@ -52,7 +52,7 @@ class TestDesignManager:
         #       unrealistic for the given test. Can we have the obs_sampler take the experiment as input?!?! This could
         #       make the value of a given sample much higher
         def obs_sampler():
-            centre_vals = np.random.uniform(obs_range[0], obs_range[1], size=(2, 2))
+            centre_vals = np.random.uniform(obs_range[0], obs_range[1], size=self._handlers['obs'].dims['deg'])
             #all_vals = np.random.normal(centre_vals, (obs_range[1] - obs_range[0]) / 5)
             return centre_vals
         eigs = boed_runner(10, 50, 50, exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
@@ -71,7 +71,7 @@ class TestDesignManager:
     def infer_model(self, observations):
         self._handlers['obs'].set_observed(observations)
         idata = inference_model(self._test_model, num_samples=3000)
-        posterior_prms = fit_latent_params_to_posterior_samples(self.latents_info, idata)
+        posterior_prms = fit_latent_params_to_posterior_samples(self.latents_info, self._handlers['pri'].map, idata)
         self._handlers['pri'].set_params(posterior_prms)
 
     def set_experiment_conditions(self, conditions):
