@@ -55,7 +55,7 @@ class TestDesignManager:
             centre_vals = np.random.uniform(obs_range[0], obs_range[1], size=self._handlers['obs'].dims['deg'])
             #all_vals = np.random.normal(centre_vals, (obs_range[1] - obs_range[0]) / 5)
             return centre_vals
-        eigs = boed_runner(10, 50, 50, exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
+        eigs = boed_runner(20, 50, 50, exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
                            obs_sampler, self._compiled_funcs['ltnt_logp'], self._compiled_funcs['obs_logp'])
 
         # Optionally plot them all

@@ -5,8 +5,10 @@ import inspect
 import numpy as np
 import pytensor as pt
 import pymc
+from scipy.optimize import minimize_scalar
 
 from stratcona.assistants.dist_translate import convert_to_categorical
+from stratcona.engine.minimization import minimize
 from .variables import *
 
 __all__ = ['ModelBuilder']
@@ -80,6 +82,7 @@ class ModelBuilder():
         self.latents = {}
         self.discrete_latent_entropy = []
         self.dependents = {}
+        self.dep_args = {}
         self.predictors = {}
         self.observes = {}
         self.experiment_params = None
@@ -96,9 +99,34 @@ class ModelBuilder():
         # TODO: dependent variables could also be RVs, so instead of a compute function could be a distribution
         # TODO: compute function may not require all latents and experiment params, need to filter like in Gerabaldi
         self.dependents[var_name] = compute_func
+        self.dep_args[var_name] = inspect.signature(compute_func).parameters.keys()
 
     def add_lifespan_variable(self, var_name, compute_func):
         self.predictors[var_name] = compute_func
+
+    def gen_lifespan_variable(self, var_name, fail_bounds, field_use_conds):
+        residues = {}
+        for dep in fail_bounds:
+            def residue(time, ltnts):
+                arg_dict = {'time': time}
+                # TODO: args dict may also need other dependent variables
+                for ltnt in ltnts:
+                    if ltnt in self.dep_args[dep]:
+                        arg_dict[ltnt] = ltnts[ltnt]
+                for cond in field_use_conds:
+                    if cond != 'time' and cond in self.dep_args[dep]:
+                        arg_dict[cond] = field_use_conds[cond]
+                return abs(fail_bounds[dep] - self.dependents[dep](**arg_dict))
+
+            residues[dep] = residue
+
+        def first_to_fail(ltnts):
+            times = []
+            for dep in residues:
+                times.append(minimize(residues[dep], ltnts, (0, 1e6)))
+            return min(times)
+
+        self.predictors[var_name] = first_to_fail
 
     def set_variable_observed(self, var_name, variability):
         self.observes[var_name] = {'variability': variability}
@@ -183,9 +211,8 @@ class ModelBuilder():
             # Now set up the dependent variables, only providing the necessary inputs to each function
             deps = {}
             for name, dep in self.dependents.items():
-                compute_args = inspect.signature(dep).parameters.keys()
-                dep_args = {arg: val for arg, val in {**ls, **experiment_params}.items() if arg in compute_args}
-                deps[name] = dep(**dep_args)
+                arg_dict = {arg: val for arg, val in {**ls, **experiment_params}.items() if arg in self.dep_args[name]}
+                deps[name] = dep(**arg_dict)
 
             # Next, set up the observed variables that can be measured during a test
             observes = {}
@@ -211,6 +238,6 @@ class ModelBuilder():
             for name, pred in self.predictors.items():
                 # TODO: make operating conditions a standalone object similar to experiment params or latents rather
                 #       than baked into the predictive function
-                preds[name] = pred(**ls)
+                preds[name] = pymc.Normal(name, pred(ls), 0.2)
 
         return mdl, list(ltnts.values()), list(observes.values()), list(preds.values())

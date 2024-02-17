@@ -30,7 +30,6 @@ def threshold_demo():
 
     mb.add_latent_variable('a', pymc.Normal, {'mu': 0.85, 'sigma': 0.03})
     mb.add_latent_variable('b', pymc.Beta, {'alpha': 2.0, 'beta': 3.0})
-    #mb.add_latent_variable('b', pymc.Normal, {'mu': 0.5, 'sigma': 0.1})
     mb.add_latent_variable('c', pymc.Normal, {'mu': 0.75, 'sigma': 0.05})
     #mb.add_latent_variable('d', pymc.Normal, {'mu': 0.5, 'sigma': 0.05})
 
@@ -49,7 +48,8 @@ def threshold_demo():
         fail_point, temp, vdd = -15, 300, 0.8
         time = 1000 * (fail_point / (-1 * ((a / 10) + 0.8) * (b * vdd) * (c * (temp / 100))))
         return time
-    mb.add_lifespan_variable('fail_point', lifespan)
+    #mb.add_lifespan_variable('fail_point', compute_func=lifespan)
+    mb.gen_lifespan_variable('fail_point', fail_bounds={'deg': 1}, field_use_conds={'temp': 300, 'vdd': 0.9})
 
     tm = stratcona.TestDesignManager(mb)
     tm.set_experiment_conditions({'single': {'vdd': 0.87, 'temp': 300, 'time': 500}})

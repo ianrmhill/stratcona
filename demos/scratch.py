@@ -1,40 +1,47 @@
-import numpy as np
 import pytensor as pt
-import pymc
+from pytensor.scan.utils import until
+
+GOLDEN_RATIO = (1 + (5**0.5)) / 2
+GF1 = GOLDEN_RATIO - 1 # approx. 0.618
+GF2 = 2 - GOLDEN_RATIO # approx. 0.382 (in other words, 1 - GF1)
 
 
-prms = {'vdd': [0.2, 0.3], 'temp': [300, 350]}
-for prm in prms:
-    prms[prm] = np.expand_dims(prms[prm], axis=1)
-print('Wow')
+def sample_f(x, placement):
+    y = (x-placement)**2
+    return y
 
 
-latents = pt.shared(np.ones((2, 2)))
-obs = pt.shared(np.array([1.1, 2.0]))
+F = sample_f
 
-with pymc.Model() as mdl:
-    prms = latents
-    a_prms = {'mu': prms[0][0], 'sigma': prms[0][1]}
-    b_prms = {'mu': prms[1][0], 'sigma': prms[1][1]}
-    a = pymc.Normal('a', **a_prms)
-    b = pymc.Normal('b', **b_prms)
 
-    c_mu = 0.1
-    c = pymc.Normal('c', a + b, c_mu)
-    c_obs = pymc.Normal('c_obs', a + b, c_mu, observed=obs[0])
+def minimize(func, extra_args, bounds, precision=1e-2, maxiter=100):
+    """
+    Implementation of golden section search for interim while I get Brent minimization working.
+    """
+    # Initialize the bounds a and b within which to find the function minimum
+    b_l = pt.printing.Print('b_l')(pt.tensor.extra_ops.repeat(bounds[0], 3))
+    b_u = pt.printing.Print('b_u')(pt.tensor.extra_ops.repeat(bounds[1], 3))
 
-ltnt_sampler = pymc.compile_pymc([], [a, b], name='ltnt_sampler')
-obs_logp = pymc.compile_pymc([mdl.rvs_to_values[a], mdl.rvs_to_values[b], mdl.rvs_to_values[c]], mdl.logp(vars=c), name='obs_logp')
-obs_logp_const = pymc.compile_pymc([mdl.rvs_to_values[a], mdl.rvs_to_values[b]], mdl.logp(vars=c_obs), name='obs_logp')
+    def golden_section_search_loop(l, u, eps):
+        # Compute the interior points and function evaluations
+        c = l + (GF2 * (u - l))
+        d = u - (GF2 * (u - l))
+        fc = func(c, **extra_args)
+        fd = func(d, **extra_args)
 
-samples = np.array([ltnt_sampler() for _ in range(100)])
-print(samples.mean())
-print(obs_logp(0.4, 0.7, 1.1))
-print(obs_logp_const(0.4, 0.7))
-obs.set_value(1.5)
-print(obs_logp(0.4, 0.7, 1.5))
-print(obs_logp_const(0.4, 0.7))
+        # Compare the function evaluated at the two interior points 'u' and 'x' to determine how to reduce the interval
+        l = pt.tensor.where(fd >= fc, l, c)
+        u = pt.tensor.where(fd >= fc, d, u)
 
-latents.set_value([[0, 1], [4, 0.2]])
-samples = np.array([ltnt_sampler() for _ in range(100)])
-print(samples.mean())
+        return (l, u), until(pt.tensor.all((u - l) < eps))
+
+    values, _ = pt.scan(golden_section_search_loop, outputs_info=(b_l, b_u), non_sequences=[precision], n_steps=maxiter)
+
+    return values[0][-1], values[1][-1], (values[0][-1] + values[1][-1]) / 2
+
+
+lower_bound, upper_bound = pt.tensor.scalar(), pt.tensor.scalar()
+func_min = minimize(F, {'placement': [2, 5, -3]}, (lower_bound, upper_bound), 0.01, 50)
+compiled = pt.function([lower_bound, upper_bound], func_min)
+
+print(compiled(-8, 10))
