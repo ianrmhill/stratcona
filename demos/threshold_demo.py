@@ -48,10 +48,10 @@ def threshold_demo():
     tm = stratcona.TestDesignManager(mb)
     tm.set_experiment_conditions({'single': {'vdd': 0.87, 'temp': 300, 'time': 500}})
     tm.examine('prior_predictive')
-    plt.show()
 
-    estimate = tm.estimate_reliability(num_samples=3)
+    estimate = tm.estimate_reliability(num_samples=3000)
     tm.examine('lifespan')
+    plt.show()
     print(f"Estimated product lifespan: {estimate} hours")
 
     ### Determine Best Experiment Step ###
@@ -65,7 +65,7 @@ def threshold_demo():
                             'temp': np.random.choice(temps_possible),
                             'time': np.random.choice(times_possible)}
         return as_dict
-    #tm.determine_best_test(exp_sampler, (0, 1))
+    tm.determine_best_test(exp_sampler, (-0.4, 5))
 
     ### Simulate the Experiment Step ###
 

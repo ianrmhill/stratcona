@@ -16,7 +16,7 @@ GF1 = GOLDEN_RATIO - 1 # approx. 0.618
 GF2 = 2 - GOLDEN_RATIO # approx. 0.382 (in other words, 1 - GF1)
 
 
-def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT_EPS, maxiter=20):
+def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT_EPS, maxiter=20, log_gold=False):
     """
     Implementation of Brent minimization with vectorization and pytensor compatibility (i.e., can be compiled into a
     graphical model).
@@ -29,14 +29,14 @@ def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT
     rel_tol = mach_eps ** 0.5
     # Initialize the bounds a and b within which to find the function minimum, shape determined by first function arg
     shape_to_match = f_args[0]
-    a = pt.fill(shape_to_match, bounds[0])
-    b = pt.fill(shape_to_match, bounds[1])
+    a = pt.fill(shape_to_match, pt.log10(bounds[0])) if log_gold else pt.fill(shape_to_match, bounds[0])
+    b = pt.fill(shape_to_match, pt.log10(bounds[1])) if log_gold else pt.fill(shape_to_match, bounds[1])
     # Initialize the parabolic interpolation points
     v = w = x = a + (GF2 * (b - a))
     as_kwargs = {}
     for i, arg in enumerate(f_args_order):
         as_kwargs[arg] = f_args[i]
-    fv = fw = fx = func(x, **as_kwargs)
+    fv = fw = fx = func(10 ** x, **as_kwargs) if log_gold else func(x, **as_kwargs)
     # 'e' represents the step size between the old and new minimum estimate from two iterations ago. This bookkeeping
     # is used to force golden section searches if parabolic interpolation is not proceeding faster than a bisection
     # search method. Not strictly necessary for guaranteed convergence, but adds a guarantee that the algorithm is never
@@ -61,7 +61,7 @@ def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT
         qsub2 = xdiff2 * (fx - fw)
         q = 2 * (qsub2 - qsub1)
 
-        use_para =  use_para & pt.neq(q, 0.0)
+        use_para = use_para & pt.neq(q, 0.0)
         p = pt.where(use_para, (xdiff2 * qsub2) - (xdiff1 * qsub1), 0.0)
         p = pt.where(pt.gt(q, 0.0), -p, p)
         q = pt.abs(q)
@@ -70,10 +70,10 @@ def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT
         step = pt.where(use_para, p / q, GF2 * (further_boundary - x))
         u_tent = x + step
 
-        out_of_bounds = pt.lt(b, u_tent) | pt.gt(a, u_tent) | pt.gt(pt.abs(step), (0.5 * pt.abs(e)))
-        change_to_gold = use_para & out_of_bounds
+        change_to_gold = use_para & (pt.lt(b, u_tent) | pt.gt(a, u_tent) | pt.gt(pt.abs(step), (0.5 * pt.abs(e))))
         # Determine the golden search step for any problems where parabolic search just failed the final two checks
         step = pt.where(change_to_gold, GF2 * (further_boundary - x), step)
+        u_tent = pt.where(change_to_gold, x + step, u_tent)
         # Ensure all new points 'u' will be at least 'tol' away from 'x' and at least 2 'tol' from the interval bounds
         step = pt.where(pt.lt(u_tent - a, tol2) | pt.lt(b - u_tent, tol2), pt.where(pt.lt(x, m), tol, -tol), step)
         step = pt.where(pt.lt(pt.abs(step), tol), pt.where(pt.gt(step, 0), tol, -tol), step)
@@ -86,7 +86,7 @@ def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT
         fn_kwargs = {}
         for i, arg in enumerate(f_args_order):
             fn_kwargs[arg] = f_args[i]
-        fu = func(u, **fn_kwargs)
+        fu = func(10 ** u, **fn_kwargs) if log_gold else func(u, **fn_kwargs)
 
         # Now to update all the variables
         e = d
@@ -115,7 +115,7 @@ def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT
 
     # TODO: Figure out how to print a warning conditionally in the compiled version if maxiter is hit
     # Return the value of x from the final iteration and the function evaluated at x for verification
-    return values[4][-1]
+    return 10 ** values[4][-1] if log_gold else values[4][-1]
 
 
 def brent_minimize_std(f, extra_args, bounds, maxiter=10, rel_tol=MACH_32BIT_EPS**0.5, abs_tol=1e-5):

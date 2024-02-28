@@ -103,7 +103,9 @@ class ModelBuilder():
     def add_lifespan_variable(self, var_name, compute_func):
         self.predictors[var_name] = compute_func
 
-    def gen_lifespan_variable(self, var_name, fail_bounds, field_use_conds):
+    def gen_lifespan_variable(self, var_name, fail_bounds, field_use_conds = None):
+        if field_use_conds is None:
+            field_use_conds = {}
         residues = {}
         for dep_var in fail_bounds:
             def residue(time, **ltnts):
@@ -123,8 +125,7 @@ class ModelBuilder():
         def first_to_fail(**ltnts):
             times = []
             for dep in residues:
-                # TODO: Evaluate whether a log-scale time minimization strategy is feasible
-                times.append(minimize(residues[dep], ltnts, (np.float64(0.0), np.float64(1e5)), precision=1e-2))
+                times.append(minimize(residues[dep], ltnts, (np.float64(0.1), np.float64(1e6)), precision=1e-2, log_gold=True))
             return min(times)
 
         self.predictors[var_name] = first_to_fail
@@ -155,8 +156,8 @@ class ModelBuilder():
             if ltnt.dist_type == 'continuous':
                 ltnt.variance_to_prms(target_variance)
 
-    def define_experiment_params(self, experimental_condition_params: list, simultaneous_experiments: int | list,
-                                 samples_per_experiment: int | dict):
+    def define_experiment_params(self, experimental_condition_params: list, simultaneous_experiments: int | list = 1,
+                                 samples_per_experiment: int | dict = 1):
         self.experiment_params = experimental_condition_params
 
         # Set up the experimental configuration

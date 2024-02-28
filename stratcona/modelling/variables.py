@@ -26,7 +26,14 @@ class ExperimentHandler():
         self.tensor = pt.shared(np.full(self.dims, 2.0))
 
     def set_experimental_params(self, conditions):
-        self.tensor.set_value(self._d_to_t(conditions))
+        # Allow the user to pass the conditions without specifying which test if there is only one test
+        if type(list(conditions.values())[0]) != dict:
+            if len(self.exp_order) != 1:
+                raise Exception('Must specify conditions for each experiment when setting experimental params')
+            formatted_conds = {self.exp_order[0]: conditions}
+        else:
+            formatted_conds = conditions
+        self.tensor.set_value(self._d_to_t(formatted_conds))
 
     def get_experimental_params(self):
         return self._t_to_d()
@@ -117,7 +124,14 @@ class ObservationHandler():
         return self._t_to_d(var)
 
     def set_observed(self, observations):
-        self._d_to_t(observations)
+        # Allow the user to pass the conditions without specifying which test if there is only one test
+        if type(list(observations.values())[0]) != dict:
+            if len(self.exp_order) != 1:
+                raise Exception('Must specify conditions for each experiment when setting experimental params')
+            formatted_obs = {self.exp_order[0]: observations}
+        else:
+            formatted_obs = observations
+        self._d_to_t(formatted_obs)
 
     def _t_to_d(self, var):
         return self.tensors[var]
