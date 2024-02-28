@@ -17,6 +17,7 @@ def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | f
     """
     sampled = [lifespan_sampler() for _ in range(num_samples)]
     sampled = np.array(sampled).flatten()
+    print(sampled)
 
     bound = np.quantile(sampled, 1 - (interval_size / 100))
     return bound

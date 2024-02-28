@@ -43,12 +43,6 @@ def threshold_demo():
     #mb.set_variable_observed('fail', variability=0.05)
 
     # This function is the inverse of the degradation mechanism with a set failure point
-    # TODO: Make lifespan automatically calculable, hand design is massively painful
-    def lifespan(a, b, c):
-        fail_point, temp, vdd = -15, 300, 0.8
-        time = 1000 * (fail_point / (-1 * ((a / 10) + 0.8) * (b * vdd) * (c * (temp / 100))))
-        return time
-    #mb.add_lifespan_variable('fail_point', compute_func=lifespan)
     mb.gen_lifespan_variable('fail_point', fail_bounds={'deg': 1}, field_use_conds={'temp': 300, 'vdd': 0.9})
 
     tm = stratcona.TestDesignManager(mb)
@@ -56,8 +50,9 @@ def threshold_demo():
     tm.examine('prior_predictive')
     plt.show()
 
-    estimate = tm.estimate_reliability()
-    print(estimate)
+    estimate = tm.estimate_reliability(num_samples=3)
+    tm.examine('lifespan')
+    print(f"Estimated product lifespan: {estimate} hours")
 
     ### Determine Best Experiment Step ###
     def exp_sampler():
@@ -70,13 +65,13 @@ def threshold_demo():
                             'temp': np.random.choice(temps_possible),
                             'time': np.random.choice(times_possible)}
         return as_dict
-    tm.determine_best_test(exp_sampler, (0, 1))
+    #tm.determine_best_test(exp_sampler, (0, 1))
 
     ### Simulate the Experiment Step ###
 
     ### Inference Step ###
     tm.set_experiment_conditions({'single': {'vdd': 0.85, 'temp': 300, 'time': 500}})
-    tm.infer_model({'single': {'deg': np.array([0.3, 0.4, 0.35])}})
+    #tm.infer_model({'single': {'deg': np.array([0.3, 0.4, 0.35])}})
     new_estimate = tm.estimate_reliability()
     print(new_estimate)
 

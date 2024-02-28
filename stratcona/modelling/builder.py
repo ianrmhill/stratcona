@@ -5,7 +5,6 @@ import inspect
 import numpy as np
 import pytensor as pt
 import pymc
-from scipy.optimize import minimize_scalar
 
 from stratcona.assistants.dist_translate import convert_to_categorical
 from stratcona.engine.minimization import minimize
@@ -106,24 +105,26 @@ class ModelBuilder():
 
     def gen_lifespan_variable(self, var_name, fail_bounds, field_use_conds):
         residues = {}
-        for dep in fail_bounds:
-            def residue(time, ltnts):
+        for dep_var in fail_bounds:
+            def residue(time, **ltnts):
                 arg_dict = {'time': time}
                 # TODO: args dict may also need other dependent variables
-                for ltnt in ltnts:
-                    if ltnt in self.dep_args[dep]:
+                for ltnt in ltnts.keys():
+                    if ltnt in self.dep_args[dep_var]:
                         arg_dict[ltnt] = ltnts[ltnt]
                 for cond in field_use_conds:
-                    if cond != 'time' and cond in self.dep_args[dep]:
+                    if cond != 'time' and cond in self.dep_args[dep_var]:
                         arg_dict[cond] = field_use_conds[cond]
-                return abs(fail_bounds[dep] - self.dependents[dep](**arg_dict))
+                return abs(fail_bounds[dep_var] - self.dependents[dep_var](**arg_dict))
 
-            residues[dep] = residue
+            residues[dep_var] = residue
 
-        def first_to_fail(ltnts):
+        # The overall failure time is based on the first failure to occur out of all the device instances included
+        def first_to_fail(**ltnts):
             times = []
             for dep in residues:
-                times.append(minimize(residues[dep], ltnts, (0, 1e6)))
+                # TODO: Evaluate whether a log-scale time minimization strategy is feasible
+                times.append(minimize(residues[dep], ltnts, (np.float64(0.0), np.float64(1e5)), precision=1e-2))
             return min(times)
 
         self.predictors[var_name] = first_to_fail
@@ -238,6 +239,6 @@ class ModelBuilder():
             for name, pred in self.predictors.items():
                 # TODO: make operating conditions a standalone object similar to experiment params or latents rather
                 #       than baked into the predictive function
-                preds[name] = pymc.Normal(name, pred(ls), 0.2)
+                preds[name] = pymc.Normal(name, pred(**ls), 0.2)
 
         return mdl, list(ltnts.values()), list(observes.values()), list(preds.values())

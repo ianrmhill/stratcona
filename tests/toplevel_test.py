@@ -38,9 +38,9 @@ def test_heavy_ball():
     # Compile the model functions needed to compute expected information gain and create iterators over the variable
     # support ranges
     ltnt_sampler = iter_sampler([0, 1, 2, 3, 4, 5, 6, 7])
-    ltnt_logp = shorthand_compile('ltnt_logp', riddle_mdl, [i_heavy_ball], [output])
+    ltnt_logp = shorthand_compile('ltnt_logp', riddle_mdl, [i_heavy_ball], [output], [])
     obs_sampler = iter_sampler([-1, 0, 1])
-    obs_logp = shorthand_compile('obs_logp', riddle_mdl, [i_heavy_ball], [output])
+    obs_logp = shorthand_compile('obs_logp', riddle_mdl, [i_heavy_ball], [output], [])
 
     exp_sampler = iter_sampler([[0, 1, 2, 2, 2, 2, 2, 2], [0, 0, 1, 1, 2, 2, 2, 2],
                                 [0, 0, 0, 1, 1, 1, 2, 2], [0, 0, 0, 0, 1, 1, 1, 1]])

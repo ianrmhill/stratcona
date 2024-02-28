@@ -83,11 +83,11 @@ class TestDesignManager:
     def set_observations(self, var_name, observed):
         self._handlers['obs'][var_name].set_value(observed)
 
-    def estimate_reliability(self):
+    def estimate_reliability(self, num_samples=30000):
         if not 'life_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['life_sampler'] =\
                 shorthand_compile('life_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
-        bound = worst_case_quantile_credible_region(self._compiled_funcs['life_sampler'], 90)
+        bound = worst_case_quantile_credible_region(self._compiled_funcs['life_sampler'], 90, num_samples=num_samples)
         return bound
 
     def examine(self, attribute: str, num_samples: int = 300):
@@ -138,5 +138,7 @@ class TestDesignManager:
                     as_dataframe = TestSimReport.format_measurements(ltnt_sampled, ltnt.name, timedelta(), 0)
                     report.add_measurements(as_dataframe)
                 gracefall.static.gen_stripplot_generic(report.measurements)
+            case 'lifespan':
+                pt.printing.pydotprint(self._compiled_funcs['life_sampler'], 'func.png')
             case _:
                 raise NotImplementedError()
