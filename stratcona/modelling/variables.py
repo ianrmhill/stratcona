@@ -127,7 +127,7 @@ class ObservationHandler():
         # Allow the user to pass the conditions without specifying which test if there is only one test
         if type(list(observations.values())[0]) != dict:
             if len(self.exp_order) != 1:
-                raise Exception('Must specify conditions for each experiment when setting experimental params')
+                raise Exception('Must specify observations for each experiment when setting observations')
             formatted_obs = {self.exp_order[0]: observations}
         else:
             formatted_obs = observations

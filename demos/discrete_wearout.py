@@ -61,7 +61,7 @@ def discrete_wearout_demo():
                             'temp': np.random.choice(temps_possible),
                             'time': np.random.choice(times_possible)}
         return as_dict
-    tm.determine_best_test(exp_sampler, (-400, 0))
+    tm.determine_best_test(exp_sampler, (-400, 0), num_tests_to_eval=1, num_obs_samples_per_test=10, num_ltnt_samples_per_test=10)
 
     ### Simulate the Experiment Step ###
 

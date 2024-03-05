@@ -36,7 +36,8 @@ class TestDesignManager:
         self._maps['pri'] = model_builder.priors_map
         self._compiled_funcs = {}
 
-    def determine_best_test(self, exp_sampler, obs_range):
+    def determine_best_test(self, exp_sampler, obs_range=None,
+                            num_tests_to_eval=10, num_obs_samples_per_test=int(1e3), num_ltnt_samples_per_test=int(1e3)):
         # First compile any of the required graph computations that have not already been done
         if not 'ltnt_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['ltnt_sampler'] =\
@@ -51,12 +52,17 @@ class TestDesignManager:
         # TODO: The biggest inefficiency of the sampling BOED method used is that many obs samples will be completely
         #       unrealistic for the given test. Can we have the obs_sampler take the experiment as input?!?! This could
         #       make the value of a given sample much higher
-        def obs_sampler():
-            centre_vals = np.random.uniform(obs_range[0], obs_range[1], size=self._handlers['obs'].dims['deg'])
-            #all_vals = np.random.normal(centre_vals, (obs_range[1] - obs_range[0]) / 5)
-            return centre_vals
-        eigs = boed_runner(20, 500, 500, exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
-                           obs_sampler, self._compiled_funcs['ltnt_logp'], self._compiled_funcs['obs_logp'])
+        if not 'obs_sampler' in self._compiled_funcs.keys():
+            def obs_sampler():
+                centre_vals = np.random.uniform(obs_range[0], obs_range[1], size=self._handlers['obs'].dims['deg'])
+                #all_vals = np.random.normal(centre_vals, (obs_range[1] - obs_range[0]) / 5)
+                return [centre_vals]
+            self._compiled_funcs['obs_sampler'] = obs_sampler
+
+        eigs = boed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
+                           exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
+                           self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
+                           self._compiled_funcs['obs_logp'])
 
         # Optionally plot them all
         # TODO: Sort the designs for plotting somehow?!
@@ -72,7 +78,11 @@ class TestDesignManager:
         self._handlers['obs'].set_observed(observations)
         idata = inference_model(self._test_model, num_samples=3000)
         posterior_prms = fit_latent_params_to_posterior_samples(self.latents_info, self._handlers['pri'].map, idata)
+        print(posterior_prms)
         self._handlers['pri'].set_params(posterior_prms)
+
+    def override_func(self, which_func, manual_func):
+        self._compiled_funcs[which_func] = manual_func
 
     def set_experiment_conditions(self, conditions):
         self._handlers['exp'].set_experimental_params(conditions)
@@ -80,8 +90,8 @@ class TestDesignManager:
     def set_priors(self, priors):
         self._handlers['pri'].set_params(priors)
 
-    def set_observations(self, var_name, observed):
-        self._handlers['obs'][var_name].set_value(observed)
+    def set_observations(self, observed):
+        self._handlers['obs'].set_observed(observed)
 
     def estimate_reliability(self, num_samples=30000):
         if not 'life_sampler' in self._compiled_funcs.keys():
@@ -128,8 +138,9 @@ class TestDesignManager:
                 if not 'ltnt_sampler' in self._compiled_funcs.keys():
                     self._compiled_funcs['ltnt_sampler'] =\
                         shorthand_compile('ltnt_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
+
                 # Turn into a Gerabaldi report for passing to visualization generators
-                report = TestSimReport(name='prior_predictive')
+                report = TestSimReport(name='latents')
                 sampled = np.array([self._compiled_funcs['ltnt_sampler']() for _ in range(num_samples)])
                 for i, ltnt in enumerate(self.latents_info):
                     # The stack is required as PyMC spits out different dimensionalities depending on distribution
