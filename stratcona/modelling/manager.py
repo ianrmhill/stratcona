@@ -26,6 +26,7 @@ class TestDesignManager:
     def __init__(self, model_builder: ModelBuilder):
         self.design_name = None
         self._test_model, self.latents_info, self.observed_info, self.predictor_info = model_builder.build_model()
+        self._inf_model, self.inf_latents_info, self.inf_observed_info = model_builder.build_inf_model()
 
         self._handlers = {}
         self._maps = {}
@@ -76,8 +77,8 @@ class TestDesignManager:
 
     def infer_model(self, observations):
         self._handlers['obs'].set_observed(observations)
-        idata = inference_model(self._test_model, num_samples=3000)
-        posterior_prms = fit_latent_params_to_posterior_samples(self.latents_info, self._handlers['pri'].map, idata)
+        idata = inference_model(self._inf_model, num_samples=3000)
+        posterior_prms = fit_latent_params_to_posterior_samples(self.inf_latents_info, self._handlers['pri'].map, idata)
         print(posterior_prms)
         self._handlers['pri'].set_params(posterior_prms)
 
@@ -89,6 +90,9 @@ class TestDesignManager:
 
     def set_priors(self, priors):
         self._handlers['pri'].set_params(priors)
+
+    def get_priors(self, for_user=False):
+        return self._handlers['pri'].get_params(for_user=for_user)
 
     def set_observations(self, observed):
         self._handlers['obs'].set_observed(observed)

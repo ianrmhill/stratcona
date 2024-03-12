@@ -15,6 +15,19 @@ from stratcona.engine.inference import inference_model, fit_latent_params_to_pos
 
 if __name__ == '__main__':
     with pymc.Model() as mdl:
+        a = pymc.Normal('a', mu=0, sigma=0.1, shape=(5,))
+        out = pymc.Normal('out', mu=2 * a, sigma=0.02, observed=[0.2, 0.1, 0.15, 0.1, 0.2])
+
+    gv = pymc.model_to_graphviz(mdl)
+    gv.format = 'png'
+    gv.render(filename='model_graph')
+
+    with mdl:
+        pymc.sample()
+
+
+def boed_testing():
+    with pymc.Model() as mdl:
         a = pymc.Normal('a', mu=0, sigma=0.1)
         out = pymc.Normal('out', mu=2 * a, sigma=0.02)
 

@@ -83,17 +83,26 @@ class LatentParameterHandler():
             # Declare the PyTensor shared variable with the prior values set accordingly
             self.tensors[ltnt] = pt.shared(self._d_to_t(ltnt, latent_vars[ltnt].prms))
 
-    def get_params(self, ltnt):
-        return self._t_to_d(ltnt)
+    def get_params(self, ltnt=None, for_user=False):
+        if ltnt is None:
+            prms = {}
+            for l in self.map:
+                prms[l] = self._t_to_d(l, for_user)
+            return prms
+        else:
+            return self._t_to_d(ltnt, for_user)
 
     def set_params(self, vals):
         for ltnt in self.map:
             self.tensors[ltnt].set_value(self._d_to_t(ltnt, vals[ltnt]))
 
-    def _t_to_d(self, ltnt):
+    def _t_to_d(self, ltnt, for_user=False):
         d = {}
         for i, prm in enumerate(self.map[ltnt]):
-            d[prm] = self.tensors[ltnt][i, :self.map[ltnt][prm]]
+            if for_user:
+                d[prm] = self.tensors[ltnt].get_value()[i, :self.map[ltnt][prm]]
+            else:
+                d[prm] = self.tensors[ltnt][i, :self.map[ltnt][prm]]
         return d
 
     def _d_to_t(self, ltnt, vals):
@@ -131,14 +140,17 @@ class ObservationHandler():
             formatted_obs = {self.exp_order[0]: observations}
         else:
             formatted_obs = observations
-        self._d_to_t(formatted_obs)
+
+        ts = self._d_to_t(formatted_obs)
+        for var in self.map:
+            self.tensors[var].set_value(ts[var])
 
     def _t_to_d(self, var):
         return self.tensors[var]
 
     def _d_to_t(self, observations):
         ts = {}
-        for var in self.map.keys():
+        for var in self.map:
             ts[var] = np.zeros(self.dims[var])
             for i, exp in enumerate(self.exp_order):
                 ts[var][i, :] = observations[exp][var]

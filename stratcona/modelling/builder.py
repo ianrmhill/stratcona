@@ -198,7 +198,7 @@ class ModelBuilder():
         ### Build the PyMC model now that all elements have been prepped ###
         # TODO: Try to extend shared variable dynamic configuration to the model dimensionality, this would allow for
         #       experiments with different sample sizes of some parameters
-        with pymc.Model(coords=self.model_dims) as mdl:
+        with pymc.Model(coords=self.model_dims) as bed_mdl:
             # First set up the latent independent variables
             ltnts = {}
             ls = {}
@@ -230,10 +230,10 @@ class ModelBuilder():
                 observes[name] = pymc.Normal(name, deps[name], variability,
                                              shape=(self.num_experiments, self.observation_handle.map[name]),
                                              dims=('experiments', f"num_{name}"))
-                inf_observes[f"{name}_obs"] = pymc.Normal(name + '_obs', deps[name], variability,
-                                                          observed=self.observation_handle.get_observed(name),
-                                                          shape=(self.num_experiments, self.observation_handle.map[name]),
-                                                          dims=('experiments', f"num_{name}"))
+                #inf_observes[f"{name}_obs"] = pymc.Normal(name + '_obs', deps[name], variability,
+                #                                          observed=self.observation_handle.get_observed(name),
+                #                                          shape=(self.num_experiments, self.observation_handle.map[name]),
+                #                                          dims=('experiments', f"num_{name}"))
 
             # Finally are lifespan variables that are special dependent variables predicting reliability
             preds = {}
@@ -242,4 +242,40 @@ class ModelBuilder():
                 #       than baked into the predictive function
                 preds[name] = pymc.Normal(name, pred(**ls), 0.2)
 
-        return mdl, list(ltnts.values()), list(observes.values()), list(preds.values())
+        return bed_mdl, list(ltnts.values()), list(observes.values()), list(preds.values())
+
+    # We need this method currently since PyMC sampling doesn't efficiently compile the graphical models leading to
+    # extremely long runtimes when automatic predictor variables are included in the model, and PyMC observed variables
+    # aren't configured correctly for BOED.
+    def build_inf_model(self):
+        # Now the model used for inference that is simpler due to PyMC inference method inefficiencies
+        with pymc.Model(coords=self.model_dims) as inf_mdl:
+            # First set up the latent independent variables
+            ltnts = {}
+            ls = {}
+            for name, ltnt in self.latents.items():
+                # TODO: Make priors handle automatically broadcast the prior parameterization to the model dimensions
+                ltnts[name] = ltnt.dist(name, **self.priors_handle.get_params(name))
+                # Reshape the variables for broadcasting, can't do using the 'shape' argument for dist as it causes
+                # certain distributions to error out when compiling
+                ls[name] = pt.tensor.reshape(ltnts[name], (1, 5))
+
+            # Build out the dictionary of experimental conditions
+            experiment_params = self.experiment_handle.get_experimental_params()
+            # Now set up the dependent variables, only providing the necessary inputs to each function
+            deps = {}
+            for name, dep in self.dependents.items():
+                arg_dict = {arg: val for arg, val in {**ls, **experiment_params}.items() if arg in self.dep_args[name]}
+                deps[name] = dep(**arg_dict)
+
+            # Next, set up the observed variables that can be measured during a test
+            observes = {}
+            for name, obs in self.observes.items():
+                # Create the variability parameterization that can be broadcast across experiments and devices observed
+                variability = np.full((self.num_experiments, 1), obs['variability'])
+                observes[f"{name}_obs"] = pymc.Normal(name + '_obs', deps[name], variability,
+                                                      observed=self.observation_handle.get_observed(name),
+                                                      shape=(self.num_experiments, self.observation_handle.map[name]),
+                                                      dims=('experiments', f"num_{name}"))
+
+        return inf_mdl, list(ltnts.values()), list(observes.values())

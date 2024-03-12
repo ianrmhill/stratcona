@@ -203,7 +203,7 @@ def eig_sampled_unoptimized(n: int, m: int, theta_sampler, y_sampler, p_prior, p
         eig_norm += marginal
 
     # Normalize the estimate for EIG(d) and return it
-    print(f"EIG norm: {eig_norm}.")
+    #print(f"EIG norm: {eig_norm}.")
     return eig / eig_norm
 
 
