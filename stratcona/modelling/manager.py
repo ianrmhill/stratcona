@@ -43,6 +43,9 @@ class TestDesignManager:
         if not 'ltnt_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['ltnt_sampler'] =\
                 shorthand_compile('ltnt_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
+        if not 'obs_sampler' in self._compiled_funcs.keys():
+            self._compiled_funcs['obs_sampler'] =\
+                shorthand_compile('obs_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
         if not 'ltnt_logp' in self._compiled_funcs.keys():
             self._compiled_funcs['ltnt_logp'] =\
                 shorthand_compile('ltnt_logp', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
@@ -60,10 +63,10 @@ class TestDesignManager:
                 return [centre_vals]
             self._compiled_funcs['obs_sampler'] = obs_sampler
 
-        eigs = boed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
-                           exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
-                           self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
-                           self._compiled_funcs['obs_logp'])
+        eigs = bed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
+                          exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
+                          self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
+                          self._compiled_funcs['obs_logp'])
 
         # Optionally plot them all
         # TODO: Sort the designs for plotting somehow?!

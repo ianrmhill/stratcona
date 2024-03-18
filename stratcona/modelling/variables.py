@@ -81,7 +81,8 @@ class LatentParameterHandler():
                     self.map[ltnt][prm] = len(val)
             self.dims[ltnt] = (num_prms, max_prm_len)
             # Declare the PyTensor shared variable with the prior values set accordingly
-            self.tensors[ltnt] = pt.shared(self._d_to_t(ltnt, latent_vars[ltnt].prms))
+            brdcst = (False, True) if latent_vars[ltnt].dist_type == 'continuous' else (True, False)
+            self.tensors[ltnt] = pt.shared(self._d_to_t(ltnt, latent_vars[ltnt].prms), broadcastable=brdcst)
 
     def get_params(self, ltnt=None, for_user=False):
         if ltnt is None:

@@ -12,11 +12,25 @@ from stratcona.assistants.probability import shorthand_compile
 from stratcona.assistants.iterator import iter_sampler
 from stratcona.engine.boed import entropy, information_gain
 from stratcona.engine.inference import inference_model, fit_latent_params_to_posterior_samples
+from stratcona.modelling.builder import LatentVariable
+from stratcona.modelling.variables import LatentParameterHandler
 
 if __name__ == '__main__':
-    with pymc.Model() as mdl:
-        a = pymc.Normal('a', mu=0, sigma=0.1, shape=(5,))
-        out = pymc.Normal('out', mu=2 * a, sigma=0.02, observed=[0.2, 0.1, 0.15, 0.1, 0.2])
+
+    #ltnts = LatentParameterHandler({'a': LatentVariable('a', pymc.Normal, {'mu': 0, 'sigma': 0.1})})
+    ltnts = LatentParameterHandler({'d': LatentVariable('d', pymc.Categorical, {'p': [0.4, 0.4, 0.2]})})
+    # Can't use regular SharedVariable objects as PyMC won't let them be used to parameterize distributions
+    mu_bad = pytensor.shared([0.0])
+
+    a = pytensor.shared(np.array([[0.0], [0.1]]), broadcastable=(False, True))
+    sigma = pytensor.shared(np.array([0.1, 0.1, 0.1, 0.1], dtype=float))
+    p = pytensor.shared(np.array([[0.4, 0.4, 0.2]]), broadcastable=(True, False))
+
+    with pymc.Model(coords={'devs': [0, 1, 2, 3]}) as mdl:
+        #a = pymc.Normal('a', dims='devs', **ltnts.get_params('a'))
+        d = pymc.Categorical('d', dims='devs', **ltnts.get_params('d'))
+        mu_out = 2 * d
+        out = pymc.Normal('out', mu=mu_out, sigma=0.02, observed=[0.2, 0.1, 0.15, 0.1])
 
     gv = pymc.model_to_graphviz(mdl)
     gv.format = 'png'

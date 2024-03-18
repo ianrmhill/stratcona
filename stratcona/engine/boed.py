@@ -1,10 +1,11 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
 import numpy as np
 import pandas as pd
 
-__all__ = ['eig_sampled', 'boed_runner']
+__all__ = ['eig_importance_sampled', 'bed_runner']
 
 NATS_TO_BITS = np.log2(np.e)
 # Machine precision is defaulted to 32 bits since most instruments don't have 64 bit precision and/or noise floors. Less
@@ -84,18 +85,17 @@ def information_gain(theta_sampler, p_pri, p_post, m=1e5, in_bits=False, limitin
     print(f"H: {h_theta}, H given y: {h_theta_given_y}")
     return h_theta - h_theta_given_y
 
-# FIXME: FLAWED! Incorrect math occurred when converting to importance sampling approach
-def eig_sampled(n: int, m: int, theta_sampler, y_sampler, p_prior, p_likely):
+
+def eig_importance_sampled(n: int, m: int, i_s, y_s, lp_i, lp_y):
     """
-    Core EIG (expected information gain) computation function that produces an estimate using sampling. This estimation
-    requires four compiled functions, three of which are generated directly from the problem model, and then a proposal
-    sampler for the observation distribution which should approximate the range and likelihood of possible observations.
+    Core EIG (expected information gain) computation function that produces an estimate using sampling. This sampler
+    uses importance sampling and has the benefit of being exact for finite discrete models if the samplers i_s and y_s
+    are constructed to iterate the set of possible discrete values and n and m are chosen correspondingly. This sampler
+    has the drawback of being very slow, as it does not try to take any estimation shortcuts or assume any knowledge
+    about the model structure.
 
     Note that this function depends on the experiment design currently set for the model, thus it is crucial that this
     is set to the intended experiment before calling this function.
-
-    Additionally, for discrete models, if the samplers are iterators for countable discrete distributions and n and m
-    are set accordingly, the EIG computation will be exact instead of an estimate.
 
     Parameters
     ----------
@@ -103,14 +103,14 @@ def eig_sampled(n: int, m: int, theta_sampler, y_sampler, p_prior, p_likely):
         Number of samples of the observation space to use in building the EIG estimate.
     m: int
         Number of samples of the latent variable space to use per observation space sample in building the EIG estimate.
-    theta_sampler: compiled callable
+    i_s: compiled callable
         The prior sampling function for the model. When called should generate a sample from the latent variable space.
-    y_sampler: compiled callable
+    y_s: compiled callable
         The proposal observation sampling function for the model. Must generate an observation space sample when called.
-    p_prior: compiled callable
+    lp_i: compiled callable
         The prior log probability function for the model. Takes a latent variable space sample as input to compute the
         probability of obtaining that sample.
-    p_likely: compiled callable
+    lp_y: compiled callable
         The likelihood log probability function for the model. Takes a latent variable space sample and observation
         space sample as input to compute the probability of seeing that observation given the latent variable values.
 
@@ -119,95 +119,80 @@ def eig_sampled(n: int, m: int, theta_sampler, y_sampler, p_prior, p_likely):
     float
         The estimated EIG in nats.
     """
+    # Initialize variables to track how well-behaved the EIG estimation computation runs
+    unobs_cnt = 0
+    high_p_y = False
     # Initialize the accumulator variables that sum up the total information gain and the normalization constant
-    eig, eig_norm = 0, 0
+    mig, mig_y, eig, eig_norm = 1e5, None, 0.0, 0.0
+
+    # We will use up some memory to slightly improve performance
+    lp_likely_store = np.zeros((m,))
+    lp_pri_store = np.zeros((m,))
+
     # Across 'n' observation space samples
     for n_i in range(n):
-        y = y_sampler()
-        # Initialize accumulators for information gain and marginal probability and associated normalization constants
-        ig, ig_norm, marg, marg_norm = 0, 0, 0, 0
-        # Across 'm' latent variable space samples
+        y = y_s()
+
+        # Compute the information gain for the current sample
         for m_i in range(m):
-            i = theta_sampler()
-            # Compute the probabilities for the latent variable space sample [p(theta)] and observation given the latent
-            # variable space sample [p(y|theta)], noting that this is implicitly p(y|theta, d) where d is the experiment
-            p_i = np.exp(p_prior(*i))
-            p_cond = np.exp(p_likely(*i, *y))
-            # Contribute to the estimate for the marginal probability p(y|d)
-            marg += p_cond * p_i
-            marg_norm += p_i
-            # As long as the likelihood is non-zero, contribute to the estimate for the information gain IG(y, d)
-            if p_cond > 0:
-                #print(f"Inner {m_i}, i: {i}, obs prob given sample: {p_cond}, sample prob: {p_i}.")
-                ig += np.log(p_cond) * p_i
-                ig_norm += p_i
+            i = i_s()
+            lp_pri = lp_i(*i)
+            lp_cond = lp_y(*i, *y)
+            # Persist the log prior for later prior entropy and normalization factor computation
+            lp_pri_store[m_i] = lp_pri
+            # Persist the log importance weighted likelihood
+            lp_likely_store[m_i] = lp_cond + lp_pri
 
-        # Normalize the estimates for the information gain IG(y, d) and the marginal probability p(y|d)
-        #print(f"Iter {n_i}, y: {y}, marg sum: {marg}, marg norm: {marg_norm}, IG pre marg: {ig}.")
-        marg = marg / marg_norm if marg_norm > 0 else 0
-        if marg > 0:
-            ig -= np.log(marg) * ig_norm
-        ig = ig / ig_norm if ig_norm > 0 else 0
-        # With completed estimates for IG(y, d) and p(y|d) we can contribute to the estimate for EIG(d)
-        eig += ig * marg
-        eig_norm += marg
-        #print(f"Iter {n_i}, marg: {marg}, IG: {ig}, IG norm: {ig_norm}.")
+        # Batch convert all the stored log probabilities to probability
+        p_pri = np.exp(lp_pri_store)
+        p_likely = np.exp(lp_likely_store)
 
-    # Normalize the estimate for EIG(d) and return it
-    #print(f"EIG norm: {eig_norm}.")
-    return eig / eig_norm if eig_norm > 0 else 0.0
-
-
-# TODO: Seems to be working, fixes the problem with eig_sampled! Now rearrange and optimize to be as fast as possible
-def eig_sampled_unoptimized(n: int, m: int, theta_sampler, y_sampler, p_prior, p_likely):
-    # Initialize the accumulator variables that sum up the total information gain and the normalization constant
-    eig, eig_norm = 0.0, 0.0
-    # Across 'n' observation space samples
-    for n_i in range(n):
-        y = y_sampler()
-        # Compute the marginal
-        marg, marg_norm = 0.0, 0.0
-        for m_i in range(m):
-            i = theta_sampler()
-            p_i = np.exp(p_prior(*i))
-            p_cond = np.exp(p_likely(*i, *y))
-
-            # Marginal computation
-            marg += p_cond * p_i
-            marg_norm += p_i
-
-        # If the marginal is zero, this y sample doesn't contribute to the overall EIG estimate. Term 'marg_norm' will
-        # only ever be zero if 'marg' is also zero
-        if marg == 0:
+        # Summations used to determine the marginal: p(y|d)
+        marg = np.sum(p_likely)
+        norm = np.sum(p_pri)
+        # NOTE: We do not check for norm == 0 as this indicates a problem with compatibility between i_s and lp_i
+        # that should already be validated before calling this function
+        p_marg = marg / norm
+        # If the marginal probability is extremely low this indicates that the current sample y is incredibly unlikely
+        # within the prior model
+        # TODO: Tune this cutoff for ignoring samples from y_s
+        if p_marg < 1e-50:
+            # In this case the information gain computation will be extremely unstable, thus we note and skip this 'y'
+            unobs_cnt += 1
             continue
-        marginal = marg / marg_norm
 
-        pri, post, ig_norm = 0.0, 0.0, 0.0
-        for m_i in range(m):
-            i = theta_sampler()
-            p_i = np.exp(p_prior(*i))
-            if p_i > 0:
-                p_cond = np.exp(p_likely(*i, *y))
-                # When p_cond is zero, we use the fact that the limit as p->0 of p * log(p) is 0
-                p_post = (p_cond * p_i) / marginal
-                if p_post > 0:
-                    post += np.log(p_post) * p_post
-                pri += np.log(p_i) * p_i
-                ig_norm += p_i
-                    #print(f"Inner {m_i} - i: {i}, pri: {p_i}, post: {p_post}.")
+        # Compute the unnormalized prior entropy
+        n_h_pri = np.sum(p_pri * lp_pri_store)
+        # Compute the unnormalized posterior entropy
+        lp_post = lp_likely_store - np.log(p_marg)
+        p_post = p_likely / p_marg
+        n_h_post = np.sum(p_post * lp_post)
+        # Finally, compute the normalized information gain for the sampled 'y'
+        ig = (n_h_post - n_h_pri) / norm
 
-        h_pri, h_post = pri / ig_norm, post / ig_norm
-        ig = h_post - h_pri # Signs flipped since we never added the negatives to the entropy
-        #print(f"Iter {n_i} - y: {y}, marginal: {marginal}, prior entropy: {-h_pri}, post entropy: {-h_post}, IG: {ig}.")
-        eig += ig * marginal
-        eig_norm += marginal
+        # Check for conditions indicating that lp_y > 0 (p_y > 0) for some sampled 'i' values for the current 'y'. These
+        # should normally be compensated for via the p_marg normalization within Bayes' theorem, but since we are using
+        # sampling-based estimation it is possible to sample more high-probability region in the second loop
+        if ig < 0 or p_marg > 1:
+            high_p_y = True
+            #print(f"Negative IG occurred: ig: {ig}, marg: {p_marg}, y: {y}")
+
+        # Now add the information gain to the experiment design optimization parameters
+        if ig < mig:
+            mig = ig
+            mig_y = y
+        eig += ig * p_marg
+        eig_norm += p_marg
+
+    # TODO: Check the issue tracking variables to ensure the computation was well-behaved
+    if high_p_y:
+        print(f"Negative IG")
 
     # Normalize the estimate for EIG(d) and return it
-    #print(f"EIG norm: {eig_norm}.")
     return eig / eig_norm
 
 
-def boed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely,
+def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely,
                 return_best_only: bool = False):
     """
     Engine to estimate the optimal experimental design to run for a given model and limited space of possible
@@ -223,13 +208,16 @@ def boed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, log
     eig_pairs = []
     i_max = None
 
+    # TODO: Sanity checks to avoid attempting BED with bad inputs.
+    # TODO: Sanity check that ltnt_sampler is producing samples that aren't impossible based on logp_prior
+
     for i in range(l):
         d = exp_sampler()
         # Crucial to set the experimental design within the model first, as otherwise the EIG won't correspond to 'd'
         exp_handle.set_experimental_params(d)
         # Now we can estimate EIG(d) and add it to the list
         #eig = eig_sampled(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely)
-        eig = eig_sampled_unoptimized(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely)
+        eig = eig_importance_sampled(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely)
         eig_pairs.append([d, eig])
         print(f"Exp {i}: {eig} nats")
         # Track which is the best experiment from an expected information gain perspective

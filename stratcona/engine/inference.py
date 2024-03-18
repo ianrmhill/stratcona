@@ -32,9 +32,9 @@ def inference_model(model, num_samples: int = None, num_chains: int = None, seed
         extra_args['draws'] = num_samples
 
     # Now run the MCMC sampling to get a sample trace of the posterior
-    #with model:
-    #    trace = pymc.sample(step=pymc.step_methods.DEMetropolisZ(), **extra_args)
-    trace = pymc.sample(model=model, **extra_args)
+    with model:
+        trace = pymc.sample(**extra_args)
+    #trace = pymc.sample(model=model, **extra_args)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
     return trace
 

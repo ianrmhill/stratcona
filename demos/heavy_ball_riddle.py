@@ -49,12 +49,9 @@ def riddle_demo():
     plt.show()
 
     ### Determine Best Experiment Step ###
-    ltnt_sampler = stratcona.assistants.iterator.iter_sampler([[0], [1], [2], [3], [4], [5], [6], [7]])
+    ltnt_sampler = stratcona.assistants.iterator.iter_sampler([[[0]], [[1]], [[2]], [[3]], [[4]], [[5]], [[6]], [[7]]])
     tm.override_func('ltnt_sampler', ltnt_sampler)
     obs_sampler = stratcona.assistants.iterator.iter_sampler([np.array([[[-1]]]), np.array([[[0]]]), np.array([[[1]]])])
-    #def obs_sampler():
-    #    val = np.random.choice([-1, 0, 1])
-    #    return np.array([[[val]]])
     tm.override_func('obs_sampler', obs_sampler)
     exp_sampler = stratcona.assistants.iterator.iter_sampler([
         {'b0p': 0, 'b1p': 1, 'b2p': 2, 'b3p': 2, 'b4p': 2, 'b5p': 2, 'b6p': 2, 'b7p': 2},
@@ -65,7 +62,7 @@ def riddle_demo():
     # EIG of one per side: 1.061278, two: 1.5, three: 1.561278, four: 1.0 (bits)
 
     ### Simulate the Experiment Step ###
-    observed_pos = 1
+    observed_pos = -1
 
     ### Inference Step ###
     tm.set_experiment_conditions({'single': {'b0p': 0, 'b1p': 0, 'b2p': 0, 'b3p': 1, 'b4p': 1, 'b5p': 1, 'b6p': 2, 'b7p': 2}})

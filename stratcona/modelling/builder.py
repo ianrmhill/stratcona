@@ -90,6 +90,7 @@ class ModelBuilder():
         self.experiment_handle, self.priors_handle, self.observed_handles = None, None, None
         self.experiment_map, self.priors_map, self.observed_map = None, None, None
         self.model_dims = {}
+        self.max_var, self.max = None, 0
 
     def add_latent_variable(self, var_name, distribution, prior):
         self.latents[var_name] = LatentVariable(var_name, distribution, prior)
@@ -185,6 +186,9 @@ class ModelBuilder():
                 else:
                     raise Exception('If number of devices to observe for each observed variable is not defined, then'
                                     'the "all" group must be.')
+            if len(self.model_dims[f"num_{var}"]) > self.max:
+                self.max_var = f"num_{var}"
+                self.max = len(self.model_dims[f"num_{var}"])
 
         # We must configure the latent variable space as ensuring uncertainty is relatively balanced between the
         # set of variables is crucial to avoiding extremely biased optimal experiment design results
@@ -203,10 +207,10 @@ class ModelBuilder():
             ltnts = {}
             ls = {}
             for name, ltnt in self.latents.items():
-                ltnts[name] = ltnt.dist(name, **self.priors_handle.get_params(name))
+                ltnts[name] = ltnt.dist(name, dims=self.max_var, **self.priors_handle.get_params(name))
                 # Reshape the variables for broadcasting, can't do using the 'shape' argument for dist as it causes
                 # certain distributions to error out when compiling
-                ls[name] = pt.tensor.reshape(ltnts[name], (1, 1))
+                ls[name] = pt.tensor.reshape(ltnts[name], (1, self.max))
 
             # Build out the dictionary of experimental conditions
             experiment_params = self.experiment_handle.get_experimental_params()
@@ -255,10 +259,10 @@ class ModelBuilder():
             ls = {}
             for name, ltnt in self.latents.items():
                 # TODO: Make priors handle automatically broadcast the prior parameterization to the model dimensions
-                ltnts[name] = ltnt.dist(name, **self.priors_handle.get_params(name))
+                ltnts[name] = ltnt.dist(name, dims=self.max_var, **self.priors_handle.get_params(name))
                 # Reshape the variables for broadcasting, can't do using the 'shape' argument for dist as it causes
                 # certain distributions to error out when compiling
-                ls[name] = pt.tensor.reshape(ltnts[name], (1, 5))
+                ls[name] = pt.tensor.reshape(ltnts[name], (1, self.max))
 
             # Build out the dictionary of experimental conditions
             experiment_params = self.experiment_handle.get_experimental_params()

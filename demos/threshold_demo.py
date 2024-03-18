@@ -21,12 +21,16 @@ import stratcona
 
 
 def threshold_demo():
+    ### Define some constants ###
+    num_devices = 10
+
     ### Define the model we will use to fit degradation ###
     mb = stratcona.ModelBuilder(mdl_name='Threshold Degradation')
 
     def threshold_degradation(a, c, vdd, temp, time):
-        #return pt.where(pt.gt(vdd, a), b * (temp - (c * 100)) * (time / 1000), 0)
         return pt.where(pt.gt(vdd, a), (temp - (c * 100)) * (time / 1000), 0)
+
+        #return pt.where(pt.gt(vdd, a), b * (temp - (c * 100)) * (time / 1000), 0)
 
     mb.add_latent_variable('a', pymc.Normal, {'mu': 0.85, 'sigma': 0.1})
     #mb.add_latent_variable('b', pymc.Beta, {'alpha': 2.0, 'beta': 3.0})
@@ -34,7 +38,7 @@ def threshold_demo():
     mb.add_latent_variable('c', pymc.Normal, {'mu': 1.5, 'sigma': 0.1})
 
     mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=['single'],
-                                samples_per_experiment={'all': 5})
+                                samples_per_experiment={'all': num_devices})
 
     mb.add_dependent_variable('deg', threshold_degradation)
     mb.set_variable_observed('deg', variability=2)
@@ -46,7 +50,7 @@ def threshold_demo():
     tm = stratcona.TestDesignManager(mb)
 
     tm.set_experiment_conditions({'single': {'vdd': 0.85, 'temp': 300, 'time': 500}})
-    tm.examine('prior_predictive')
+    #tm.examine('prior_predictive')
 
     start_time = t.time()
     #estimate = tm.estimate_reliability(num_samples=3000)
@@ -54,25 +58,24 @@ def threshold_demo():
     #print(f"Estimated product lifespan: {estimate} hours")
 
     #tm.examine('lifespan')
-    #plt.show()
+    plt.show()
 
     ### Determine Best Experiment ###
     exp_sampler = stratcona.assistants.iterator.iter_sampler([
-        {'vdd': 0.55, 'temp': 300, 'time': 500}, {'vdd': 0.60, 'temp': 300, 'time': 500},
         {'vdd': 0.65, 'temp': 300, 'time': 500}, {'vdd': 0.70, 'temp': 300, 'time': 500},
         {'vdd': 0.75, 'temp': 300, 'time': 500}, {'vdd': 0.80, 'temp': 300, 'time': 500},
         {'vdd': 0.85, 'temp': 300, 'time': 500}, {'vdd': 0.90, 'temp': 300, 'time': 500},
         {'vdd': 0.95, 'temp': 300, 'time': 500}, {'vdd': 1.00, 'temp': 300, 'time': 500},
         {'vdd': 1.05, 'temp': 300, 'time': 500}, {'vdd': 1.10, 'temp': 300, 'time': 500},
-        {'vdd': 1.15, 'temp': 300, 'time': 500}, {'vdd': 1.20, 'temp': 300, 'time': 500},
-        {'vdd': 1.25, 'temp': 300, 'time': 500}, {'vdd': 1.30, 'temp': 300, 'time': 500}])
+        {'vdd': 1.15, 'temp': 300, 'time': 500}, {'vdd': 1.20, 'temp': 300, 'time': 500}])
 
     start_time = t.time()
-    #tm.determine_best_test(exp_sampler, (-5, 120), num_tests_to_eval=16, num_obs_samples_per_test=300, num_ltnt_samples_per_test=300)
+    tm.determine_best_test(exp_sampler, (-5, 120), num_tests_to_eval=12,
+                           num_obs_samples_per_test=300, num_ltnt_samples_per_test=300)
     print(f"Test EIG estimation time: {t.time() - start_time} seconds")
 
     ### Simulate the Experiment ###
-    to_meas = MeasSpec({'deg': 5}, {'temp': 300, 'vdd': 0.85}, 'Measure Ten')
+    to_meas = MeasSpec({'deg': num_devices}, {'temp': 300, 'vdd': 0.85}, 'Measure Ten')
     # We will run two tests, one with high EIG, one with poor EIG
     best_strs = StrsSpec({'temp': 300, 'vdd': 0.84}, 500, 'Best Vdd')
     poor_strs = StrsSpec({'temp': 300, 'vdd': 1.15}, 500, 'Poor Vdd')
