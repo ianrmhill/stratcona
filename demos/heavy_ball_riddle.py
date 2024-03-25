@@ -36,7 +36,7 @@ def riddle_demo():
 
     mb.define_experiment_params(['b0p', 'b1p', 'b2p', 'b3p', 'b4p', 'b5p', 'b6p', 'b7p'],
                                 simultaneous_experiments=['single'],
-                                samples_per_experiment={'all': 1})
+                                samples_per_observation={'all': 1})
 
     mb.add_dependent_variable('scale_pos', scale_weigh)
     mb.set_variable_observed('scale_pos', variability=0.01)

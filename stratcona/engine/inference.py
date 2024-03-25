@@ -39,7 +39,8 @@ def inference_model(model, num_samples: int = None, num_chains: int = None, seed
     return trace
 
 
-def fit_latent_params_to_posterior_samples(latents: list, prm_map: dict, idata: arviz.InferenceData, run_fit_analysis=False):
+def fit_latent_params_to_posterior_samples(latents: list, prm_map: dict, idata: arviz.InferenceData | dict[np.ndarray],
+                                           run_fit_analysis=False):
     """
     After PyMC runs a sampling algorithm we end up with many samples from the posterior. What PyMC does not do, however,
     is update the parameterized latent variables based on the posterior. Here we do this manually using the generated
@@ -49,10 +50,16 @@ def fit_latent_params_to_posterior_samples(latents: list, prm_map: dict, idata: 
     -------
 
     """
-    post_data = idata.posterior
+    if type(idata) == arviz.InferenceData:
+        post_data = idata.posterior
+    else:
+        post_data = idata
     posterior_params = {}
     for ltnt in latents:
-        sampled = post_data[ltnt.name].values.flatten()
+        if type(idata) == arviz.InferenceData:
+            sampled = post_data[ltnt.name].values.flatten()
+        else:
+            sampled = post_data[ltnt.name]
         dist_to_fit = pymc_to_scipy(ltnt.owner.op.name)
         if dist_to_fit == 'categorical':
             # For discrete variables we have to perform the updates manually. We transform everything into a

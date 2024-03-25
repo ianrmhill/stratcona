@@ -53,7 +53,7 @@ class TestDesignManager:
             self._compiled_funcs['obs_logp'] =\
                 shorthand_compile('obs_logp', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
 
-        # TODO: The biggest inefficiency of the sampling BOED method used is that many obs samples will be completely
+        # TODO: The biggest inefficiency of the sampling BED method used is that many obs samples will be completely
         #       unrealistic for the given test. Can we have the obs_sampler take the experiment as input?!?! This could
         #       make the value of a given sample much higher
         if not 'obs_sampler' in self._compiled_funcs.keys():
@@ -66,7 +66,8 @@ class TestDesignManager:
         eigs = bed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
                           exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
                           self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
-                          self._compiled_funcs['obs_logp'])
+                          self._compiled_funcs['obs_logp'],
+                          prior_handle=self._handlers['pri'], ltnt_info=self.latents_info)
 
         # Optionally plot them all
         # TODO: Sort the designs for plotting somehow?!

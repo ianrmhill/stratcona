@@ -20,61 +20,71 @@ from matplotlib import pyplot as plt
 import stratcona
 
 
-def threshold_demo():
+def htol_demo():
     ### Define some constants ###
-    num_devices = 10
+    num_devices = 5
+    boltz_ev = 8.617e-5
+    # 125C in Kelvin
+    htol_temp = 398.15
 
+    ########################################################################
+    ### 1. Define the predictive wear-out model to infer                 ###
+    ########################################################################
     ### Define the model we will use to fit degradation ###
-    mb = stratcona.ModelBuilder(mdl_name='Threshold Degradation')
+    mb = stratcona.ModelBuilder(mdl_name='HTOL Test')
 
-    def threshold_degradation(a, c, vdd, temp, time):
-        return pt.where(pt.gt(vdd, a), (temp - (c * 100)) * (time / 1000), 0)
+    # Model provided in JEDEC's JEP122H as generally used NBTI degradation model, equation 5.3.1
+    def bti_vth_shift_empirical(a0, e_aa, temp, vdd, alpha, time, n):
+        return 1000 * (a0 * 0.001) * pt.exp((e_aa * 0.01) / (boltz_ev * temp)) * (vdd ** alpha) * (time ** n)
 
-        #return pt.where(pt.gt(vdd, a), b * (temp - (c * 100)) * (time / 1000), 0)
+    mb.add_latent_variable('a0', pymc.Normal, {'mu': 6, 'sigma': 0.5})
+    mb.add_latent_variable('e_aa', pymc.Normal, {'mu': -5, 'sigma': 0.3})
+    mb.add_latent_variable('alpha', pymc.Normal, {'mu': 9.5, 'sigma': 0.5})
+    mb.add_latent_variable('n', pymc.Normal, {'mu': 0.4, 'sigma': 0.1})
 
-    mb.add_latent_variable('a', pymc.Normal, {'mu': 0.85, 'sigma': 0.1})
-    #mb.add_latent_variable('b', pymc.Beta, {'alpha': 2.0, 'beta': 3.0})
-    #mb.add_latent_variable('b', pymc.Normal, {'mu': 0.3, 'sigma': 0.1})
-    mb.add_latent_variable('c', pymc.Normal, {'mu': 1.5, 'sigma': 0.1})
-
-    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=['single'],
+    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=['htol'],
                                 samples_per_observation={'all': num_devices})
 
-    mb.add_dependent_variable('deg', threshold_degradation)
-    mb.set_variable_observed('deg', variability=2)
+    mb.add_dependent_variable('delta_vth', bti_vth_shift_empirical)
+    mb.set_variable_observed('delta_vth', variability=25)
 
     # This function is the inverse of the degradation mechanism with a set failure point
-    mb.gen_lifespan_variable('fail_point', fail_bounds={'deg': 40}, field_use_conds={'temp': 300, 'vdd': 0.85})
+    mb.gen_lifespan_variable('fail_point', fail_bounds={'delta_vth': 0.3}, field_use_conds={'temp': htol_temp, 'vdd': 1.15})
 
-    ### Compile the model for use ###
+    ########################################################################
+    ### 2. Compile the model for use                                     ###
+    ########################################################################
     tm = stratcona.TestDesignManager(mb)
 
-    tm.set_experiment_conditions({'single': {'vdd': 0.85, 'temp': 300, 'time': 500}})
+    tm.set_experiment_conditions({'htol': {'vdd': 1.15, 'temp': htol_temp, 'time': 1000}})
     #tm.examine('prior_predictive')
 
     start_time = t.time()
     #estimate = tm.estimate_reliability(num_samples=3000)
-    print(f"Lifespan prediction time: {t.time() - start_time} seconds")
     #print(f"Estimated product lifespan: {estimate} hours")
+    print(f"Lifespan prediction time: {t.time() - start_time} seconds")
 
-    #tm.examine('lifespan')
     #plt.show()
 
-    ### Determine Best Experiment ###
+    ########################################################################
+    ### 3. Determine the best experiment to conduct                      ###
+    ########################################################################
     exp_sampler = stratcona.assistants.iterator.iter_sampler([
-        {'vdd': 0.65, 'temp': 300, 'time': 500}, {'vdd': 0.70, 'temp': 300, 'time': 500},
-        {'vdd': 0.75, 'temp': 300, 'time': 500}, {'vdd': 0.80, 'temp': 300, 'time': 500},
-        {'vdd': 0.85, 'temp': 300, 'time': 500}, {'vdd': 0.90, 'temp': 300, 'time': 500},
-        {'vdd': 0.95, 'temp': 300, 'time': 500}, {'vdd': 1.00, 'temp': 300, 'time': 500},
-        {'vdd': 1.05, 'temp': 300, 'time': 500}, {'vdd': 1.10, 'temp': 300, 'time': 500},
-        {'vdd': 1.15, 'temp': 300, 'time': 500}, {'vdd': 1.20, 'temp': 300, 'time': 500}])
+        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 20}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10},
+        #{'vdd': 1.10, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000},
+        #{'vdd': 1.20, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.25, 'temp': htol_temp, 'time': 1000},
+        #{'vdd': 1.15, 'temp': htol_temp - 50, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp - 25, 'time': 1000},
+        #{'vdd': 1.15, 'temp': htol_temp + 0, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp + 25, 'time': 1000},
+        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 5}])
 
     start_time = t.time()
-    tm.determine_best_test(exp_sampler, (-5, 120), num_tests_to_eval=12,
-                           num_obs_samples_per_test=300, num_ltnt_samples_per_test=300)
+    tm.determine_best_test(exp_sampler, (-0.2, 1.2), num_tests_to_eval=3,
+                           num_obs_samples_per_test=500, num_ltnt_samples_per_test=500)
     print(f"Test EIG estimation time: {t.time() - start_time} seconds")
 
-    ### Simulate the Experiment ###
+    ########################################################################
+    ### 4. Simulate the Experiment                                       ###
+    ########################################################################
     to_meas = MeasSpec({'deg': num_devices}, {'temp': 300, 'vdd': 0.85}, 'Measure Ten')
     # We will run two tests, one with high EIG, one with poor EIG
     best_strs = StrsSpec({'temp': 300, 'vdd': 0.84}, 500, 'Best Vdd')
@@ -116,8 +126,6 @@ def threshold_demo():
     ### Inference Step for Each Test ###
     priors = tm.get_priors(for_user=True)
     tm.set_experiment_conditions({'single': {'vdd': 0.84, 'temp': 300, 'time': 500}})
-    # FIXME: The inference model has all 5 observations sharing latent variable samples, thus either all five must meet
-    #        the threshold or none, making inference incorrect
     tm.infer_model({'single': {'deg': best_vals}})
 
     # Reset model for second inference
@@ -130,4 +138,4 @@ def threshold_demo():
 
 
 if __name__ == '__main__':
-    threshold_demo()
+    htol_demo()

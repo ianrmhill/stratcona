@@ -86,7 +86,7 @@ class ModelBuilder():
         self.observes = {}
         self.experiment_params = None
         self.num_experiments = None
-        self.samples_per_experiment = None
+        self.samples_per_observation = None
         self.experiment_handle, self.priors_handle, self.observed_handles = None, None, None
         self.experiment_map, self.priors_map, self.observed_map = None, None, None
         self.model_dims = {}
@@ -158,7 +158,7 @@ class ModelBuilder():
                 ltnt.variance_to_prms(target_variance)
 
     def define_experiment_params(self, experimental_condition_params: list, simultaneous_experiments: int | list = 1,
-                                 samples_per_experiment: int | dict = 1):
+                                 samples_per_observation: int | dict = 1):
         self.experiment_params = experimental_condition_params
 
         # Set up the experimental configuration
@@ -170,19 +170,19 @@ class ModelBuilder():
             self.model_dims['experiments'] = simultaneous_experiments
 
         # Set up the number of devices of each observed parameter to measure in each test
-        if type(samples_per_experiment) == int:
-            self.samples_per_experiment = {'all': samples_per_experiment}
+        if type(samples_per_observation) == int:
+            self.samples_per_observation = {'all': samples_per_observation}
         else:
-            self.samples_per_experiment = samples_per_experiment
-            for prm in samples_per_experiment:
-                self.model_dims[f"num_{prm}"] = np.arange(samples_per_experiment[prm])
+            self.samples_per_observation = samples_per_observation
+            for prm in samples_per_observation:
+                self.model_dims[f"num_{prm}"] = np.arange(samples_per_observation[prm])
 
     def build_model(self, ltnt_normalization: str = None):
         # First check whether any model dimensions still need to be defined
         for var in self.observes:
             if not f"num_{var}" in self.model_dims.keys():
-                if 'all' in self.samples_per_experiment.keys():
-                    self.model_dims[f"num_{var}"] = np.arange(self.samples_per_experiment['all'])
+                if 'all' in self.samples_per_observation.keys():
+                    self.model_dims[f"num_{var}"] = np.arange(self.samples_per_observation['all'])
                 else:
                     raise Exception('If number of devices to observe for each observed variable is not defined, then'
                                     'the "all" group must be.')
@@ -197,7 +197,7 @@ class ModelBuilder():
         # Determine dict->tensor mappings then allocate the shared tensor variables used to swap data dynamically
         self.priors_handle = LatentParameterHandler(self.latents)
         self.experiment_handle = ExperimentHandler(self.model_dims['experiments'], self.experiment_params)
-        self.observation_handle = ObservationHandler(self.observes, self.samples_per_experiment, self.model_dims['experiments'])
+        self.observation_handle = ObservationHandler(self.observes, self.samples_per_observation, self.model_dims['experiments'])
 
         ### Build the PyMC model now that all elements have been prepped ###
         # TODO: Try to extend shared variable dynamic configuration to the model dimensionality, this would allow for
