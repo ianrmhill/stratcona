@@ -126,12 +126,12 @@ def htol_demo():
     ### Inference Step for Each Test ###
     priors = tm.get_priors(for_user=True)
     tm.set_experiment_conditions({'htol': {'vdd': 0.84, 'temp': 300, 'time': 500}})
-    tm.infer_model({'htol': {'deg': best_vals}})
+    tm.infer_model({'htol': {'delta_vth': best_vals}})
 
     # Reset model for second inference
     tm.set_priors(priors)
     tm.set_experiment_conditions({'htol': {'vdd': 1.15, 'temp': 300, 'time': 500}})
-    tm.infer_model({'htol': {'deg': poor_vals}})
+    tm.infer_model({'htol': {'delta_vth': poor_vals}})
 
     new_estimate = tm.estimate_reliability()
     print(new_estimate)

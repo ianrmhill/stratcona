@@ -1,11 +1,11 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
+import time as t
 import warnings
 import numpy as np
 import pandas as pd
 from scipy.special import logsumexp
-from pymc.distributions import Categorical
 
 from matplotlib import pyplot as plt
 
@@ -377,7 +377,10 @@ def eig_joint_likelihood_sampled(n: int, m: int, i_s, y_s, lp_i, lp_y,
 
 
 def eig_smc_joint_likelihood(n: int, m: int, i_s, y_s, lp_i, lp_y,
-                                 ys_per_obs: int = 1, p_y_stabilization = True, p_i_stabilization = True):
+                             ys_per_obs: int = 1, p_y_stabilization=True, p_i_stabilization=True, resample_rng=None):
+    # Provides the capability to test the routine through reproducible sampling
+    if resample_rng is None:
+        resample_rng = np.random.default_rng()
     # Initialize variables to track how well-behaved the EIG estimation computation runs
     unobs_cnt, high_p_y_cnt, neg_eig, neg_ig_cnt = 0, 0, 0.0, 0
     # Initialize the accumulator variables that sum up the total information gain and the normalization constant
@@ -410,7 +413,7 @@ def eig_smc_joint_likelihood(n: int, m: int, i_s, y_s, lp_i, lp_y,
     y_buf = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
     p_marg = np.zeros((n,))
 
-    # For each component of the observation we do an SMC resampling loop
+    # For each component of the observation (except the final one) we do an SMC resampling loop
     for y_i in range(ys_per_obs - 1):
         # Across 'n' observation space samples
         for n_i in range(n):
@@ -441,7 +444,8 @@ def eig_smc_joint_likelihood(n: int, m: int, i_s, y_s, lp_i, lp_y,
         # Sum of all p_marg array elements must be 1 for resampling
         resample_probs = p_marg / np.sum(p_marg)
         # Choose samples at random but the likelihood of each sample is weighted according to their marginal likelihoods
-        resampled_inds = np.random.choice(n, (n,), p=resample_probs)
+        # resampled_inds = np.random.choice(n, (n,), p=resample_probs)
+        resampled_inds = resample_rng.choice(n, (n,), p=resample_probs)
         for n_i in range(n):
             y_buf[n_i] = y[resampled_inds[n_i]]
         y = y_buf
@@ -518,14 +522,14 @@ def eig_smc_joint_likelihood(n: int, m: int, i_s, y_s, lp_i, lp_y,
     marg_outliers = np.extract(eig_norm_store > marg_mean + (3 * marg_std_dev), eig_norm_store)
     eig_outliers = np.extract(eig_store > eig_mean + (3 * eig_std_dev), eig_store)
 
-    fig, plots = plt.subplots(1, 3)
-    plots[0].plot(eig_store, color='purple')
-    plots[0].set_title('IG of sampled observes')
-    plots[1].plot(eig_norm_store, color='black')
-    plots[1].set_title('Marginal likelihood of sampled observes')
-    plots[2].plot(eig_store / eig_norm_store, color='green')
-    plots[2].set_title('Normalized IG of sampled observes')
-    plt.show()
+    #fig, plots = plt.subplots(1, 3)
+    #plots[0].plot(eig_store, color='purple')
+    #plots[0].set_title('IG of sampled observes')
+    #plots[1].plot(eig_norm_store, color='black')
+    #plots[1].set_title('Marginal likelihood of sampled observes')
+    #plots[2].plot(eig_store / eig_norm_store, color='green')
+    #plots[2].set_title('Normalized IG of sampled observes')
+    #plt.show()
 
     # Normalize the estimate for EIG(d) and return it
     return eig / eig_norm, mig
@@ -568,6 +572,7 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
         exp_handle.set_experimental_params(d)
 
         # Now we can estimate EIG(d) and add it to the list
+        start_time = t.time()
         # TODO: Split into two methods, one normal and one using sequential inference. Currently the method is getting
         #       too complex when they're put together
         #eig, mig = eig_importance_sampled(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely,
@@ -578,6 +583,7 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
                                             p_i_stabilization=False, p_y_stabilization=True)
         eig_pairs.append([d, eig, mig])
         print(f"Exp {i}: {eig} nats")
+        print(f"EIG estimation time: {t.time() - start_time} seconds")
         # Track which is the best experiment from an expected information gain perspective
         if i_max is None or eig > eig_pairs[i_max][1]:
             i_max = i
