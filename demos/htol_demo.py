@@ -70,12 +70,12 @@ def htol_demo():
     ### 3. Determine the best experiment to conduct                      ###
     ########################################################################
     exp_sampler = stratcona.assistants.iterator.iter_sampler([
-        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 20}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10},
+        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 5}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10},
         #{'vdd': 1.10, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000},
         #{'vdd': 1.20, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.25, 'temp': htol_temp, 'time': 1000},
         #{'vdd': 1.15, 'temp': htol_temp - 50, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp - 25, 'time': 1000},
         #{'vdd': 1.15, 'temp': htol_temp + 0, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp + 25, 'time': 1000},
-        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 5}])
+        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 15}])
 
     start_time = t.time()
     tm.determine_best_test(exp_sampler, (-0.2, 1.2), num_tests_to_eval=3,
@@ -125,13 +125,13 @@ def htol_demo():
 
     ### Inference Step for Each Test ###
     priors = tm.get_priors(for_user=True)
-    tm.set_experiment_conditions({'single': {'vdd': 0.84, 'temp': 300, 'time': 500}})
-    tm.infer_model({'single': {'deg': best_vals}})
+    tm.set_experiment_conditions({'htol': {'vdd': 0.84, 'temp': 300, 'time': 500}})
+    tm.infer_model({'htol': {'deg': best_vals}})
 
     # Reset model for second inference
     tm.set_priors(priors)
-    tm.set_experiment_conditions({'single': {'vdd': 1.15, 'temp': 300, 'time': 500}})
-    tm.infer_model({'single': {'deg': poor_vals}})
+    tm.set_experiment_conditions({'htol': {'vdd': 1.15, 'temp': 300, 'time': 500}})
+    tm.infer_model({'htol': {'deg': poor_vals}})
 
     new_estimate = tm.estimate_reliability()
     print(new_estimate)
