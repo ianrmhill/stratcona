@@ -71,8 +71,8 @@ class TestDesignManager:
 
         # Optionally plot them all
         # TODO: Sort the designs for plotting somehow?!
-        gracefall.static.eig_plot(eigs)
-        plt.show()
+        #gracefall.static.eig_plot(eigs)
+        #plt.show()
 
         best_test = eigs.iloc[eigs['eig'].idxmax()]
         # Extract the best EIG test

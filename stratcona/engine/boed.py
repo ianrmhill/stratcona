@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time as t
+import json
 import warnings
 import numpy as np
 import pandas as pd
@@ -440,7 +441,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
     # Provides the capability to test the routine through reproducible sampling
     rng = np.random.default_rng() if resample_rng is None else resample_rng
     # Initialize the return dictionary detailing all the results and metrics of the EIG computation
-    rtrn_dict = {'sampling_stats': {'smc_resample_keep_percent': np.zeros((ys_per_obs,)),
+    rtrn_dict = {'sampling_stats': {'smc_resample_keep_percent': np.zeros((ys_per_obs - 1,)),
                                     'low_prob_sample_rate': np.zeros((ys_per_obs,))},
                  'avg_probs': {}, 'issue_symptoms': {}, 'trace': {}, 'results': {}}
     # Initialize variables to track how well-behaved the EIG estimation computation runs
@@ -499,6 +500,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
                 end = (tr_i + 1) * TR_GAP
                 tr_eig[y_i, tr_i] = np.sum(ig_store[:end] * marg_store[:end]) / np.sum(marg_store[:end])
         # All extremely low probability sample observations will have had their marginal set to 0; count them up now
+        low_prob_cnt = np.count_nonzero(marg_store == 0)
         rtrn_dict['sampling_stats']['low_prob_sample_rate'][y_i] = np.count_nonzero(marg_store == 0) / n
 
         # If this is the final partial output cycle there's no need to resample
@@ -732,14 +734,6 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
 
         # Now we can estimate EIG(d) and add it to the list
         start_time = t.time()
-        # TODO: Split into two methods, one normal and one using sequential inference. Currently the method is getting
-        #       too complex when they're put together
-        #eig, mig = eig_importance_sampled(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely,
-        #                                  ys_per_obs=ys_in_exp, prior_handle=prior_handle, ltnt_info=ltnt_info,
-        #                                  raw_eig_norming=False)
-        #eig, mig = eig_joint_likelihood_sampled(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely, ys_in_exp,
-        #eig, mig = eig_smc_joint_likelihood(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely, ys_in_exp,
-        #                                    p_i_stabilization=False, p_y_stabilization=True)
         results = eig_smc_refined(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely, ys_in_exp,
                                   True, False, True)
         eig = results['results']['eig']
@@ -747,9 +741,40 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
         eig_pairs.append([d, eig, mig])
         print(f"Exp {i}: {eig} nats")
         print(f"EIG estimation time: {t.time() - start_time} seconds")
+
+        tr_ig = results['trace'].pop('ig')
+        tr_eig = results['trace'].pop('eig')
+        results.pop('trace')
+        with open(f"exp_{i}_rslts.json", 'w') as f:
+            json.dump(results, f, cls=NumpyEncoder)
+
+        # Generate some graphs of the trace curves
+        f1, p1 = plt.subplots()
+        for tr_i in range(tr_ig.shape[0]):
+            for tr_j in range(tr_ig.shape[1]):
+                p1.plot(range(tr_ig.shape[2]), tr_ig[tr_i, tr_j])
+        p1.set_title(f"exp_{i}_ig")
+        f2, p2 = plt.subplots()
+        for tr_i in range(tr_eig.shape[0]):
+            p2.plot(range(tr_eig.shape[1]), tr_eig[tr_i], label=tr_i)
+        p2.legend(loc='lower right')
+        p2.set_title(f"exp_{i}_eig")
+
+        f1.savefig(f"exp_{i}_ig_trace.png")
+        f2.savefig(f"exp_{i}_eig_trace.png")
+        plt.close(f1)
+        plt.close(f2)
+
         # Track which is the best experiment from an expected information gain perspective
         if i_max is None or eig > eig_pairs[i_max][1]:
             i_max = i
 
     # Return either just the best design found or a full dataframe reporting the designs and EIGs
     return eig_pairs[i_max] if return_best_only else pd.DataFrame(eig_pairs, columns=['design', 'eig', 'mig'])
+
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)

@@ -70,16 +70,16 @@ def htol_demo():
     ### 3. Determine the best experiment to conduct                      ###
     ########################################################################
     exp_sampler = stratcona.assistants.iterator.iter_sampler([
-        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 5}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10},
+        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10}])#, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10},
         #{'vdd': 1.10, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000},
         #{'vdd': 1.20, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.25, 'temp': htol_temp, 'time': 1000},
         #{'vdd': 1.15, 'temp': htol_temp - 50, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp - 25, 'time': 1000},
         #{'vdd': 1.15, 'temp': htol_temp + 0, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp + 25, 'time': 1000},
-        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 15}])
+        #{'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 15}])
 
     start_time = t.time()
-    tm.determine_best_test(exp_sampler, (-0.2, 1.2), num_tests_to_eval=3,
-                           num_obs_samples_per_test=1000, num_ltnt_samples_per_test=1000)
+    tm.determine_best_test(exp_sampler, (-0.2, 1.2), num_tests_to_eval=1,
+                           num_obs_samples_per_test=500, num_ltnt_samples_per_test=500)
     print(f"Test EIG estimation time: {t.time() - start_time} seconds")
 
     ########################################################################
