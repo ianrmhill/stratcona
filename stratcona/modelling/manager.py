@@ -43,6 +43,7 @@ class TestDesignManager:
         if not 'ltnt_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['ltnt_sampler'] =\
                 shorthand_compile('ltnt_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
+        # TODO: This condition is identical to the custom obs_sampler generator block, meaning that code further down will never run
         if not 'obs_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['obs_sampler'] =\
                 shorthand_compile('obs_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
@@ -66,8 +67,7 @@ class TestDesignManager:
         eigs = bed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
                           exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
                           self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
-                          self._compiled_funcs['obs_logp'],
-                          prior_handle=self._handlers['pri'], ltnt_info=self.latents_info)
+                          self._compiled_funcs['obs_logp'], ltnt_info=self.latents_info)
 
         # Optionally plot them all
         # TODO: Sort the designs for plotting somehow?!

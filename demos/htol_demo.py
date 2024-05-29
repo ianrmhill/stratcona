@@ -59,10 +59,10 @@ def htol_demo():
     tm.set_experiment_conditions({'htol': {'vdd': 1.15, 'temp': htol_temp, 'time': 1000}})
     #tm.examine('prior_predictive')
 
-    start_time = t.time()
+    #start_time = t.time()
     #estimate = tm.estimate_reliability(num_samples=3000)
     #print(f"Estimated product lifespan: {estimate} hours")
-    print(f"Lifespan prediction time: {t.time() - start_time} seconds")
+    #print(f"Lifespan prediction time: {t.time() - start_time} seconds")
 
     #plt.show()
 
@@ -79,7 +79,7 @@ def htol_demo():
 
     start_time = t.time()
     tm.determine_best_test(exp_sampler, (-0.2, 1.2), num_tests_to_eval=3,
-                           num_obs_samples_per_test=500, num_ltnt_samples_per_test=500)
+                           num_obs_samples_per_test=1000, num_ltnt_samples_per_test=1000)
     print(f"Test EIG estimation time: {t.time() - start_time} seconds")
 
     ########################################################################
