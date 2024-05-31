@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time as t
+import datetime
 import json
 import warnings
 import numpy as np
@@ -478,6 +479,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
     ### Computation time ###
     # Across each partial observation required to produce full observations
     for y_i in range(ys_per_obs):
+        print(f"Starting partial observation {y_i} at time {datetime.datetime.now()}...")
         outs = []
         to_run = partial(one_obs_process, y_i=y_i, m=m, i_s=i_s, y_s=y_s, lp_i=lp_i, lp_y=lp_y,
                          lp_i_avg=lp_i_avg, lp_y_avg=lp_y_avg, traces=compute_traces)
@@ -744,6 +746,8 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
 
         tr_ig = results['trace'].pop('ig')
         tr_eig = results['trace'].pop('eig')
+        np.save(f"exp_{i}_ig_trace.npy", tr_ig)
+        np.save(f"exp_{i}_eig_trace.npy", tr_eig)
         results.pop('trace')
         with open(f"exp_{i}_rslts.json", 'w') as f:
             json.dump(results, f, cls=NumpyEncoder)
