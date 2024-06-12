@@ -479,7 +479,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
     ### Computation time ###
     # Across each partial observation required to produce full observations
     for y_i in range(ys_per_obs):
-        print(f"Starting partial observation {y_i} at time {datetime.datetime.now()}...")
+        print(f"Starting partial observation {y_i} at {datetime.datetime.now()}...")
         outs = []
         to_run = partial(one_obs_process, y_i=y_i, m=m, i_s=i_s, y_s=y_s, lp_i=lp_i, lp_y=lp_y,
                          lp_i_avg=lp_i_avg, lp_y_avg=lp_y_avg, traces=compute_traces)
@@ -722,13 +722,25 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
     for i in range(l):
         d = exp_sampler()
         # Logic handling for tests with sample sizes larger than the size of a single observation
-        if 'samples' in d.keys():
-            samples_in_exp = d['samples']
+        if type(next(iter(d.values()))) == dict:
+            samples_specified = 'samples' in next(iter(d.values())).keys()
+            exp_sampler_format = 'per_test'
+        else:
+            samples_specified = 'samples' in d.keys()
+            exp_sampler_format = 'global'
+        if samples_specified:
+            if exp_sampler_format == 'per_test':
+                # POSSIBLE TODO: Currently all experiments in a test need to have the same number of ys_in_exp
+                samples_in_exp = next(iter(d.values()))['samples']
+                for exp in d:
+                    d[exp].pop('samples')
+            else:
+                samples_in_exp = d['samples']
+                d.pop('samples')
             if samples_in_exp % obs_len != 0:
                 raise Exception(f"Cannot use experiment measuring {samples_in_exp} devices, must be an integer multiple"
                                 f"of the model observation size {obs_len}.")
             ys_in_exp = int(samples_in_exp / obs_len)
-            d.pop('samples')
         else:
             ys_in_exp = 1
         # Crucial to set the experimental design within the model first, as otherwise the EIG won't correspond to 'd'

@@ -42,7 +42,7 @@ def htol_demo():
     mb.add_latent_variable('alpha', pymc.Normal, {'mu': 9.5, 'sigma': 0.5})
     mb.add_latent_variable('n', pymc.Normal, {'mu': 0.4, 'sigma': 0.1})
 
-    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=['htol'],
+    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=['lot1', 'lot2', 'lot3'],
                                 samples_per_observation={'all': num_devices})
 
     mb.add_dependent_variable('delta_vth', bti_vth_shift_empirical)
@@ -56,7 +56,9 @@ def htol_demo():
     ########################################################################
     tm = stratcona.TestDesignManager(mb)
 
-    tm.set_experiment_conditions({'htol': {'vdd': 1.15, 'temp': htol_temp, 'time': 1000}})
+    tm.set_experiment_conditions({'lot1': {'vdd': 1.05, 'temp': htol_temp, 'time': 1000},
+                                  'lot2': {'vdd': 1.15, 'temp': htol_temp, 'time': 1000},
+                                  'lot3': {'vdd': 1.15, 'temp': htol_temp - 15, 'time': 1000}})
     #tm.examine('prior_predictive')
 
     #start_time = t.time()
@@ -70,18 +72,16 @@ def htol_demo():
     ### 3. Determine the best experiment to conduct                      ###
     ########################################################################
     exp_sampler = stratcona.assistants.iterator.iter_sampler([
-        {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10}])#, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 10},
-        #{'vdd': 1.10, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp, 'time': 1000},
-        #{'vdd': 1.20, 'temp': htol_temp, 'time': 1000}, {'vdd': 1.25, 'temp': htol_temp, 'time': 1000},
-        #{'vdd': 1.15, 'temp': htol_temp - 50, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp - 25, 'time': 1000},
-        #{'vdd': 1.15, 'temp': htol_temp + 0, 'time': 1000}, {'vdd': 1.15, 'temp': htol_temp + 25, 'time': 1000},
-        #{'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 15}])
+        {'lot1': {'vdd': 1.05, 'temp': htol_temp, 'time': 1000, 'samples': 5},
+         'lot2': {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 5},
+         'lot3': {'vdd': 1.15, 'temp': htol_temp - 15, 'time': 1000, 'samples': 5}}])
 
     start_time = t.time()
     tm.determine_best_test(exp_sampler, (-0.2, 1.2), num_tests_to_eval=1,
-                           num_obs_samples_per_test=500, num_ltnt_samples_per_test=500)
+                           num_obs_samples_per_test=200, num_ltnt_samples_per_test=200)
     print(f"Test EIG estimation time: {t.time() - start_time} seconds")
 
+    return
     ########################################################################
     ### 4. Simulate the Experiment                                       ###
     ########################################################################

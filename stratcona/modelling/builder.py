@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+from graphlib import TopologicalSorter
 import numpy as np
 import pytensor as pt
 import pymc
@@ -83,11 +84,12 @@ class ModelBuilder():
         self.dependents = {}
         self.dep_args = {}
         self.predictors = {}
+        self.pred_args = {}
         self.observes = {}
         self.experiment_params = None
         self.num_experiments = None
         self.samples_per_observation = None
-        self.experiment_handle, self.priors_handle, self.observed_handles = None, None, None
+        self.experiment_handle, self.priors_handle, self.observation_handle = None, None, None
         self.experiment_map, self.priors_map, self.observed_map = None, None, None
         self.model_dims = {}
         self.max_var, self.max = None, 0
@@ -96,25 +98,23 @@ class ModelBuilder():
         self.latents[var_name] = LatentVariable(var_name, distribution, prior)
 
     def add_dependent_variable(self, var_name, compute_func):
-        # TODO: dependent variables could also be RVs, so instead of a compute function could be a distribution
-        # TODO: compute function may not require all latents and experiment params, need to filter like in Gerabaldi
         self.dependents[var_name] = compute_func
         self.dep_args[var_name] = inspect.signature(compute_func).parameters.keys()
 
     def add_lifespan_variable(self, var_name, compute_func):
         self.predictors[var_name] = compute_func
+        self.pred_args[var_name] = inspect.signature(compute_func).parameters.keys()
 
     def gen_lifespan_variable(self, var_name, fail_bounds, field_use_conds = None):
         if field_use_conds is None:
             field_use_conds = {}
         residues = {}
         for dep_var in fail_bounds:
-            def residue(time, **ltnts):
+            def residue(time, **kwargs):
                 arg_dict = {'time': time}
-                # TODO: args dict may also need other dependent variables
-                for ltnt in ltnts.keys():
-                    if ltnt in self.dep_args[dep_var]:
-                        arg_dict[ltnt] = ltnts[ltnt]
+                for arg in kwargs.keys():
+                    if arg in self.dep_args[dep_var]:
+                        arg_dict[arg] = kwargs[arg]
                 for cond in field_use_conds:
                     if cond != 'time' and cond in self.dep_args[dep_var]:
                         arg_dict[cond] = field_use_conds[cond]
@@ -123,13 +123,14 @@ class ModelBuilder():
             residues[dep_var] = residue
 
         # The overall failure time is based on the first failure to occur out of all the device instances included
-        def first_to_fail(**ltnts):
+        def first_to_fail(**kwargs):
             times = []
             for dep in residues:
-                times.append(minimize(residues[dep], ltnts, (np.float64(0.1), np.float64(1e6)), precision=1e-2, log_gold=True))
+                times.append(minimize(residues[dep], kwargs, (np.float64(0.1), np.float64(1e6)), precision=1e-2, log_gold=True))
             return min(times)
 
         self.predictors[var_name] = first_to_fail
+        self.pred_args[var_name] = list(self.latents.keys()) + list(self.dependents.keys())
 
     def set_variable_observed(self, var_name, variability):
         self.observes[var_name] = {'variability': variability}
@@ -213,20 +214,21 @@ class ModelBuilder():
                 ls[name] = pt.tensor.reshape(ltnts[name], (1, self.max))
 
             # Build out the dictionary of experimental conditions
-            experiment_params = self.experiment_handle.get_experimental_params()
+            exp_prms = self.experiment_handle.get_experimental_params()
+            # Topological sort the model variables so that some dependent variables can use others as args
+            sorted_vars = list(TopologicalSorter(self.dep_args).static_order())
             # Now set up the dependent variables, only providing the necessary inputs to each function
             deps = {}
-            for name, dep in self.dependents.items():
-                arg_dict = {arg: val for arg, val in {**ls, **experiment_params}.items() if arg in self.dep_args[name]}
-                deps[name] = dep(**arg_dict)
+            for name in sorted_vars:
+                if name in self.dependents:
+                    arg_dict = {arg: val for arg, val in {**ls, **deps, **exp_prms}.items() if arg in self.dep_args[name]}
+                    deps[name] = self.dependents[name](**arg_dict)
 
             # Next, set up the observed variables that can be measured during a test
             observes = {}
-            inf_observes = {}
             for name, obs in self.observes.items():
                 # Create the variability parameterization that can be broadcast across experiments and devices observed
                 variability = np.full((self.num_experiments, 1), obs['variability'])
-
                 # One key challenge with PyMC is that it treats observed and unobserved variables differently in the
                 # underlying PyTensor compute graph. We need the unobserved version for the BOED runner, but the
                 # observed version for standard inference. We thus define each observed variable twice, once in each
@@ -234,17 +236,14 @@ class ModelBuilder():
                 observes[name] = pymc.Normal(name, deps[name], variability,
                                              shape=(self.num_experiments, self.observation_handle.map[name]),
                                              dims=('experiments', f"num_{name}"))
-                #inf_observes[f"{name}_obs"] = pymc.Normal(name + '_obs', deps[name], variability,
-                #                                          observed=self.observation_handle.get_observed(name),
-                #                                          shape=(self.num_experiments, self.observation_handle.map[name]),
-                #                                          dims=('experiments', f"num_{name}"))
 
             # Finally are lifespan variables that are special dependent variables predicting reliability
             preds = {}
             for name, pred in self.predictors.items():
+                arg_dict = {arg: val for arg, val in {**ls, **deps}.items() if arg in self.pred_args[name]}
                 # TODO: make operating conditions a standalone object similar to experiment params or latents rather
                 #       than baked into the predictive function
-                preds[name] = pymc.Normal(name, pred(**ls), 0.2)
+                preds[name] = pymc.Normal(name, pred(**arg_dict), 0.2)
 
         return bed_mdl, list(ltnts.values()), list(observes.values()), list(preds.values())
 
@@ -265,12 +264,14 @@ class ModelBuilder():
                 ls[name] = pt.tensor.reshape(ltnts[name], (1, self.max))
 
             # Build out the dictionary of experimental conditions
-            experiment_params = self.experiment_handle.get_experimental_params()
+            exp_prms = self.experiment_handle.get_experimental_params()
+            sorted_vars = list(TopologicalSorter(self.dep_args).static_order())
             # Now set up the dependent variables, only providing the necessary inputs to each function
             deps = {}
-            for name, dep in self.dependents.items():
-                arg_dict = {arg: val for arg, val in {**ls, **experiment_params}.items() if arg in self.dep_args[name]}
-                deps[name] = dep(**arg_dict)
+            for name in sorted_vars:
+                if name in self.dependents:
+                    arg_dict = {arg: val for arg, val in {**ls, **deps, **exp_prms}.items() if arg in self.dep_args[name]}
+                    deps[name] = self.dependents[name](**arg_dict)
 
             # Next, set up the observed variables that can be measured during a test
             observes = {}
