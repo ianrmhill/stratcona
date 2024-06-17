@@ -5,7 +5,9 @@
 Stratcona optimal experimental design and inference framework.
 """
 
-__version__ = '0.0.4'
+__version__ = '0.0.5'
 
 from . import assistants, engine, modelling
 from .modelling import ModelBuilder, TestDesignManager
+
+__all__ = []

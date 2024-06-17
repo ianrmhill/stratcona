@@ -13,7 +13,6 @@ import pymc
 from matplotlib import pyplot as plt
 
 from gerabaldi.models.reports import TestSimReport
-import gracefall
 
 from stratcona.assistants.probability import shorthand_compile # noqa: ImportNotAtTopOfFile
 from stratcona.engine.inference import *
@@ -141,7 +140,7 @@ class TestDesignManager:
                     exp_samples = sampled[exp].reshape((1, 1, -1))
                     as_dataframe = TestSimReport.format_measurements(exp_samples, f"exp{exp}", timedelta(), 0)
                     report.add_measurements(as_dataframe)
-                gracefall.static.gen_stripplot_generic(report.measurements)
+                #gracefall.static.gen_stripplot_generic(report.measurements)
             case 'latents':
                 if not 'ltnt_sampler' in self._compiled_funcs.keys():
                     self._compiled_funcs['ltnt_sampler'] =\
@@ -156,7 +155,7 @@ class TestDesignManager:
                     ltnt_sampled = ltnt_sampled.flatten().reshape((1, 1, -1))
                     as_dataframe = TestSimReport.format_measurements(ltnt_sampled, ltnt.name, timedelta(), 0)
                     report.add_measurements(as_dataframe)
-                gracefall.static.gen_stripplot_generic(report.measurements)
+                #gracefall.static.gen_stripplot_generic(report.measurements)
             case 'lifespan':
                 pt.printing.pydotprint(self._compiled_funcs['life_sampler'], 'func.png')
             case _:

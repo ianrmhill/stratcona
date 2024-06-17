@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=66.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["stratcona", "stratcona.assistants", "stratcona.engine", "stratcona.modelling"]
+
+[project]
+name = "stratcona"
+dynamic = ["version", "dependencies"]
+authors = [
+  { name="Ian Hill", email="ianrmhill@gmail.com" },
+]
+description = "A framework for accelerated wear-out test design and physics-of-failure model inference."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Intended Audience :: Science/Research",
+    "Development Status :: 3 - Alpha",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "stratcona.__version__"}
+dependencies = {file = ["requirements.txt"]}
+
+[project.urls]
+"Homepage" = "https://github.com/ianrmhill/stratcona"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+ignore = ["F403", "F405", "E402"]

@@ -33,7 +33,9 @@ def inference_model(model, num_samples: int = None, num_chains: int = None, seed
 
     # Now run the MCMC sampling to get a sample trace of the posterior
     with model:
-        trace = pymc.sample(**extra_args)
+        step = pymc.NUTS()
+        step = pymc.Metropolis()
+        trace = pymc.sample(step=step, **extra_args)
     #trace = pymc.sample(model=model, **extra_args)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
     return trace
@@ -72,8 +74,12 @@ def fit_latent_params_to_posterior_samples(latents: list, prm_map: dict, idata: 
             scipy_dist = getattr(scipy.stats, dist_to_fit)
             params = scipy_dist.fit(sampled)
             new_prms = {}
-            for i, prm in enumerate(prm_map[ltnt.name]):
-                new_prms[prm] = params[i]
+            if dist_to_fit == 'gamma':
+                new_prms['alpha'] = params[0]
+                new_prms['beta'] = 1 / params[2]
+            else:
+                for i, prm in enumerate(prm_map[ltnt.name]):
+                    new_prms[prm] = params[i]
             posterior_params[ltnt.name] = new_prms
             # Fit analysis only useful for continuous variables since the categorical distribution will fit every
             # set of discrete samples perfectly

@@ -30,12 +30,12 @@ TR_GAP = 10
 
 def p_mx(x: np.ndarray, a: np.ndarray, b: np.ndarray):
     """The probability distribution function of a continuous uniform distribution on the interval [a, b]."""
-    return np.where(np.less_equal(a, x) & np.less_equal(x, b), 1 / (b - a), 0)
+    return np.average(np.where(np.less_equal(a, x) & np.less_equal(x, b), 1 / (b - a), 0))
 
 
 def entropy(x_sampler, p, m=1e5, p_args=None, in_bits=False,
             limiting_density=False, precision=CARDINALITY_MANTISSA_64BIT):
-    a, b = [0], [1]
+    a, b = [-1], [2]
     h = 0.0
     # Entropy is predicated on iterating over all possible values that theta can take, thus the overall probability
     # summed across all samples of theta is 1. In the continuous case or to compute via sampling, we need to normalize

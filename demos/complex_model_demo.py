@@ -38,9 +38,18 @@ def idfbcamp_demo():
     def hci_vth_shift_empirical(time, vdd, temp, h0, n, t_0, beta, alpha):
         return h0 * np.exp(-alpha / vdd) * (t_0 * (temp ** -beta)) * (time ** n)
 
-    # TODO: Use proper EM model
-    def em_fail_empirical(time, vdd, temp, em_c):
-        return em_c * temp * vdd * time
+
+    # Express wire current density as a function of the number of transistors and the voltage applied
+    def j_n(n_fins, vdd, v_th, v_c, i_scale):
+        if vdd > v_th:
+            return n_fins * i_scale * ((vdd - v_th) ** v_c)
+        else:
+            return vdd * 0.0 # This needs to maintain the correct dimensionality and shape
+
+    # The classic model for electromigration failure estimates, DOI: 10.1109/T-ED.1969.16754
+    # Added variance to try and characterize the PDF of failure times, not just the mean
+    def em_blacks_equation(j_n, temp, variance, area, em_e_aa):
+        return variance * (area / j_n) * np.exp(em_e_aa / (BOLTZMANN_CONST_EV * temp))
 
     mb.add_latent_variable('ba_mean', pymc.Normal, {'mu': 0.7, 'sigma': 0.1})
     mb.add_latent_variable('ba_dev', pymc.Normal, {'mu': 0, 'sigma': 0.1})
@@ -57,9 +66,10 @@ def idfbcamp_demo():
 
     mb.add_dependent_variable('bti_shift', bti_vth_shift_empirical)
     mb.add_dependent_variable('hci_shift', hci_vth_shift_empirical)
+    mb.add_dependent_variable('j_n', j_n)
+    mb.add_dependent_variable('em_mttf', em_blacks_equation)
 
     mb.set_variable_observed('deg', variability=0.1)
-    # TODO: Observed variable that is bernoulli with probability output to represent EM line failures observed
 
     # This function is the inverse of the degradation mechanism with a set failure point
     mb.gen_lifespan_variable('fail', fail_bounds={'deg': -23})

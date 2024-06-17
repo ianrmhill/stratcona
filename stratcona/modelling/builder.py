@@ -61,7 +61,7 @@ class LatentVariable():
                 raise NotImplementedError
 
     def get_dist_type(self):
-        if self.dist.rv_op.name in ['normal', 'gamma', 'halfcauchy', 'beta']:
+        if self.dist.rv_op.name in ['normal', 'truncated_normal', 'gamma', 'halfcauchy', 'beta']:
             return 'continuous'
         elif self.dist.rv_op.name in ['binomial', 'categorical', 'hypergeometric', 'discrete_uniform']:
             return 'discrete'
@@ -228,7 +228,10 @@ class ModelBuilder():
             observes = {}
             for name, obs in self.observes.items():
                 # Create the variability parameterization that can be broadcast across experiments and devices observed
-                variability = np.full((self.num_experiments, 1), obs['variability'])
+                if type(obs['variability']) == str:
+                    variability = deps[obs['variability']]
+                else:
+                    variability = np.full((self.num_experiments, 1), obs['variability'])
                 # One key challenge with PyMC is that it treats observed and unobserved variables differently in the
                 # underlying PyTensor compute graph. We need the unobserved version for the BOED runner, but the
                 # observed version for standard inference. We thus define each observed variable twice, once in each
@@ -277,7 +280,10 @@ class ModelBuilder():
             observes = {}
             for name, obs in self.observes.items():
                 # Create the variability parameterization that can be broadcast across experiments and devices observed
-                variability = np.full((self.num_experiments, 1), obs['variability'])
+                if type(obs['variability']) == str:
+                    variability = deps[obs['variability']]
+                else:
+                    variability = np.full((self.num_experiments, 1), obs['variability'])
                 observes[f"{name}_obs"] = pymc.Normal(name + '_obs', deps[name], variability,
                                                       observed=self.observation_handle.get_observed(name),
                                                       shape=(self.num_experiments, self.observation_handle.map[name]),

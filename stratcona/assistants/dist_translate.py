@@ -8,6 +8,8 @@ def pymc_to_scipy(dist_type):
     match dist_type:
         case 'normal':
             return 'norm'
+        case 'truncated_normal':
+            return 'truncnorm'
         case _:
             return dist_type
 
