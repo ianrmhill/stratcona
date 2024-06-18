@@ -236,7 +236,14 @@ class ModelBuilder():
                 # underlying PyTensor compute graph. We need the unobserved version for the BOED runner, but the
                 # observed version for standard inference. We thus define each observed variable twice, once in each
                 # form, which allows for both BOED and inference using 'different' variables that are equivalent
-                observes[name] = pymc.Normal(name, deps[name], variability,
+                means = deps[name]
+                # Potentially use subtensors for observed variables with fewer observed instances than the maximum
+                if name in self.samples_per_observation:
+                    means = means[:, :self.samples_per_observation[name]]
+                    if type(obs['variability']) == str:
+                        variability = variability[:, :self.samples_per_observation[name]]
+
+                observes[name] = pymc.Normal(name, means, variability,
                                              shape=(self.num_experiments, self.observation_handle.map[name]),
                                              dims=('experiments', f"num_{name}"))
 
