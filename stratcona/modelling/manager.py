@@ -132,20 +132,17 @@ class TestDesignManager:
                 report = TestSimReport(name='prior_predictive')
 
                 # Generate the samples
-                sampled = [self._compiled_funcs['obs_sampler']() for _ in range(num_samples)]
-                # FIXME: Currently only plots the first observed variable
-                if len(sampled[0]) == 1:
-                    sampled = np.array(sampled)
-                else:
-                    sampled = np.array([[s[0]] for s in sampled])
-                num_experiments = sampled.shape[2]
-                sampled = np.split(sampled, num_experiments, axis=2)
-                for exp in range(num_experiments):
-                    # TODO: Change gerabaldi reports to avoid having to double array wrap the sampled values
-                    exp_samples = sampled[exp].reshape((1, 1, -1))
-                    as_dataframe = TestSimReport.format_measurements(exp_samples, f"exp{exp}", timedelta(), 0)
-                    report.add_measurements(as_dataframe)
-                gracefall.static.gen_stripplot_generic(report.measurements)
+                all_samples = [self._compiled_funcs['obs_sampler']() for _ in range(num_samples)]
+                for i in range(len(all_samples[0])):
+                    sampled = np.array([[s[i]] for s in all_samples])
+                    num_experiments = sampled.shape[2]
+                    sampled = np.split(sampled, num_experiments, axis=2)
+                    for exp in range(num_experiments):
+                        # TODO: Change gerabaldi reports to avoid having to double array wrap the sampled values
+                        exp_samples = sampled[exp].reshape((1, 1, -1))
+                        as_dataframe = TestSimReport.format_measurements(exp_samples, f"p{i}_exp{exp}", timedelta(), 0)
+                        report.add_measurements(as_dataframe)
+                        gracefall.static.gen_stripplot_generic(report.measurements[report.measurements['param'] == f"p{i}_exp{exp}"])
             case 'latents':
                 if not 'ltnt_sampler' in self._compiled_funcs.keys():
                     self._compiled_funcs['ltnt_sampler'] =\
