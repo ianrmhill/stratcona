@@ -457,24 +457,38 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
     mig, mig_y = 1e5, None
     # Determine the shape of the observation space, define the variables needed for SMC resampling
     y_test = y_s()
-    ys = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
-    y_buf = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
+    #ys = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
+    #y_buf = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
+    ys = np.empty((n, ys_per_obs), dtype=np.object)
+    y_buf = np.empty((n, ys_per_obs), dtype=np.object)
+    zeros = [np.zeros((len(y_test[i]), len(y_test[i][0]))) for i in range(len(y_test))]
+    for n_i in range(n):
+        for obs in range(ys_per_obs):
+            ys[n_i, obs] = zeros.copy()
+            y_buf[n_i, obs] = zeros.copy()
+
 
     # Estimate the average magnitude model probabilities, used as constant factors to maintain numeric stability
     lp_i_avg, lp_y_avg = 0.0, 0.0
     if p_y_stabilization or p_i_stabilization:
-        p_i_avg, p_y_avg = 0.0, 0.0
+        lp_i_accum, lp_y_accum = 0.0, 0.0
         for _ in range(m):
             i = i_s()
             y = y_s()
-            p_i_avg += np.exp(lp_i(*i))
-            p_y_avg += np.exp(lp_y(*i, *y))
+            lp_i_accum += lp_i(*i)
+            lp_y_accum += lp_y(*i, *y)
+        temp_lp_i_avg = lp_i_accum / m
+        temp_lp_y_avg = lp_y_accum / m
         if p_i_stabilization:
-            lp_i_avg = np.log(p_i_avg / m)
+            lp_i_avg = temp_lp_i_avg
             rtrn_dict['avg_probs']['lp_i_avg'] = lp_i_avg
         if p_y_stabilization:
-            lp_y_avg = np.log(p_y_avg / m)
+            lp_y_avg = temp_lp_y_avg
             rtrn_dict['avg_probs']['lp_y_avg'] = lp_y_avg
+        # TODO: Add warnings and maybe errors for if the average probabilities indicate that the model is poorly built
+        if temp_lp_i_avg > 10:
+            raise Warning(f"Average latent space log probability of {temp_lp_i_avg} is extremely high...")
+
 
     ### Computation time ###
     # Across each partial observation required to produce full observations

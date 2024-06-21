@@ -28,7 +28,7 @@ def idfbcamp_demo():
 
     mb.define_experiment_params(
         ['time', 'vdd', 'temp'], simultaneous_experiments=['t1'],
-        samples_per_observation={'em_sensor': 8, 'reg_ro_freq': 3,
+        samples_per_observation={'em_sensor': 8, 'reg_ro_freq': 8,
                                  'nbti_ro_freq': 5, 'pbti_ro_freq': 5, 'phci_ro_freq': 5, 'nhci_ro_freq': 5,
                                  'nbti_vamp_out': 5, 'pbti_vamp_out': 5, 'phci_vamp_out': 5, 'nhci_vamp_out': 5})
 
@@ -71,9 +71,9 @@ def idfbcamp_demo():
     mb.add_dependent_variable('phci_shift_reg_ro', partial(phci_vth_shift_empirical, v_adjust=0.85, t_adjust=0.05))
     mb.add_dependent_variable('nhci_shift_reg_ro', partial(nhci_vth_shift_empirical, v_adjust=0.85, t_adjust=0.05))
     vtn_typ, vtp_typ = 0.315, 0.325
-    def reg_ro_vth_avg(nbti_shift_reg_ro, pbti_shift_reg_ro, phci_shift_reg_ro, nhci_shift_reg_ro):
-        return 0.5 * ((vtn_typ - pbti_shift_reg_ro - nhci_shift_reg_ro) + (vtp_typ - nbti_shift_reg_ro - phci_shift_reg_ro))
-    mb.add_dependent_variable('reg_ro_vth_avg', reg_ro_vth_avg)
+    def reg_ro_vth_avg(vth_adjust, nbti_shift_reg_ro, pbti_shift_reg_ro, phci_shift_reg_ro, nhci_shift_reg_ro):
+        return 0.5 * ((vtn_typ + vth_adjust - pbti_shift_reg_ro - nhci_shift_reg_ro) + (vtp_typ + vth_adjust - nbti_shift_reg_ro - phci_shift_reg_ro))
+    mb.add_dependent_variable('reg_ro_vth_avg', partial(reg_ro_vth_avg, vth_adjust=np.array([0, 0, 0, 0, -0.025, -0.025, -0.05, -0.05])))
     # Following the RO inverter propagation delay analysis from MIT lecture: http://web.mit.edu/6.012/www/SP07-L13.pdf
     # The approximate per-stage delay is (1/2 * Q_L) / I_D for NMOS and PMOS with slightly different I_D, take their
     # average for typical delay. I_D is based on saturation mode as transistors haven't fully turned on yet, Q_L is
@@ -91,7 +91,7 @@ def idfbcamp_demo():
         # 0.5 as each stage must toggle twice per period, once high->low, once low->high
         return 1 / (0.5 * num_stages * reg_ro_stage_delay)
     mb.add_dependent_variable('reg_ro_freq', reg_ro_freq)
-    mb.set_variable_observed('reg_ro_freq', variability=1000)
+    mb.set_variable_observed('reg_ro_freq', variability=20_000)
 
     ### ISOLATION SENSOR VTH SHIFTS ###
     mb.add_dependent_variable('nbti_shift_full', partial(nbti_vth_shift_empirical, v_adjust=1.0, t_adjust=1.0))
@@ -183,10 +183,10 @@ def idfbcamp_demo():
 
     tm = stratcona.TestDesignManager(mb)
     tm.set_experiment_conditions({'t1': {'time': 10, 'vdd': 0.85, 'temp': 350}})
-    tm.examine('prior_predictive')
+    #tm.examine('prior_predictive')
     #estimate = tm.estimate_reliability(num_samples=3000)
     #print(f"Estimated product lifespan: {estimate} hours")
-    plt.show()
+    #plt.show()
 
     exp_sampler = stratcona.assistants.iterator.iter_sampler([{'t1': {'time': 10, 'vdd': 0.85, 'temp': 350}}])
 
