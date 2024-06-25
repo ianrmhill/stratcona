@@ -73,12 +73,12 @@ def idfbcamp_demo():
     vtn_typ, vtp_typ = 0.315, 0.325
     def reg_ro_vth_avg(vth_adjust, nbti_shift_reg_ro, pbti_shift_reg_ro, phci_shift_reg_ro, nhci_shift_reg_ro):
         return 0.5 * ((vtn_typ + vth_adjust - pbti_shift_reg_ro - nhci_shift_reg_ro) + (vtp_typ + vth_adjust - nbti_shift_reg_ro - phci_shift_reg_ro))
-    mb.add_dependent_variable('reg_ro_vth_avg', partial(reg_ro_vth_avg, vth_adjust=np.array([0, 0, 0, 0, -0.025, -0.025, -0.05, -0.05])))
+    mb.add_dependent_variable('reg_ro_vth_avg', partial(reg_ro_vth_avg, vth_adjust=np.array([0, 0, 0, 0, -0.05, -0.05, -0.075, -0.075])))
     # Following the RO inverter propagation delay analysis from MIT lecture: http://web.mit.edu/6.012/www/SP07-L13.pdf
     # The approximate per-stage delay is (1/2 * Q_L) / I_D for NMOS and PMOS with slightly different I_D, take their
     # average for typical delay. I_D is based on saturation mode as transistors haven't fully turned on yet, Q_L is
     # VDD * C_L (interconnect parasitics + next stage gate capacitance)
-    vdd_meas, reg_ro_cl, k_avg = 0.8, 0.3, 13.4 # C_l in pF
+    vdd_meas, reg_ro_cl, k_avg = 0.8, 0.3, 15.4 # C_l in pF
     def reg_ro_stage_delay(reg_ro_vth_avg):
         # half_q_l = 0.5 * vdd * c_l
         # t_n = half_q_l / (k_n * ((vdd - vth_n) ** 2))

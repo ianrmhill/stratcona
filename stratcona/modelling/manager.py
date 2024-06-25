@@ -67,7 +67,7 @@ class TestDesignManager:
         eigs = bed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
                           exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
                           self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
-                          self._compiled_funcs['obs_logp'], ltnt_info=self.latents_info)
+                          self._compiled_funcs['obs_logp'])
 
         # Optionally plot them all
         # TODO: Sort the designs for plotting somehow?!
@@ -157,7 +157,7 @@ class TestDesignManager:
                     ltnt_sampled = ltnt_sampled.flatten().reshape((1, 1, -1))
                     as_dataframe = TestSimReport.format_measurements(ltnt_sampled, ltnt.name, timedelta(), 0)
                     report.add_measurements(as_dataframe)
-                #gracefall.static.gen_stripplot_generic(report.measurements)
+                gracefall.static.gen_stripplot_generic(report.measurements)
             case 'lifespan':
                 pt.printing.pydotprint(self._compiled_funcs['life_sampler'], 'func.png')
             case _:

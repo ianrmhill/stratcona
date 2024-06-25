@@ -39,7 +39,7 @@ def riddle_demo():
                                 samples_per_observation={'all': 1})
 
     mb.add_dependent_variable('scale_pos', scale_weigh)
-    mb.set_variable_observed('scale_pos', variability=0.01)
+    mb.set_variable_observed('scale_pos', variability=0.1)
 
     tm = stratcona.TestDesignManager(mb)
 
@@ -59,6 +59,10 @@ def riddle_demo():
         {'b0p': 0, 'b1p': 0, 'b2p': 0, 'b3p': 1, 'b4p': 1, 'b5p': 1, 'b6p': 2, 'b7p': 2},
         {'b0p': 0, 'b1p': 0, 'b2p': 0, 'b3p': 0, 'b4p': 1, 'b5p': 1, 'b6p': 1, 'b7p': 1}])
     tm.determine_best_test(exp_sampler, None, 4, 3, 8)
+
+    # RIG threshold to ensure that the test narrows it down to three balls is:
+    # <entropy of 1 in 8> - <entropy of 1 in 3> = 3 bits - 1.5849625 bits = 1.4150375 bits = 0.980829253 nats
+
     # EIG of one per side: 1.061278, two: 1.5, three: 1.561278, four: 1.0 (bits)
 
     ### Simulate the Experiment Step ###
@@ -66,7 +70,7 @@ def riddle_demo():
 
     ### Inference Step ###
     tm.set_experiment_conditions({'single': {'b0p': 0, 'b1p': 0, 'b2p': 0, 'b3p': 1, 'b4p': 1, 'b5p': 1, 'b6p': 2, 'b7p': 2}})
-    tm.infer_model({'single': {'scale_pos': observed_pos}})
+    #tm.infer_model({'single': {'scale_pos': observed_pos}})
 
 
 if __name__ == '__main__':

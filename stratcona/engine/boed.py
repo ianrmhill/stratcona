@@ -7,16 +7,14 @@ import json
 import warnings
 import numpy as np
 import pandas as pd
-from scipy.special import logsumexp
 
-from multiprocessing import Pool
+from multiprocess import Pool
 from functools import partial
 
 from matplotlib import pyplot as plt
 
-from stratcona.engine.inference import fit_latent_params_to_posterior_samples
 
-__all__ = ['eig_importance_sampled', 'bed_runner']
+__all__ = ['eig_smc_refined', 'bed_runner']
 
 NATS_TO_BITS = np.log2(np.e)
 # Machine precision is defaulted to 32 bits since most instruments don't have 64 bit precision and/or noise floors. Less
@@ -101,290 +99,6 @@ def information_gain(theta_sampler, p_pri, p_post, m=1e5, in_bits=False, limitin
     return h_theta - h_theta_given_y
 
 
-def weighted_sample(vals, lp_likelihoods, num_samples, ltnt_names):
-    # Normalize the probabilities then generate samples using the indices
-    lp_normed = lp_likelihoods - logsumexp(lp_likelihoods)
-    sampled_inds = np.random.choice(len(vals), p=np.exp(lp_normed), size=num_samples)
-
-    # Now with the sampled indices, construct a dictionary of sampled values for the variables
-    sampled = {ltnt: np.zeros((num_samples, vals.shape[-1])) for ltnt in ltnt_names}
-    for i, sample in enumerate(sampled_inds):
-        for j, ltnt in enumerate(ltnt_names):
-            sampled[ltnt][i] = vals[sample, j]
-    return sampled
-
-
-def eig_importance_sampled(n: int, m: int, i_s, y_s, lp_i, lp_y, ys_per_obs: int = 1,
-                           prior_handle=None, ltnt_info=None, raw_eig_norming=True):
-    """
-    Core EIG (expected information gain) computation function that produces an estimate using sampling. This sampler
-    uses importance sampling and has the benefit of being exact for finite discrete models if the samplers i_s and y_s
-    are constructed to iterate the set of possible discrete values and n and m are chosen correspondingly. This sampler
-    has the drawback of being very slow, as it does not try to take any estimation shortcuts or assume any knowledge
-    about the model structure.
-
-    Note that this function depends on the experiment design currently set for the model, thus it is crucial that this
-    is set to the intended experiment before calling this function.
-
-    Parameters
-    ----------
-    n: int
-        Number of samples of the observation space to use in building the EIG estimate.
-    m: int
-        Number of samples of the latent variable space to use per observation space sample in building the EIG estimate.
-    i_s: compiled callable
-        The prior sampling function for the model. When called should generate a sample from the latent variable space.
-    y_s: compiled callable
-        The proposal observation sampling function for the model. Must generate an observation space sample when called.
-    lp_i: compiled callable
-        The prior log probability function for the model. Takes a latent variable space sample as input to compute the
-        probability of obtaining that sample.
-    lp_y: compiled callable
-        The likelihood log probability function for the model. Takes a latent variable space sample and observation
-        space sample as input to compute the probability of seeing that observation given the latent variable values.
-
-    Returns
-    -------
-    float
-        The estimated EIG in nats.
-    """
-    # Initialize variables to track how well-behaved the EIG estimation computation runs
-    # TODO: Statistic showing how unevenly the information gain is distributed. If only a few sampled y values account
-    #       for a majority of the total EIG than there's likely something that needs changing
-    unobs_cnt, high_p_y_cnt, neg_ig, teensy_marg_cnt = 0, 0, 0.0, 0
-    # Initialize the accumulator variables that sum up the total information gain and the normalization constant
-    mig, mig_y, eig, eig_norm = 1e5, None, 0.0, 0.0
-
-    # We will use up some memory to slightly improve performance
-    i_test = i_s()
-    i_store = np.zeros((m, len(i_test), len(i_test[0])))
-    lp_cond_store = np.zeros((m,))
-    lp_pri_store = np.zeros((m,))
-
-    # Estimate the average magnitude of conditional probabilities, used as multiplying constant to maintain stability
-    p_y_avg = 0
-    for _ in range(m):
-        i = i_s()
-        y = y_s()
-        p_y_avg += np.exp(lp_y(*i, *y))
-    p_y_avg /= m
-
-    # Initial compatibility checks for sequential inference based estimation
-    seq_inf_est, orig_priors = False, None
-    if ys_per_obs > 1:
-        seq_inf_est = True
-        if prior_handle is None or ltnt_info is None:
-            raise Exception('Handle to set priors and distribution info required to leverage sequential inference estimation techniques.')
-        else:
-            orig_priors = prior_handle.get_params(for_user=True)
-
-    # Across 'n' observation space samples
-    for n_i in range(n):
-        ig_tot, p_marg, p_marg_tot, obs_y = 0.0, 0.0, 1.0, []
-        # Sequential inference estimation loop, only runs once unless multiple y samples are needed for one observation
-        int_priors = orig_priors
-        for _ in range(ys_per_obs):
-            if seq_inf_est:
-                prior_handle.set_params(int_priors)
-            y = y_s()
-            obs_y.append(y)
-
-            # Compute the information gain for the current sample
-            for m_i in range(m):
-                i = i_s()
-                i_store[m_i] = i
-
-                lp_pri = lp_i(*i)
-                lp_cond = lp_y(*i, *y)
-                # Persist the log prior for later prior entropy and normalization factor computation
-                lp_pri_store[m_i] = lp_pri
-                # Persist the log importance weighted likelihood
-                lp_cond_store[m_i] = lp_cond
-
-            # Batch convert all the stored log probabilities to probability
-            p_pri = np.exp(lp_pri_store)
-            lp_likely = lp_cond_store + lp_pri_store
-            p_likely = np.exp(lp_likely)
-
-            # Summations used to determine the marginal: p(y|d)
-            marg = np.sum(p_likely)
-            norm = np.sum(p_pri)
-            # NOTE: We do not check for norm == 0 as this indicates a problem with compatibility between i_s and lp_i
-            # that should already be validated before calling this function
-            p_marg = marg / norm
-            # If the marginal probability is extremely low this indicates that the current sample y is incredibly unlikely
-            # within the prior model
-            p_marg_tot *= p_marg if raw_eig_norming else p_marg * p_y_avg
-            # TODO: Tune this cutoff for ignoring samples from y_s
-            if p_marg < 1e-50:
-                # In this case the information gain computation will be extremely unstable, thus we note and skip this 'y'
-                unobs_cnt += 1
-                continue
-
-            # Compute the un-normalized prior entropy
-            n_h_pri = np.sum(p_pri * lp_pri_store)
-            # Compute the un-normalized posterior entropy
-            lp_post = lp_likely - np.log(p_marg)
-            p_post = p_likely / p_marg
-            n_h_post = np.sum(p_post * lp_post)
-            # Finally, compute the normalized information gain for the sampled 'y'
-            ig = (n_h_post - n_h_pri) / norm
-
-            # Check for conditions indicating that lp_y > 0 (p_y > 0) for some sampled 'i' values for the current 'y'. These
-            # should normally be compensated for via the p_marg normalization within Bayes' theorem, but since we are using
-            # sampling-based estimation it is possible to sample more high-probability region in the second loop
-            if ig < 0 or p_marg > 1:
-                high_p_y_cnt += 1
-                neg_ig += ig * p_marg
-
-            # Summation over sequential inference steps to get the total information gain of the observation
-            ig_tot += ig
-            # Inference to get new priors for the next sequential inference step
-            if seq_inf_est:
-                samples = weighted_sample(i_store, lp_cond_store, n, prior_handle.map.keys())
-                int_priors = fit_latent_params_to_posterior_samples(ltnt_info, prior_handle.map, samples)
-
-        # Now add the information gain to the experiment design optimization parameters
-        if p_marg > 1e-50:
-            if ig_tot < mig:
-                mig = ig_tot
-                mig_y = obs_y
-            eig += ig_tot * p_marg_tot
-            eig_norm += p_marg_tot
-        else:
-            teensy_marg_cnt += 1
-
-    # Reset the prior handle to avoid side effects to the model being evaluated
-    if seq_inf_est:
-        prior_handle.set_params(orig_priors)
-
-    # TODO: Check the issue tracking variables to ensure the computation was well-behaved
-    if high_p_y_cnt > 0:
-        print(f"Greater than 1 probabilities occurring in {(high_p_y_cnt / n) * 100}% of sample observations.")
-    if unobs_cnt > 0:
-        print(f"{(unobs_cnt / (n * ys_per_obs)) * 100}% of sampled 'y' values were extremely unlikely.")
-    print(f"{(teensy_marg_cnt / n) * 100}% of observations were extremely unlikely.")
-    # Normalize the estimate for EIG(d) and return it
-    return eig / eig_norm
-
-
-def eig_joint_likelihood_sampled(n: int, m: int, i_s, y_s, lp_i, lp_y,
-                                 ys_per_obs: int = 1, p_y_stabilization = True, p_i_stabilization = True):
-    # Initialize variables to track how well-behaved the EIG estimation computation runs
-    # TODO: Statistics showing how unevenly the information gain is distributed. If only a few sampled y values account
-    #       for a majority of the total EIG than there's likely something that needs changing
-    unobs_cnt, high_p_y_cnt, neg_eig, neg_ig_cnt = 0, 0, 0.0, 0
-    # Initialize the accumulator variables that sum up the total information gain and the normalization constant
-    mig, mig_y, eig, eig_norm = 1e5, None, 0.0, 0.0
-
-    # We will use up some memory to improve performance
-    lp_likely_store = np.zeros((m,))
-    lp_pri_store = np.zeros((m,))
-    lp_cond_store = np.zeros((ys_per_obs,))
-    eig_store = np.zeros((n,))
-    eig_norm_store = np.zeros((n,))
-
-    # Estimate the average magnitude model probabilities, used as multiplying constants to maintain numeric stability
-    lp_i_avg, lp_y_avg = 0.0, 0.0
-    if p_y_stabilization or p_i_stabilization:
-        p_i_avg, p_y_avg = 0.0, 0.0
-        for _ in range(m):
-            i = i_s()
-            y = y_s()
-            p_i_avg += np.exp(lp_i(*i))
-            p_y_avg += np.exp(lp_y(*i, *y))
-        if p_i_stabilization:
-            lp_i_avg = np.log(p_i_avg / m)
-        if p_y_stabilization:
-            lp_y_avg = np.log(p_y_avg / m)
-
-    # Determine the shape of the observation space
-    y_test = y_s()
-    y = np.zeros((ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
-
-    # Across 'n' observation space samples
-    for n_i in range(n):
-        for y_i in range(ys_per_obs):
-            y[y_i] = y_s()
-
-        # Compute the information gain for the current sample
-        for m_i in range(m):
-            i = i_s()
-            lp_pri = lp_i(*i) - lp_i_avg
-            # Persist the log prior for later prior entropy and normalization factor computation
-            lp_pri_store[m_i] = lp_pri
-
-            for y_i in range(ys_per_obs):
-                lp_cond_store[y_i] = lp_y(*i, *y[y_i]) - lp_y_avg
-            # Persist the log importance weighted likelihood
-            lp_likely_store[m_i] = np.sum(lp_cond_store) + lp_pri
-
-        # Batch convert all the stored log probabilities to probability
-        p_pri = np.exp(lp_pri_store)
-        p_likely = np.exp(lp_likely_store)
-
-        # Summations used to determine the marginal p(y|d)
-        marg = np.sum(p_likely)
-        norm = np.sum(p_pri)
-        p_marg = marg / norm
-        # If the marginal probability is extremely low this indicates that the current sample y is incredibly
-        # unlikely within the prior model
-        # TODO: Tune this cutoff for ignoring samples from y_s
-        if p_marg < 1e-50:
-            # In this case the information gain computation will be extremely unstable, thus note and skip this 'y'
-            unobs_cnt += 1
-            continue
-
-        # Compute the un-normalized prior entropy (but with flipped sign)
-        h_pri = np.sum(p_pri * lp_pri_store)
-        # Compute the un-normalized posterior entropy (but with flipped sign)
-        lp_post = lp_likely_store - np.log(p_marg)
-        p_post = p_likely / p_marg
-        h_post = np.sum(p_post * lp_post)
-        # Finally, compute the normalized information gain for the sampled 'y'
-        ig = (h_post - h_pri) / norm
-
-        # Check for conditions indicating that lp_y > 0 (p_y > 0) for some sampled 'i' values for the current 'y'.
-        # These should normally be compensated for via the p_marg normalization within Bayes' theorem
-        if p_marg > 1:
-            high_p_y_cnt += 1
-        if ig < 0:
-            neg_ig_cnt += 1
-            neg_eig += ig * p_marg
-
-        # Now add the information gain to the experiment design optimization parameters
-        if ig < mig:
-            mig = ig
-            mig_y = y
-        eig_store[n_i] = ig * p_marg
-        eig_norm_store[n_i] = p_marg
-
-    eig = np.sum(eig_store)
-    eig_norm = np.sum(eig_norm_store)
-
-    # Algorithm performance metrics reporting
-    if high_p_y_cnt > 0:
-        print(f"Greater than 1 probabilities occurring in {(high_p_y_cnt / n) * 100}% of sample observations.")
-    if neg_eig > 0:
-        print(f"Negative IG in {(neg_ig_cnt / n) * 100}% of sample observations: {(neg_eig / eig_norm)} nats total.")
-    if unobs_cnt > 0:
-        print(f"{(unobs_cnt / n) * 100}% of sample observations were extremely unlikely.")
-    # Underlying model BED difficulties analysis
-    eig_mean, eig_std_dev = eig_store.mean(), eig_store.std()
-    marg_mean, marg_std_dev = eig_norm_store.mean(), eig_norm_store.std()
-    marg_outliers = np.extract(eig_norm_store > marg_mean + (3 * marg_std_dev), eig_norm_store)
-    eig_outliers = np.extract(eig_store > eig_mean + (3 * eig_std_dev), eig_store)
-
-    fig, plots = plt.subplots(1, 3)
-    plots[0].plot(eig_store, color='purple')
-    plots[1].plot(eig_norm_store, color='black')
-    plots[2].plot(eig_store / eig_norm_store, color='green')
-    plt.show()
-
-    # Normalize the estimate for EIG(d) and return it
-    return eig / eig_norm, mig
-
-
 def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg, traces):
     ### Setup ###
     y = obs_n
@@ -438,7 +152,39 @@ def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg
 
 def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
                     ys_per_obs: int = 1, p_y_stabilization=True, p_i_stabilization=False,
-                    compute_traces: bool = False, resample_rng=None, multicore=True):
+                    compute_traces: bool = False, resample_rng=None, multicore=True, rig=None):
+    """
+    Core EIG (expected information gain) computation function that produces an estimate using sampling. This sampler
+    uses importance sampling and has the benefit of being exact for finite discrete models if the samplers i_s and y_s
+    are constructed to iterate the set of possible discrete values and n and m are chosen correspondingly.
+
+    Note that this function depends on the experiment design currently set for the model, thus it is crucial that this
+    is set to the intended experiment before calling this function.
+
+    Parameters
+    ----------
+    n: int
+        Number of samples of the observation space to use in building the EIG estimate.
+    m: int
+        Number of samples of the latent variable space to use per observation space sample in building the EIG estimate.
+    i_s: compiled callable
+        The prior sampling function for the model. When called should generate a sample from the latent variable space.
+    y_s: compiled callable
+        The proposal observation sampling function for the model. Must generate an observation space sample when called.
+    lp_i: compiled callable
+        The prior log probability function for the model. Takes a latent variable space sample as input to compute the
+        probability of obtaining that sample.
+    lp_y: compiled callable
+        The likelihood log probability function for the model. Takes a latent variable space sample and observation
+        space sample as input to compute the probability of seeing that observation given the latent variable values.
+
+    Returns
+    -------
+    dict
+        A collection of the trace, sampling analysis, and results figures computed
+    """
+
+    ### Setup Work ###
     # Provides the capability to test the routine through reproducible sampling
     rng = np.random.default_rng() if resample_rng is None else resample_rng
     # Initialize the return dictionary detailing all the results and metrics of the EIG computation
@@ -530,6 +276,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
                 y_buf[n_i] = ys[resampled_inds[n_i]]
             ys = y_buf
 
+    ### Results Analysis ###
     # Stability checks and output determination
     for n_i in range(n):
         if ig_store[n_i] < mig and ig_store[n_i] != 0.0:
@@ -539,9 +286,24 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
             neg_ig_cnt += 1
             neg_eig += ig_store[n_i] * marg_store[n_i]
 
-    rtrn_dict['results']['eig'] = np.sum(ig_store * marg_store) / np.sum(marg_store)
+    eig = np.sum(ig_store * marg_store) / np.sum(marg_store)
+    rtrn_dict['results']['eig'] = eig
+    rtrn_dict['results']['vig'] = np.sum((ig_store - eig) ** 2) / n
     rtrn_dict['results']['mig'] = mig
     rtrn_dict['results']['mig_y'] = mig_y
+    # Can only compute some statistics if a required information gain RIG threshold was provided
+    if rig is not None:
+        rtrn_dict['results']['rig'] = rig
+        pass_inds = ig_store >= rig
+        rtrn_dict['results']['rig_pass_prob'] = np.sum(marg_store[pass_inds]) / np.sum(marg_store)
+        rtrn_dict['results']['rig_mig_gap'] = rig - mig
+        rtrn_dict['results']['rig_eig_gap'] = rig - eig
+        fails_inds = ig_store < rig
+        if len(fails_inds) > 0:
+            eig_fails_only = np.sum(ig_store[fails_inds] * marg_store[fails_inds]) / np.sum(marg_store[fails_inds])
+            rtrn_dict['results']['rig_fails_only_eig_gap'] = rig - eig_fails_only
+            rtrn_dict['results']['rig_fails_only_vig'] = np.sum((ig_store[fails_inds] - eig_fails_only) ** 2) / len(fails_inds)
+
     rtrn_dict['issue_symptoms']['neg_ig_rate'] = neg_ig_cnt / n
     rtrn_dict['issue_symptoms']['neg_ig_tot'] = neg_eig / np.sum(marg_store)
     if compute_traces:
@@ -549,171 +311,15 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         rtrn_dict['trace']['eig'] = tr_eig
     return rtrn_dict
 
-
-def eig_smc_joint_likelihood(n: int, m: int, i_s, y_s, lp_i, lp_y,
-                             ys_per_obs: int = 1, p_y_stabilization=True, p_i_stabilization=True,
-                             resample_rng=None):
-    # Initialize the return dictionary detailing all the results and metrics of the EIG computation
-    rtrn_dict = {'avg_probs': {}, 'sampling_stats': {'smc_resample_keep_percent': [], 'low_prob_sample_rate': []},
-                 'issue_symptoms': {}, 'trace': {}, 'results': {}}
-    # Provides the capability to test the routine through reproducible sampling
-    if resample_rng is None:
-        resample_rng = np.random.default_rng()
-    # Initialize variables to track how well-behaved the EIG estimation computation runs
-    unobs_cnt, high_p_y_cnt, neg_eig, neg_ig_cnt = 0, 0, 0.0, 0
-    # Initialize the accumulator variables that sum up the total information gain and the normalization constant
-    mig, mig_y, eig, eig_norm = 1e5, None, 0.0, 0.0
-
-    # We will use up some memory to improve performance
-    lp_likely_store = np.zeros((m,))
-    lp_pri_store = np.zeros((m,))
-    lp_cond_store = np.zeros((ys_per_obs,))
-    eig_store = np.zeros((n,))
-    eig_norm_store = np.zeros((n,))
-    # Determine the shape of the observation space
-    y_test = y_s()
-    y = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
-    y_buf = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
-    p_marg = np.zeros((n,))
-
-    # Estimate the average magnitude model probabilities, used as multiplying constants to maintain numeric stability
-    lp_i_avg, lp_y_avg = 0.0, 0.0
-    if p_y_stabilization or p_i_stabilization:
-        p_i_avg, p_y_avg = 0.0, 0.0
-        for _ in range(m):
-            i = i_s()
-            y = y_s()
-            p_i_avg += np.exp(lp_i(*i))
-            p_y_avg += np.exp(lp_y(*i, *y))
-        if p_i_stabilization:
-            lp_i_avg = np.log(p_i_avg / m)
-            rtrn_dict['avg_probs']['lp_i_avg'] = lp_i_avg
-        if p_y_stabilization:
-            lp_y_avg = np.log(p_y_avg / m)
-            rtrn_dict['avg_probs']['lp_y_avg'] = lp_y_avg
-
-    # For each component of the observation (except the final one) we do an SMC resampling loop
-    for y_i in range(ys_per_obs - 1):
-        unobs_cnt = 0
-        # Across 'n' observation space samples
-        for n_i in range(n):
-            y[n_i, y_i] = y_s()
-
-            # Across 'm' latent variable space samples
-            for m_i in range(m):
-                i = i_s()
-                lp_pri = lp_i(*i) - lp_i_avg
-                # Persist the log prior for later prior entropy and normalization factor computation
-                lp_pri_store[m_i] = lp_pri
-
-                for y_j in range(y_i + 1):
-                    lp_cond_store[y_j] = lp_y(*i, *y[n_i, y_j]) - lp_y_avg
-                # Persist the log importance weighted likelihood
-                lp_likely_store[m_i] = np.sum(lp_cond_store[:y_i + 1]) + lp_pri
-
-            # Batch convert all the stored log probabilities to probability
-            p_pri = np.exp(lp_pri_store)
-            p_likely = np.exp(lp_likely_store)
-
-            # Summations used to determine the marginal p(y|d)
-            marg = np.sum(p_likely)
-            norm = np.sum(p_pri)
-            p_marg[n_i] = marg / norm
-            if p_marg[n_i] < 1e-50:
-                unobs_cnt += 1
-
-        rtrn_dict['sampling_stats']['low_prob_sample_rate'].append(unobs_cnt / n)
-
-        # SMC STEP: Now we resample the observations based on marginal likelihood
-        # Sum of all p_marg array elements must be 1 for resampling
-        resample_probs = p_marg / np.sum(p_marg)
-        # Choose samples at random but the likelihood of each sample is weighted according to their marginal likelihoods
-        resampled_inds = resample_rng.choice(n, (n,), p=resample_probs)
-        rtrn_dict['sampling_stats']['smc_resample_keep_percent'].append(len(resampled_inds.unique()) / n)
-        for n_i in range(n):
-            y_buf[n_i] = y[resampled_inds[n_i]]
-        y = y_buf
-
-    unobs_cnt = 0
-    # Now compute EIG for the final sampled observations
-    for n_i in range(n):
-        y[n_i, ys_per_obs - 1] = y_s()
-
-        # Compute the information gain for the current sample
-        for m_i in range(m):
-            i = i_s()
-            lp_pri = lp_i(*i) - lp_i_avg
-            # Persist the log prior for later prior entropy and normalization factor computation
-            lp_pri_store[m_i] = lp_pri
-
-            for y_j in range(ys_per_obs):
-                lp_cond_store[y_j] = lp_y(*i, *y[n_i, y_j]) - lp_y_avg
-            # Persist the log importance weighted likelihood
-            lp_likely_store[m_i] = np.sum(lp_cond_store) + lp_pri
-
-        # Batch convert all the stored log probabilities to probability
-        p_pri = np.exp(lp_pri_store)
-        p_likely = np.exp(lp_likely_store)
-
-        # Summations used to determine the marginal p(y|d)
-        marg = np.sum(p_likely)
-        norm = np.sum(p_pri)
-        p_marg = marg / norm
-        # If the marginal probability is extremely low this indicates that the current sample y is incredibly
-        # unlikely within the prior model
-        if p_marg < 1e-50:
-            # In this case the information gain computation will be extremely unstable, thus note and skip this 'y'
-            unobs_cnt += 1
-            continue
-
-        # Compute the un-normalized prior entropy (but with flipped sign)
-        h_pri = np.sum(p_pri * lp_pri_store)
-        # Compute the un-normalized posterior entropy (but with flipped sign)
-        lp_post = lp_likely_store - np.log(p_marg)
-        p_post = p_likely / p_marg
-        h_post = np.sum(p_post * lp_post)
-        # Finally, compute the normalized information gain for the sampled 'y'
-        ig = (h_post - h_pri) / norm
-
-        # Check for conditions indicating that lp_y > 0 (p_y > 1) for some sampled 'i' values for the current 'y'.
-        # These should normally be compensated for via the p_marg normalization within Bayes' theorem
-        if p_marg > 1:
-            high_p_y_cnt += 1
-        if ig < 0:
-            neg_ig_cnt += 1
-            neg_eig += ig * p_marg
-
-        # Now add the information gain to the experiment design optimization parameters
-        if ig < mig:
-            mig = ig
-            mig_y = y
-        eig_store[n_i] = ig * p_marg
-        eig_norm_store[n_i] = p_marg
-
-    eig = np.sum(eig_store)
-    eig_norm = np.sum(eig_norm_store)
-
-    # Underlying model BED difficulties analysis
-    rtrn_dict['issue_symptoms']['neg_ig_rate'] = neg_ig_cnt / n
-    rtrn_dict['issue_symptoms']['neg_ig_tot'] = neg_eig / eig_norm
-    # Algorithm performance metrics reporting
-    rtrn_dict['sampling_stats']['low_prob_sample_rate'].append(unobs_cnt / n)
-    #eig_mean, eig_std_dev = eig_store.mean(), eig_store.std()
-    #marg_mean, marg_std_dev = eig_norm_store.mean(), eig_norm_store.std()
-    #marg_outliers = np.extract(eig_norm_store > marg_mean + (3 * marg_std_dev), eig_norm_store)
-    #eig_outliers = np.extract(eig_store > eig_mean + (3 * eig_std_dev), eig_store)
-    # Add some per-sample data for optional plotting later
-    rtrn_dict['trace']['marg'] = eig_norm_store
-    rtrn_dict['trace']['ig'] = eig_store / eig_norm_store
-
-    # Normalize the estimate for EIG(d) and return it
-    rtrn_dict['results']['eig'] = eig / eig_norm
-    rtrn_dict['results']['mig'] = mig
-    return rtrn_dict
+# TODO: BED statistics that track how many sampled observations resulted in lifespan predictions that meet a metric.
+#       Directly compute/estimate the lifespan distribution for each and compute the metric. This will have a huge
+#       computation cost but may be incredibly valuable compared to information gain stats. This would actually be
+#       a completely different algorithm since we wouldn't need to compute information gain at all, just inference
+#       for a ton of observation space samples and then the lifespan metrics.
 
 
 def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely,
-                return_best_only: bool = False, ltnt_info=None):
+                return_best_only: bool = False):
     """
     Engine to estimate the optimal experimental design to run for a given model and limited space of possible
     experiments.
@@ -763,7 +369,7 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
         # Now we can estimate EIG(d) and add it to the list
         start_time = t.time()
         results = eig_smc_refined(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely, ys_in_exp,
-                                  True, False, True)
+                                  True, False, True, multicore=False, rig=0.980829253)
         eig = results['results']['eig']
         mig = results['results']['mig']
         eig_pairs.append([d, eig, mig])
