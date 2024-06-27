@@ -5,7 +5,8 @@ import numpy as np
 from datetime import timedelta
 
 from gerabaldi.models.reports import TestSimReport
-#import gracefall
+import gracefall
+
 
 def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | float, num_samples: int = 30000):
     """
@@ -26,7 +27,7 @@ def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | f
     exp_samples = sampled.reshape((1, 1, -1))
     as_dataframe = TestSimReport.format_measurements(exp_samples, 'exp0', timedelta(), 0)
     report.add_measurements(as_dataframe)
-    #gracefall.static.gen_stripplot_generic(report.measurements)
+    gracefall.static.gen_stripplot_generic(report.measurements)
 
     # Determine the failure time at the specified quantile (representing the effective product lifespan)
     bound = np.quantile(sampled, 1 - (interval_size / 100))

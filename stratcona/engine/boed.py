@@ -1,6 +1,7 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 import time as t
 import datetime
 import json
@@ -185,6 +186,8 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
     """
 
     ### Setup Work ###
+    if multicore:
+        pool = Pool(processes=4)
     # Provides the capability to test the routine through reproducible sampling
     rng = np.random.default_rng() if resample_rng is None else resample_rng
     # Initialize the return dictionary detailing all the results and metrics of the EIG computation
@@ -225,6 +228,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
             lp_y_accum += lp_y(*i, *y)
         temp_lp_i_avg = lp_i_accum / m
         temp_lp_y_avg = lp_y_accum / m
+        # FIXME: High variance of lp_i or lp_y can make these averages more hindrance than help, need to make smarter
         if p_i_stabilization:
             lp_i_avg = temp_lp_i_avg
             rtrn_dict['avg_probs']['lp_i_avg'] = lp_i_avg
@@ -244,7 +248,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         to_run = partial(one_obs_process, y_i=y_i, m=m, i_s=i_s, y_s=y_s, lp_i=lp_i, lp_y=lp_y,
                          lp_i_avg=lp_i_avg, lp_y_avg=lp_y_avg, traces=compute_traces)
         if multicore:
-            with Pool(processes=4) as pool:
+            with pool:
                 unique_args = zip(range(n), ys)
                 outs = pool.starmap(to_run, unique_args)
         else:
@@ -318,8 +322,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
 #       for a ton of observation space samples and then the lifespan metrics.
 
 
-def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely,
-                return_best_only: bool = False):
+def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely, rig=0.0):
     """
     Engine to estimate the optimal experimental design to run for a given model and limited space of possible
     experiments.
@@ -335,12 +338,18 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
     i_max = None
 
     # TODO: Sanity checks to avoid attempting BED with bad inputs.
-    # TODO: Sanity check that ltnt_sampler is producing samples that aren't impossible based on logp_prior
     y_test = obs_sampler()
     obs_len = y_test[0].shape[-1]
 
+    if rig != 0.0:
+        rprt_cols = ['design', 'rig_pass_prob', 'rig_eig_gap', 'vig', 'rig_mig_gap',
+                     'rig_fails_only_eig_gap', 'rig_fails_only_vig']
+    else:
+        rprt_cols = ['design', 'eig', 'vig', 'mig']
+
     for i in range(l):
         d = exp_sampler()
+
         # Logic handling for tests with sample sizes larger than the size of a single observation
         if type(next(iter(d.values()))) == dict:
             samples_specified = 'samples' in next(iter(d.values())).keys()
@@ -363,27 +372,29 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
             ys_in_exp = int(samples_in_exp / obs_len)
         else:
             ys_in_exp = 1
+
         # Crucial to set the experimental design within the model first, as otherwise the EIG won't correspond to 'd'
         exp_handle.set_experimental_params(d)
-
-        # Now we can estimate EIG(d) and add it to the list
         start_time = t.time()
         results = eig_smc_refined(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely, ys_in_exp,
-                                  True, False, True, multicore=False, rig=0.980829253)
-        eig = results['results']['eig']
-        mig = results['results']['mig']
-        eig_pairs.append([d, eig, mig])
-        print(f"Exp {i}: {eig} nats")
+                                  False, False, True, multicore=False, rig=rig)
+        # Create the row that will go in the BED report
+        rprt_row = [d]
+        for col in rprt_cols:
+            if col != 'design':
+                rprt_row.append(results['results'][col])
+        eig_pairs.append(rprt_row)
         print(f"EIG estimation time: {t.time() - start_time} seconds")
 
+        # Save the trace data and results
+        Path('bed_data').mkdir(parents=True, exist_ok=True)
         tr_ig = results['trace'].pop('ig')
         tr_eig = results['trace'].pop('eig')
-        np.save(f"exp_{i}_ig_trace.npy", tr_ig)
-        np.save(f"exp_{i}_eig_trace.npy", tr_eig)
+        np.save(f"bed_data/exp_{i}_ig_trace.npy", tr_ig)
+        np.save(f"bed_data/exp_{i}_eig_trace.npy", tr_eig)
         results.pop('trace')
-        with open(f"exp_{i}_rslts.json", 'w') as f:
+        with open(f"bed_data/exp_{i}_rslts.json", 'w') as f:
             json.dump(results, f, cls=NumpyEncoder)
-
         # Generate some graphs of the trace curves
         f1, p1 = plt.subplots()
         for tr_i in range(tr_ig.shape[0]):
@@ -396,17 +407,12 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
         p2.legend(loc='lower right')
         p2.set_title(f"exp_{i}_eig")
 
-        f1.savefig(f"exp_{i}_ig_trace.png")
-        f2.savefig(f"exp_{i}_eig_trace.png")
+        f1.savefig(f"bed_data/exp_{i}_ig_trace.png")
+        f2.savefig(f"bed_data/exp_{i}_eig_trace.png")
         plt.close(f1)
         plt.close(f2)
 
-        # Track which is the best experiment from an expected information gain perspective
-        if i_max is None or eig > eig_pairs[i_max][1]:
-            i_max = i
-
-    # Return either just the best design found or a full dataframe reporting the designs and EIGs
-    return eig_pairs[i_max] if return_best_only else pd.DataFrame(eig_pairs, columns=['design', 'eig', 'mig'])
+    return pd.DataFrame(eig_pairs, columns=rprt_cols)
 
 
 class NumpyEncoder(json.JSONEncoder):

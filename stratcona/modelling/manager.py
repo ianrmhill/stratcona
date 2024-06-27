@@ -25,6 +25,7 @@ from stratcona.modelling.builder import ModelBuilder
 class TestDesignManager:
     def __init__(self, model_builder: ModelBuilder):
         self.design_name = None
+        self.curr_rig = 0.0
         self._test_model, self.latents_info, self.observed_info, self.predictor_info = model_builder.build_model()
         self._inf_model, self.inf_latents_info, self.inf_observed_info = model_builder.build_inf_model()
 
@@ -64,20 +65,11 @@ class TestDesignManager:
                 return [centre_vals]
             self._compiled_funcs['obs_sampler'] = obs_sampler
 
-        eigs = bed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
+        rprt = bed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
                           exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
                           self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
-                          self._compiled_funcs['obs_logp'])
-
-        # Optionally plot them all
-        # TODO: Sort the designs for plotting somehow?!
-        #gracefall.static.eig_plot(eigs)
-        #plt.show()
-
-        best_test = eigs.iloc[eigs['eig'].idxmax()]
-        # Extract the best EIG test
-        # TODO: Find a way to map experiments to some identifying names so that plotting and such are less cluttered
-        print(f"Best experiment: {best_test['design']} with EIG of {best_test['eig']} nats")
+                          self._compiled_funcs['obs_logp'], rig=self.curr_rig)
+        return rprt
 
     def infer_model(self, observations):
         self._handlers['obs'].set_observed(observations)
@@ -101,11 +93,11 @@ class TestDesignManager:
     def set_observations(self, observed):
         self._handlers['obs'].set_observed(observed)
 
-    def estimate_reliability(self, num_samples=30000):
+    def estimate_reliability(self, percentile=99, num_samples=30000):
         if not 'life_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['life_sampler'] =\
                 shorthand_compile('life_sampler', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
-        bound = worst_case_quantile_credible_region(self._compiled_funcs['life_sampler'], 90, num_samples=num_samples)
+        bound = worst_case_quantile_credible_region(self._compiled_funcs['life_sampler'], percentile, num_samples=num_samples)
         return bound
 
     def examine(self, attribute: str, num_samples: int = 300):
