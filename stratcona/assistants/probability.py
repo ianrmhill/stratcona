@@ -36,6 +36,12 @@ def shorthand_compile(which_func: str, model: pymc.Model,
         outs = model.logp(vars=obs_vars)
     elif which_func == 'life_sampler':
         outs = pred_vars
+    elif which_func == 'life_func':
+        ins = ltnt_setpoint_nodes
+        outs = pred_vars
+    elif which_func == 'obs_func':
+        ins = ltnt_setpoint_nodes
+        outs = obs_vars
     else:
         raise NotImplementedError
 

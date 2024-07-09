@@ -3,6 +3,7 @@
 
 import time as t
 import numpy as np
+import pytensor
 import pytensor.tensor as pt
 import pymc
 from functools import partial
@@ -22,7 +23,7 @@ import stratcona
 
 BOLTZ_EV = 8.617e-5
 
-SHOW_PLOTS = True
+SHOW_PLOTS = False
 
 
 def electromigration_qualification():
@@ -111,8 +112,17 @@ def electromigration_qualification():
     '''
     # TODO: RIG determination in a quantitative manner
     tm.curr_rig = 3.2
-    #results = tm.determine_best_test(exp_sampler, num_tests_to_eval=3,
-    #                                 num_obs_samples_per_test=300, num_ltnt_samples_per_test=300)
+
+    # Compile the lifespan function
+    field_vdd, field_temp = 0.8, 345
+    em_n, em_eaa, em_var = pt.dvector('em_n'), pt.dvector('em_eaa'), pt.dvector('em_var')
+    fail_time = em_blacks_equation(j_n(24, field_vdd), field_temp, em_n, em_eaa) + (em_var * 0)
+    life_func = pytensor.function([em_n, em_eaa, em_var], fail_time)
+    tm.override_func('life_func', life_func)
+
+    # Run the experimental design analysis
+    results = tm.determine_best_test(exp_sampler, num_tests_to_eval=3,
+                                     num_obs_samples_per_test=300, num_ltnt_samples_per_test=300, life_target=70_000)
     ## TODO: Improve score-based selection criteria
     #def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
     #    return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)

@@ -39,7 +39,8 @@ class TestDesignManager:
         self._compiled_funcs = {}
 
     def determine_best_test(self, exp_sampler, obs_range=None,
-                            num_tests_to_eval=10, num_obs_samples_per_test=int(1e3), num_ltnt_samples_per_test=int(1e3)):
+                            num_tests_to_eval=10, num_obs_samples_per_test=int(1e3), num_ltnt_samples_per_test=int(1e3),
+                            life_target=None):
         # First compile any of the required graph computations that have not already been done
         if not 'ltnt_sampler' in self._compiled_funcs.keys():
             self._compiled_funcs['ltnt_sampler'] =\
@@ -54,6 +55,9 @@ class TestDesignManager:
         if not 'obs_logp' in self._compiled_funcs.keys():
             self._compiled_funcs['obs_logp'] =\
                 shorthand_compile('obs_logp', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
+        if not 'life_func' in self._compiled_funcs.keys():
+            self._compiled_funcs['life_func'] =\
+                shorthand_compile('life_func', self._test_model, self.latents_info, self.observed_info, self.predictor_info)
 
         # TODO: The biggest inefficiency of the sampling BED method used is that many obs samples will be completely
         #       unrealistic for the given test. Can we have the obs_sampler take the experiment as input?!?! This could
@@ -68,7 +72,8 @@ class TestDesignManager:
         rprt = bed_runner(num_tests_to_eval, num_obs_samples_per_test, num_ltnt_samples_per_test,
                           exp_sampler, self._handlers['exp'], self._compiled_funcs['ltnt_sampler'],
                           self._compiled_funcs['obs_sampler'], self._compiled_funcs['ltnt_logp'],
-                          self._compiled_funcs['obs_logp'], rig=self.curr_rig)
+                          self._compiled_funcs['obs_logp'], rig=self.curr_rig,
+                          life_func=self._compiled_funcs['life_func'], life_trgt=life_target)
         return rprt
 
     def infer_model(self, observations):
@@ -77,6 +82,12 @@ class TestDesignManager:
         posterior_prms = fit_latent_params_to_posterior_samples(self.inf_latents_info, self._handlers['pri'].map, idata)
         print(posterior_prms)
         self._handlers['pri'].set_params(posterior_prms)
+
+    def set_metric_objective(self):
+        pass
+
+    def compile_func(self, which_func):
+        self._compiled_funcs[which_func] = shorthand_compile(which_func, self._test_model, self.latents_info, self.observed_info, self.predictor_info)
 
     def override_func(self, which_func, manual_func):
         self._compiled_funcs[which_func] = manual_func

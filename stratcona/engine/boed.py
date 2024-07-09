@@ -7,6 +7,7 @@ import datetime
 import json
 import warnings
 import numpy as np
+import wquantiles
 import pandas as pd
 
 from multiprocess import Pool
@@ -100,13 +101,14 @@ def information_gain(theta_sampler, p_pri, p_post, m=1e5, in_bits=False, limitin
     return h_theta - h_theta_given_y
 
 
-def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg, traces):
+def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg, traces, f_l, metric_region_size):
     ### Setup ###
     y = obs_n
     lp_lkly_store = np.zeros((m,))
     lp_pri_store = np.zeros((m,))
+    lifespan_store = np.zeros((m,))
     lp_cond_store = np.zeros((y_i + 1,))
-    ig_final, marg = 0.0, 0.0
+    ig_final, marg, metric = 0.0, 0.0, 0.0
     tr_flag = traces and (n_i + 1) % TR_GAP == 0
     ig_traces = np.zeros((int(m / TR_GAP),)) if tr_flag else None
 
@@ -120,6 +122,9 @@ def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg
             lp_cond_store[y_j] = lp_y(*i, *y[y_j]) - lp_y_avg
         # Persist the log importance weighted likelihood
         lp_lkly_store[m_i] = np.sum(lp_cond_store[:y_i + 1]) + lp_pri
+        # Compute the product lifespan for the given latent variable space sample
+        if f_l is not None:
+            lifespan_store[m_i] = f_l(*i)[0]
 
         # Compute the IG on the final iteration and for any optionally traced samples
         end = m_i + 1
@@ -147,13 +152,22 @@ def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg
             if end == m:
                 # Separate variable required in case we hit 'continue' on the final loop iteration
                 ig_final = ig
+                # X% quantile estimation
+                if f_l is not None:
+                    # NOTE: Numpy 2.0's weighted quantile estimation only works with the inverted CDF approach, I may
+                    #       need to write a custom estimator if I want to use the continuous approaches or support 0
+                    #       prob samples: see https://arxiv.org/abs/2304.07265
+                    #metric = np.quantile(lifespan_store, 1 - (metric_region_size / 100), weights=np.exp(lp_lkly_store))
+                    # TODO: Validate this wquantiles library or write my own weighted quantile estimation algorithm(s)
+                    metric = wquantiles.quantile(lifespan_store, np.exp(lp_lkly_store), 1 - (metric_region_size / 100))
 
-    return y, ig_final, marg, ig_traces
+    return y, ig_final, marg, metric, ig_traces
 
 
 def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
                     ys_per_obs: int = 1, p_y_stabilization=True, p_i_stabilization=False,
-                    compute_traces: bool = False, resample_rng=None, multicore=True, rig=None):
+                    compute_traces: bool = False, resample_rng=None, multicore=True, rig=None,
+                    f_l=None, metric_trgt=None, credible_region_size=99):
     """
     Core EIG (expected information gain) computation function that produces an estimate using sampling. This sampler
     uses importance sampling and has the benefit of being exact for finite discrete models if the samplers i_s and y_s
@@ -202,6 +216,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         tr_eig = np.zeros((ys_per_obs, int(n / TR_GAP)))
     # Variables required for computation
     ig_store = np.zeros((n,))
+    metric_store = np.zeros((n,))
     marg_store = np.zeros((n,))
     mig, mig_y = 1e5, None
     # Determine the shape of the observation space, define the variables needed for SMC resampling
@@ -246,7 +261,8 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         print(f"Starting partial observation {y_i} at {datetime.datetime.now()}...")
         outs = []
         to_run = partial(one_obs_process, y_i=y_i, m=m, i_s=i_s, y_s=y_s, lp_i=lp_i, lp_y=lp_y,
-                         lp_i_avg=lp_i_avg, lp_y_avg=lp_y_avg, traces=compute_traces)
+                         lp_i_avg=lp_i_avg, lp_y_avg=lp_y_avg, traces=compute_traces,
+                         f_l=f_l, metric_region_size=credible_region_size)
         if multicore:
             with pool:
                 unique_args = zip(range(n), ys)
@@ -257,16 +273,16 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         ys = np.array([item[0] for item in outs])
         ig_store = np.array([item[1] for item in outs])
         marg_store = np.array([item[2] for item in outs])
+        metric_store = np.array([item[3] for item in outs])
 
         if compute_traces:
             tr_outs = outs[(TR_GAP - 1)::TR_GAP]
             for tr_i in range(int(n / TR_GAP)):
-                tr_ig[y_i, tr_i] = tr_outs[tr_i][3]
+                tr_ig[y_i, tr_i] = tr_outs[tr_i][4]
                 # EIG trace computation using all samples up to each traced point
                 end = (tr_i + 1) * TR_GAP
                 tr_eig[y_i, tr_i] = np.sum(ig_store[:end] * marg_store[:end]) / np.sum(marg_store[:end])
         # All extremely low probability sample observations will have had their marginal set to 0; count them up now
-        low_prob_cnt = np.count_nonzero(marg_store == 0)
         rtrn_dict['sampling_stats']['low_prob_sample_rate'][y_i] = np.count_nonzero(marg_store == 0) / n
 
         # If this is the final partial output cycle there's no need to resample
@@ -302,11 +318,31 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         rtrn_dict['results']['rig_pass_prob'] = np.sum(marg_store[pass_inds]) / np.sum(marg_store)
         rtrn_dict['results']['rig_mig_gap'] = rig - mig
         rtrn_dict['results']['rig_eig_gap'] = rig - eig
-        fails_inds = ig_store < rig
-        if len(fails_inds) > 0:
-            eig_fails_only = np.sum(ig_store[fails_inds] * marg_store[fails_inds]) / np.sum(marg_store[fails_inds])
+        fail_inds = ig_store < rig
+        if np.any(fail_inds == True):
+            eig_fails_only = np.sum(ig_store[fail_inds] * marg_store[fail_inds]) / np.sum(marg_store[fail_inds])
             rtrn_dict['results']['rig_fails_only_eig_gap'] = rig - eig_fails_only
-            rtrn_dict['results']['rig_fails_only_vig'] = np.sum((ig_store[fails_inds] - eig_fails_only) ** 2) / len(fails_inds)
+            rtrn_dict['results']['rig_fails_only_vig'] = np.sum((ig_store[fail_inds] - eig_fails_only) ** 2) / len(fail_inds)
+
+    # Can only compute some statistics if a lifespan function is defined
+    if f_l is not None:
+        expected_metric = np.sum(metric_store * marg_store) / np.sum(marg_store)
+        rtrn_dict['results']['e_metric'] = expected_metric
+        rtrn_dict['results']['v_metric'] = np.sum((metric_store - expected_metric) ** 2) / n
+        min_metric_ind = np.argmin(metric_store)
+        rtrn_dict['results']['m_metric'] = metric_store[min_metric_ind]
+        rtrn_dict['results']['m_metric_y'] = ys[min_metric_ind]
+        if metric_trgt is not None:
+            rtrn_dict['results']['metric_trgt'] = metric_trgt
+            pass_inds = metric_store >= metric_trgt
+            rtrn_dict['results']['metric_pass_prob'] = np.sum(marg_store[pass_inds]) / np.sum(marg_store)
+            rtrn_dict['results']['m_metric_trgt_gap'] = metric_trgt - metric_store[min_metric_ind]
+            rtrn_dict['results']['e_metric_trgt_gap'] = metric_trgt - expected_metric
+            fail_inds = metric_store < metric_trgt
+            if np.any(fail_inds == True):
+                expected_metric_fails_only = np.sum(metric_store[fail_inds] * marg_store[fail_inds]) / np.sum(marg_store[fail_inds])
+                rtrn_dict['results']['metric_fails_only_e_metric_trgt_gap'] = metric_trgt - expected_metric_fails_only
+                rtrn_dict['results']['metric_fails_only_v_metric'] = np.sum((metric_store[fail_inds] - expected_metric_fails_only) ** 2) / len(fail_inds)
 
     rtrn_dict['issue_symptoms']['neg_ig_rate'] = neg_ig_cnt / n
     rtrn_dict['issue_symptoms']['neg_ig_tot'] = neg_eig / np.sum(marg_store)
@@ -322,7 +358,8 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
 #       for a ton of observation space samples and then the lifespan metrics.
 
 
-def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely, rig=0.0):
+def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely, rig=0.0,
+               life_func=None, life_trgt=None):
     """
     Engine to estimate the optimal experimental design to run for a given model and limited space of possible
     experiments.
@@ -377,7 +414,7 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
         exp_handle.set_experimental_params(d)
         start_time = t.time()
         results = eig_smc_refined(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely, ys_in_exp,
-                                  False, False, True, multicore=False, rig=rig)
+                                  False, False, True, multicore=False, rig=rig, f_l=life_func, metric_trgt=life_trgt)
         # Create the row that will go in the BED report
         rprt_row = [d]
         for col in rprt_cols:
