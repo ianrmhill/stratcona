@@ -23,11 +23,14 @@ from stratcona.modelling.builder import ModelBuilder
 
 
 class TestDesignManager:
-    def __init__(self, model_builder: ModelBuilder):
+    def __init__(self, model_builder: ModelBuilder, sample_per_dev=True):
         self.design_name = None
         self.curr_rig = 0.0
-        self._test_model, self.latents_info, self.observed_info, self.predictor_info = model_builder.build_model()
-        self._inf_model, self.inf_latents_info, self.inf_observed_info = model_builder.build_inf_model()
+        self.lifespan_trgt, self.confidence_trgt = None, None
+        #self._test_model, self.latents_info, self.observed_info, self.predictor_info = model_builder.build_bed_model()
+        self._test_model, self.latents_info, self.observed_info, self.predictor_info = model_builder.build_model(trgt='bed', sample_per_dev=sample_per_dev)
+        #self._inf_model, self.inf_latents_info, self.inf_observed_info = model_builder.build_inf_model()
+        self._inf_model, self.inf_latents_info, self.inf_observed_info, _ = model_builder.build_model(trgt='inf', sample_per_dev=sample_per_dev)
 
         self._handlers = {}
         self._maps = {}
@@ -83,8 +86,31 @@ class TestDesignManager:
         print(posterior_prms)
         self._handlers['pri'].set_params(posterior_prms)
 
-    def set_metric_objective(self):
-        pass
+    def infer_model_custom_algo(self, observations):
+        # First compile any of the required graph computations that have not already been done
+        if not 'ltnt_sampler' in self._compiled_funcs.keys():
+            self._compiled_funcs['ltnt_sampler'] = \
+                shorthand_compile('ltnt_sampler', self._test_model, self.latents_info, self.observed_info,
+                                  self.predictor_info)
+        if not 'ltnt_logp' in self._compiled_funcs.keys():
+            self._compiled_funcs['ltnt_logp'] = \
+                shorthand_compile('ltnt_logp', self._test_model, self.latents_info, self.observed_info,
+                                  self.predictor_info)
+        if not 'obs_logp' in self._compiled_funcs.keys():
+            self._compiled_funcs['obs_logp'] = \
+                shorthand_compile('obs_logp', self._test_model, self.latents_info, self.observed_info,
+                                  self.predictor_info)
+
+        self._handlers['obs'].set_observed(observations)
+        posterior_prms = importance_sampling_inference(
+            self._handlers['obs']._d_to_t(observations), self.inf_latents_info, self._handlers['pri'].map,
+            self._compiled_funcs['ltnt_sampler'], self._compiled_funcs['ltnt_logp'], self._compiled_funcs['obs_logp'])
+        print(posterior_prms)
+        self._handlers['pri'].set_params(posterior_prms)
+
+    def set_upper_credible_target(self, lifespan, confidence):
+        self.lifespan_trgt = lifespan
+        self.confidence_trgt = confidence
 
     def compile_func(self, which_func):
         self._compiled_funcs[which_func] = shorthand_compile(which_func, self._test_model, self.latents_info, self.observed_info, self.predictor_info)

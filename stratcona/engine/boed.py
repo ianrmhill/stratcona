@@ -101,12 +101,12 @@ def information_gain(theta_sampler, p_pri, p_post, m=1e5, in_bits=False, limitin
     return h_theta - h_theta_given_y
 
 
-def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg, traces, f_l, metric_region_size):
+def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg, traces, f_l, f_l_dims , metric_region_size):
     ### Setup ###
     y = obs_n
     lp_lkly_store = np.zeros((m,))
     lp_pri_store = np.zeros((m,))
-    lifespan_store = np.zeros((m,))
+    lifespan_store = np.zeros((m, *f_l_dims))
     lp_cond_store = np.zeros((y_i + 1,))
     ig_final, marg, metric = 0.0, 0.0, 0.0
     tr_flag = traces and (n_i + 1) % TR_GAP == 0
@@ -124,7 +124,9 @@ def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg
         lp_lkly_store[m_i] = np.sum(lp_cond_store[:y_i + 1]) + lp_pri
         # Compute the product lifespan for the given latent variable space sample
         if f_l is not None:
-            lifespan_store[m_i] = f_l(*i)[0]
+            lf = f_l(*i)
+            #lifespan_store[m_i] = f_l(*i)[0]
+            lifespan_store[m_i] = lf
 
         # Compute the IG on the final iteration and for any optionally traced samples
         end = m_i + 1
@@ -159,7 +161,12 @@ def one_obs_process(n_i, obs_n, y_i, m, i_s, y_s, lp_i, lp_y, lp_i_avg, lp_y_avg
                     #       prob samples: see https://arxiv.org/abs/2304.07265
                     #metric = np.quantile(lifespan_store, 1 - (metric_region_size / 100), weights=np.exp(lp_lkly_store))
                     # TODO: Validate this wquantiles library or write my own weighted quantile estimation algorithm(s)
-                    metric = wquantiles.quantile(lifespan_store, np.exp(lp_lkly_store), 1 - (metric_region_size / 100))
+                    lkly_weights = np.exp(lp_lkly_store)
+                    lifespans = lifespan_store.copy()
+                    if len(f_l_dims) > 0:
+                        lkly_weights = np.repeat(lkly_weights, int(lifespan_store.size / lkly_weights.size))
+                        lifespans = lifespans.flatten()
+                    metric = wquantiles.quantile(lifespans, lkly_weights, 1 - (metric_region_size / 100))
 
     return y, ig_final, marg, metric, ig_traces
 
@@ -223,14 +230,18 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
     y_test = y_s()
     #ys = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
     #y_buf = np.zeros((n, ys_per_obs, len(y_test), len(y_test[0]), len(y_test[0][0])))
-    ys = np.empty((n, ys_per_obs), dtype=np.object)
-    y_buf = np.empty((n, ys_per_obs), dtype=np.object)
+    ys = np.empty((n, ys_per_obs), dtype=object)
+    y_buf = np.empty((n, ys_per_obs), dtype=object)
     zeros = [np.zeros((len(y_test[i]), len(y_test[i][0]))) for i in range(len(y_test))]
     for n_i in range(n):
         for obs in range(ys_per_obs):
             ys[n_i, obs] = zeros.copy()
             y_buf[n_i, obs] = zeros.copy()
 
+    # Determine the shape of the computed lifespans, i.e., how many product lifespans are included in each sample
+    i_test = i_s()
+    lf_test = f_l(*i_test)
+    lf_dims = lf_test.shape
 
     # Estimate the average magnitude model probabilities, used as constant factors to maintain numeric stability
     lp_i_avg, lp_y_avg = 0.0, 0.0
@@ -262,7 +273,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         outs = []
         to_run = partial(one_obs_process, y_i=y_i, m=m, i_s=i_s, y_s=y_s, lp_i=lp_i, lp_y=lp_y,
                          lp_i_avg=lp_i_avg, lp_y_avg=lp_y_avg, traces=compute_traces,
-                         f_l=f_l, metric_region_size=credible_region_size)
+                         f_l=f_l, f_l_dims=lf_dims, metric_region_size=credible_region_size)
         if multicore:
             with pool:
                 unique_args = zip(range(n), ys)
@@ -350,12 +361,6 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
         rtrn_dict['trace']['ig'] = tr_ig
         rtrn_dict['trace']['eig'] = tr_eig
     return rtrn_dict
-
-# TODO: BED statistics that track how many sampled observations resulted in lifespan predictions that meet a metric.
-#       Directly compute/estimate the lifespan distribution for each and compute the metric. This will have a huge
-#       computation cost but may be incredibly valuable compared to information gain stats. This would actually be
-#       a completely different algorithm since we wouldn't need to compute information gain at all, just inference
-#       for a ton of observation space samples and then the lifespan metrics.
 
 
 def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp_prior, logp_likely, rig=0.0,

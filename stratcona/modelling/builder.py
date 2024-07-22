@@ -93,6 +93,7 @@ class ModelBuilder():
         self.experiment_map, self.priors_map, self.observed_map = None, None, None
         self.model_dims = {}
         self.max_var, self.max = None, 0
+        self.have_built_model = False
 
     def add_latent_variable(self, var_name, distribution, prior):
         self.latents[var_name] = LatentVariable(var_name, distribution, prior)
@@ -178,122 +179,91 @@ class ModelBuilder():
             for prm in samples_per_observation:
                 self.model_dims[f"num_{prm}"] = np.arange(samples_per_observation[prm])
 
-    def build_model(self, ltnt_normalization: str = None):
-        # First check whether any model dimensions still need to be defined
-        for var in self.observes:
-            if not f"num_{var}" in self.model_dims.keys():
-                if 'all' in self.samples_per_observation.keys():
-                    self.model_dims[f"num_{var}"] = np.arange(self.samples_per_observation['all'])
-                else:
-                    raise Exception('If number of devices to observe for each observed variable is not defined, then'
-                                    'the "all" group must be.')
-            if len(self.model_dims[f"num_{var}"]) > self.max:
-                self.max_var = f"num_{var}"
-                self.max = len(self.model_dims[f"num_{var}"])
+    def build_model(self, trgt='bed', sample_per_dev=True, ltnt_normalization=None):
+        """Builds a model with amortized variability, this model type minimizes the number of latent variable draws"""
+        if not self.have_built_model:
+            # First check whether any model dimensions still need to be defined
+            for var in self.observes:
+                if not f"num_{var}" in self.model_dims.keys():
+                    if 'all' in self.samples_per_observation.keys():
+                        self.model_dims[f"num_{var}"] = np.arange(self.samples_per_observation['all'])
+                    else:
+                        raise Exception('If number of devices to observe for each observed variable is not defined, then'
+                                        'the "all" group must be.')
+                if len(self.model_dims[f"num_{var}"]) > self.max:
+                    self.max_var = f"num_{var}"
+                    self.max = len(self.model_dims[f"num_{var}"])
 
-        # We must configure the latent variable space as ensuring uncertainty is relatively balanced between the
-        # set of variables is crucial to avoiding extremely biased optimal experiment design results
-        self._normalize_latent_space(ltnt_normalization)
+            # We must configure the latent variable space as ensuring uncertainty is relatively balanced between the
+            # set of variables is crucial to avoiding extremely biased optimal experiment design results
+            self._normalize_latent_space(ltnt_normalization)
 
-        # Determine dict->tensor mappings then allocate the shared tensor variables used to swap data dynamically
-        self.priors_handle = LatentParameterHandler(self.latents)
-        self.experiment_handle = ExperimentHandler(self.model_dims['experiments'], self.experiment_params)
-        self.observation_handle = ObservationHandler(self.observes, self.samples_per_observation, self.model_dims['experiments'])
+            # Determine dict->tensor mappings then allocate the shared tensor variables used to swap data dynamically
+            self.priors_handle = LatentParameterHandler(self.latents)
+            self.experiment_handle = ExperimentHandler(self.model_dims['experiments'], self.experiment_params)
+            self.observation_handle = ObservationHandler(self.observes, self.samples_per_observation,
+                                                     self.model_dims['experiments'])
 
-        ### Build the PyMC model now that all elements have been prepped ###
+            self.have_built_model = True
+
         # TODO: Try to extend shared variable dynamic configuration to the model dimensionality, this would allow for
         #       experiments with different sample sizes of some parameters
-        with pymc.Model(coords=self.model_dims) as bed_mdl:
+        with pymc.Model(coords=self.model_dims) as mdl:
             # First set up the latent independent variables
             ltnts = {}
             ls = {}
             for name, ltnt in self.latents.items():
-                ltnts[name] = ltnt.dist(name, dims=self.max_var, **self.priors_handle.get_params(name))
-                # Reshape the variables for broadcasting, can't do using the 'shape' argument for dist as it causes
-                # certain distributions to error out when compiling
-                ls[name] = pt.tensor.reshape(ltnts[name], (1, self.max))
+                if sample_per_dev:
+                    ltnts[name] = ltnt.dist(name, dims=self.max_var, **self.priors_handle.get_params(name))
+                    ls[name] = pt.tensor.reshape(ltnts[name], (1, self.max))
+                else:
+                    ltnts[name] = ltnt.dist(name, **self.priors_handle.get_params(name))
+                    ls[name] = ltnts[name]
 
             # Build out the dictionary of experimental conditions
-            exp_prms = self.experiment_handle.get_experimental_params()
+            conds = self.experiment_handle.get_experimental_params()
+
             # Topological sort the model variables so that some dependent variables can use others as args
             sorted_vars = list(TopologicalSorter(self.dep_args).static_order())
             # Now set up the dependent variables, only providing the necessary inputs to each function
             deps = {}
             for name in sorted_vars:
                 if name in self.dependents:
-                    arg_dict = {arg: val for arg, val in {**ls, **deps, **exp_prms}.items() if arg in self.dep_args[name]}
-                    deps[name] = self.dependents[name](**arg_dict)
+                    args = {arg: val for arg, val in {**ls, **deps, **conds}.items() if arg in self.dep_args[name]}
+                    deps[name] = self.dependents[name](**args)
 
             # Next, set up the observed variables that can be measured during a test
             observes = {}
             for name, obs in self.observes.items():
+                means = deps[name]
                 # Create the variability parameterization that can be broadcast across experiments and devices observed
                 if type(obs['variability']) == str:
                     variability = deps[obs['variability']]
                 else:
                     variability = np.full((self.num_experiments, 1), obs['variability'])
-                # One key challenge with PyMC is that it treats observed and unobserved variables differently in the
-                # underlying PyTensor compute graph. We need the unobserved version for the BOED runner, but the
-                # observed version for standard inference. We thus define each observed variable twice, once in each
-                # form, which allows for both BOED and inference using 'different' variables that are equivalent
-                means = deps[name]
-                # Potentially use subtensors for observed variables with fewer observed instances than the maximum
+                # Extract subtensors for observed variables with fewer observed instances than the maximum
                 if name in self.samples_per_observation:
                     means = means[:, :self.samples_per_observation[name]]
                     if type(obs['variability']) == str:
                         variability = variability[:, :self.samples_per_observation[name]]
 
-                observes[name] = pymc.Normal(name, means, variability,
-                                             shape=(self.num_experiments, self.observation_handle.map[name]),
-                                             dims=('experiments', f"num_{name}"))
-
-            # Finally are lifespan variables that are special dependent variables predicting reliability
-            preds = {}
-            for name, pred in self.predictors.items():
-                arg_dict = {arg: val for arg, val in {**ls, **deps}.items() if arg in self.pred_args[name]}
-                # TODO: make operating conditions a standalone object similar to experiment params or latents rather
-                #       than baked into the predictive function
-                preds[name] = pymc.Normal(name, pred(**arg_dict), 0.2)
-
-        return bed_mdl, list(ltnts.values()), list(observes.values()), list(preds.values())
-
-    # We need this method currently since PyMC sampling doesn't efficiently compile the graphical models leading to
-    # extremely long runtimes when automatic predictor variables are included in the model, and PyMC observed variables
-    # aren't configured correctly for BOED.
-    def build_inf_model(self):
-        # Now the model used for inference that is simpler due to PyMC inference method inefficiencies
-        with pymc.Model(coords=self.model_dims) as inf_mdl:
-            # First set up the latent independent variables
-            ltnts = {}
-            ls = {}
-            for name, ltnt in self.latents.items():
-                # TODO: Make priors handle automatically broadcast the prior parameterization to the model dimensions
-                ltnts[name] = ltnt.dist(name, dims=self.max_var, **self.priors_handle.get_params(name))
-                # Reshape the variables for broadcasting, can't do using the 'shape' argument for dist as it causes
-                # certain distributions to error out when compiling
-                ls[name] = pt.tensor.reshape(ltnts[name], (1, self.max))
-
-            # Build out the dictionary of experimental conditions
-            exp_prms = self.experiment_handle.get_experimental_params()
-            sorted_vars = list(TopologicalSorter(self.dep_args).static_order())
-            # Now set up the dependent variables, only providing the necessary inputs to each function
-            deps = {}
-            for name in sorted_vars:
-                if name in self.dependents:
-                    arg_dict = {arg: val for arg, val in {**ls, **deps, **exp_prms}.items() if arg in self.dep_args[name]}
-                    deps[name] = self.dependents[name](**arg_dict)
-
-            # Next, set up the observed variables that can be measured during a test
-            observes = {}
-            for name, obs in self.observes.items():
-                # Create the variability parameterization that can be broadcast across experiments and devices observed
-                if type(obs['variability']) == str:
-                    variability = deps[obs['variability']]
+                if trgt == 'bed':
+                    observes[name] = pymc.Normal(name, means, variability,
+                                                 shape=(self.num_experiments, self.observation_handle.map[name]),
+                                                 dims=('experiments', f"num_{name}"))
                 else:
-                    variability = np.full((self.num_experiments, 1), obs['variability'])
-                observes[f"{name}_obs"] = pymc.Normal(name + '_obs', deps[name], variability,
+                    observes[f"{name}_obs"] = pymc.Normal(name + '_obs', means, variability,
                                                       observed=self.observation_handle.get_observed(name),
                                                       shape=(self.num_experiments, self.observation_handle.map[name]),
                                                       dims=('experiments', f"num_{name}"))
 
-        return inf_mdl, list(ltnts.values()), list(observes.values())
+            # Finally are lifespan variables that are special dependent variables predicting reliability, these are not
+            # included for PyMC models because they slow the library algorithms down a lot in certain cases despite not
+            # being used for anything
+            preds = {}
+            if trgt == 'bed':
+                for name, pred in self.predictors.items():
+                    args = {arg: val for arg, val in {**ls, **deps}.items() if arg in self.pred_args[name]}
+                    preds[name] = pymc.Normal(name, pred(**args), 0.2) # FIXME: predictor variability
+
+        return mdl, list(ltnts.values()), list(observes.values()), list(preds.values())

@@ -103,7 +103,10 @@ class LatentParameterHandler():
             if for_user:
                 d[prm] = self.tensors[ltnt].get_value()[i, :self.map[ltnt][prm]]
             else:
-                d[prm] = self.tensors[ltnt][i, :self.map[ltnt][prm]]
+                if self.map[ltnt][prm] > 1:
+                    d[prm] = self.tensors[ltnt][i, :self.map[ltnt][prm]]
+                else:
+                    d[prm] = self.tensors[ltnt][i, 0]
         return d
 
     def _d_to_t(self, ltnt, vals):

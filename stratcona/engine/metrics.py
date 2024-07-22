@@ -8,7 +8,8 @@ from gerabaldi.models.reports import TestSimReport
 import gracefall
 
 
-def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | float, num_samples: int = 30000):
+def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | float, num_samples: int = 30000,
+                                        plot_sampled=True):
     """
     Here we compute the X% quantile credible interval for lifespan. This means that in X% of possible outcomes, the
     lifespan will be longer than the computed bound. Since we have no information about the model, this computation is
@@ -23,11 +24,12 @@ def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | f
     sampled = np.array(sampled).flatten()
 
     # Optionally generate a plot of all the sampled failure times
-    report = TestSimReport(name='Sampled Failure Times')
-    exp_samples = sampled.reshape((1, 1, -1))
-    as_dataframe = TestSimReport.format_measurements(exp_samples, 'exp0', timedelta(), 0)
-    report.add_measurements(as_dataframe)
-    gracefall.static.gen_stripplot_generic(report.measurements)
+    if plot_sampled:
+        report = TestSimReport(name='Sampled Failure Times')
+        exp_samples = sampled.reshape((1, 1, -1))
+        as_dataframe = TestSimReport.format_measurements(exp_samples, 'exp0', timedelta(), 0)
+        report.add_measurements(as_dataframe)
+        gracefall.static.gen_violinplot(report.measurements)
 
     # Determine the failure time at the specified quantile (representing the effective product lifespan)
     bound = np.quantile(sampled, 1 - (interval_size / 100))

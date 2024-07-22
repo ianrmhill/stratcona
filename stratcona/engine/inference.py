@@ -6,11 +6,72 @@ import arviz
 import numpy as np
 import scipy
 
+from multiprocess import Pool
+from functools import partial
+
 from matplotlib import pyplot as plt
 
 from stratcona.assistants.dist_translate import pymc_to_scipy
 
-__all__ = ['inference_model', 'fit_latent_params_to_posterior_samples']
+__all__ = ['inference_model', 'fit_latent_params_to_posterior_samples', 'importance_sampling_inference']
+
+
+def importance_sampling_chain(y, m, i_s, lp_i, lp_y):
+    test_i = i_s()
+    i_store = np.empty((m, len(test_i), len(test_i[0])))
+    lp_i_store = np.zeros((m,))
+    lp_w_store = np.zeros((m,))
+
+    ### Computation ###
+    for m_i in range(m):
+        i = i_s()
+        i_store[m_i] = i
+        lp_i_store[m_i] = lp_i(*i)
+        lp_w_store[m_i] = lp_y(*i, *y) + lp_i_store[m_i]
+
+    return i_store, lp_w_store
+
+
+def importance_sampling_inference(y, latents, prm_map, i_s, lp_i, lp_y, num_samples: int = 3000, num_chains: int = 4,
+                                  multicore: bool = False, resample_rng=None):
+    ### Setup Work ###
+    if multicore:
+        pool = Pool(processes=4)
+    # Provides the capability to test the routine through reproducible sampling
+    rng = np.random.default_rng() if resample_rng is None else resample_rng
+
+    to_run = partial(importance_sampling_chain, m=num_samples, y=list(y.values()), i_s=i_s, lp_i=lp_i, lp_y=lp_y)
+
+    if multicore:
+        with pool:
+            outs = pool.map(to_run)
+    else:
+        outs = []
+        for chain in range(num_chains):
+            outs.append(to_run())
+
+    i_list = [outs[i][0] for i in range(num_chains)]
+    samples = np.concatenate(i_list)
+    w_list = [outs[i][1] for i in range(num_chains)]
+    weights = np.exp(np.concatenate(w_list))
+    # Sum of all p_marg array elements must be 1 for resampling via numpy's choice
+    weights_normed = weights / np.sum(weights)
+    n = num_samples * num_chains
+    # Compute the effective sample size as a diagnostic
+    ess = 1 / np.sum(weights_normed ** 2)
+    print(f"ESS = {ess}")
+    # Resample according to the marginal likelihood of each sample
+    resampled_inds = rng.choice(n, (n,), p=weights_normed)
+    print(f"Resample diversity = {100 * (len(np.unique(resampled_inds)) / n)}, count = {len(np.unique(resampled_inds))}")
+    test_i = i_s()
+    resamples = np.empty((n, len(test_i), len(test_i[0])))
+    for s_i in range(n):
+        resamples[s_i] = samples[resampled_inds[s_i]]
+
+    fit_samples = {}
+    for i, ltnt in enumerate(latents):
+        fit_samples[ltnt.name] = resamples[:, i]
+    return fit_latent_params_to_posterior_samples(latents, prm_map, fit_samples)
 
 
 def inference_model(model, num_samples: int = None, num_chains: int = None, seeding: tuple = None):
@@ -34,8 +95,9 @@ def inference_model(model, num_samples: int = None, num_chains: int = None, seed
     # Now run the MCMC sampling to get a sample trace of the posterior
     with model:
         step = pymc.NUTS()
-        step = pymc.Metropolis()
+        #step = pymc.Metropolis()
         trace = pymc.sample(step=step, **extra_args)
+        #trace = pymc.sample_smc()
     #trace = pymc.sample(model=model, **extra_args)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
     return trace
