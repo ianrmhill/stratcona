@@ -26,12 +26,13 @@ BOLTZ_EV = 8.617e-5
 SHOW_PLOTS = True
 
 
-def electromigration_qualification():
-    analyze_prior = False
+def electromigration_model_comparison():
+    analyze_prior = True
     run_bed_analysis = False
     simulated_data_mode = 'model'
 
-    mb = stratcona.ModelBuilder(mdl_name='Electromigration')
+    mb = stratcona.ModelBuilder(mdl_name='EMMultiSample')
+    mb2 = stratcona.ModelBuilder(mdl_name='EMParallelVariability')
 
     percent_bound, min_lifespan = 99.9, 10 * 8760 # 8760 hours per year on average
 
@@ -60,8 +61,10 @@ def electromigration_qualification():
     # The classic model for electromigration failure estimates, DOI: 10.1109/T-ED.1969.16754
     def em_blacks_equation(jn_wire, temp, em_n, em_eaa):
         return (wire_area / (jn_wire ** em_n)) * np.exp((em_eaa * 0.01) / (BOLTZ_EV * temp))
+    def em_blacks_equation_var(jn_wire, temp, em_n_var, em_eaa_var):
+        return (wire_area / (jn_wire ** em_n_var)) * np.exp((em_eaa_var * 0.01) / (BOLTZ_EV * temp))
 
-    # Add inherent variability to electromigration sensor line failure times corresponding to 7% of the average time
+    # Add some general variability to electromigration sensor line failure times corresponding to 7% of the average time
     def em_variability(em_ttf, em_var):
         return pt.abs(em_var * em_ttf)
 
@@ -79,6 +82,22 @@ def electromigration_qualification():
         samples_per_observation={'em_ttf': num_devices})
     tm = stratcona.TestDesignManager(mb)
 
+
+    mb2.add_dependent_variable('jn_wire', partial(j_n, n_fins=np.array([24])))
+    mb2.add_dependent_variable('em_ttf', em_blacks_equation)
+    mb2.add_dependent_variable('em_ttf_var', em_blacks_equation_var)
+    mb2.set_variable_observed('em_ttf', variability='em_ttf_var')
+
+    mb2.add_latent_variable('em_n', pymc.Normal, {'mu': 1.8, 'sigma': 0.3})
+    mb2.add_latent_variable('em_eaa', pymc.Normal, {'mu': 2, 'sigma': 0.3})
+    mb2.add_latent_variable('em_n_var', pymc.TruncatedNormal, {'mu': 0.05, 'sigma': 0.05, 'lower': 0.0, 'upper': 1.0})
+    mb2.add_latent_variable('em_eaa_var', pymc.TruncatedNormal, {'mu': 0.05, 'sigma': 0.05, 'lower': 0.0, 'upper': 1.0})
+
+    mb2.define_experiment_params(
+        ['vdd', 'temp'], simultaneous_experiments=['t1'],
+        samples_per_observation={'em_ttf': num_devices})
+    tm2 = stratcona.TestDesignManager(mb2)
+
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
     if analyze_prior:
         tm.set_experiment_conditions({'t1': {'vdd': 0.85, 'temp': 350}})
@@ -87,6 +106,12 @@ def electromigration_qualification():
         tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
         estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
         print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
+        tm2.set_experiment_conditions({'t1': {'vdd': 0.85, 'temp': 350}})
+        tm2.examine('prior_predictive')
+        tm2.override_func('life_sampler', tm2._compiled_funcs['obs_sampler'])
+        tm2.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
+        estimate = tm2.estimate_reliability(percent_bound, num_samples=30_000)
+        print(f"Parallel Var: Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
         if SHOW_PLOTS:
             plt.show()
 
@@ -146,4 +171,4 @@ def electromigration_qualification():
 
 
 if __name__ == '__main__':
-    electromigration_qualification()
+    electromigration_model_comparison()

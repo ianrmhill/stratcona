@@ -10,7 +10,7 @@ import numpy as np
 import wquantiles
 import pandas as pd
 
-from multiprocess import Pool
+from multiprocessing import Pool
 from functools import partial
 
 from matplotlib import pyplot as plt
@@ -210,7 +210,10 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
     if multicore:
         pool = Pool(processes=4)
     # Provides the capability to test the routine through reproducible sampling
-    rng = np.random.default_rng() if resample_rng is None else resample_rng
+    if multicore and resample_rng:
+        raise Exception('Can only set the RNG seed in single core mode')
+    elif resample_rng:
+        rng = np.random.default_rng() if resample_rng is None else resample_rng
     # Initialize the return dictionary detailing all the results and metrics of the EIG computation
     rtrn_dict = {'sampling_stats': {'smc_resample_keep_percent': np.zeros((ys_per_obs - 1,)),
                                     'low_prob_sample_rate': np.zeros((ys_per_obs,))},
@@ -283,6 +286,7 @@ def eig_smc_refined(n, m, i_s, y_s, lp_i, lp_y,
                 outs.append(to_run(n_i, ys[n_i]))
         ys = np.array([item[0] for item in outs])
         ig_store = np.array([item[1] for item in outs])
+        print(ig_store)
         marg_store = np.array([item[2] for item in outs])
         metric_store = np.array([item[3] for item in outs])
 
@@ -419,7 +423,7 @@ def bed_runner(l, n, m, exp_sampler, exp_handle, ltnt_sampler, obs_sampler, logp
         exp_handle.set_experimental_params(d)
         start_time = t.time()
         results = eig_smc_refined(n, m, ltnt_sampler, obs_sampler, logp_prior, logp_likely, ys_in_exp,
-                                  False, False, True, multicore=False, rig=rig, f_l=life_func, metric_trgt=life_trgt)
+                                  True, False, True, multicore=False, rig=rig, f_l=life_func, metric_trgt=life_trgt)
         # Create the row that will go in the BED report
         rprt_row = [d]
         for col in rprt_cols:

@@ -29,6 +29,7 @@ SHOW_PLOTS = True
 def electromigration_qualification():
     analyze_prior = False
     run_bed_analysis = True
+    run_inference = False
     simulated_data_mode = 'model'
 
     mb = stratcona.ModelBuilder(mdl_name='Electromigration')
@@ -79,6 +80,7 @@ def electromigration_qualification():
         ['vdd', 'temp'], simultaneous_experiments=['t1'],
         samples_per_observation={'em_ttf': num_devices})
     tm = stratcona.TestDesignManager(mb, sample_per_dev=False)
+    tm_marg_sample = stratcona.TestDesignManager(mb, sample_per_dev=True)
 
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
     if analyze_prior:
@@ -96,7 +98,7 @@ def electromigration_qualification():
     To determine the bounds of the possible test design space, need to decide on what costs are acceptable. We'll say
     that the reliability team has been given an allocation of 5 chips to use for this qualification testing.
     
-    TODO: Will add time constraints later once I figure out BED and inference on censored data.
+    TODO: May add time constraints later once I figure out BED and inference on censored data.
     
     The maximum and minimum voltages and temperatures that can be used are [0.7, 0.95] and [300, 400] respectively.
     '''
@@ -127,9 +129,13 @@ def electromigration_qualification():
         tm.override_func('life_func', life_func)
         tm.set_upper_credible_target(10 * 8760, 99.9)
 
+        tm_marg_sample.compile_func('obs_sampler')
+        #tm_marg_sample.examine('prior_predictive')
+        #plt.show()
+        #tm.override_func('obs_sampler', tm_marg_sample._compiled_funcs['obs_sampler'])
         # Run the experimental design analysis
         results = tm.determine_best_test(exp_sampler, num_tests_to_eval=3,
-                                         num_obs_samples_per_test=300, num_ltnt_samples_per_test=300)
+                                         num_obs_samples_per_test=400, num_ltnt_samples_per_test=400)
 
         ## TODO: Improve score-based selection criteria
         def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
@@ -212,11 +218,12 @@ def electromigration_qualification():
     Update our model based on the emulated test data. First need to extract the failure times from the measurements of
     fail states.
     '''
-    tm.set_experiment_conditions({'t1': {'vdd': selected_test['t1']['vdd'], 'temp': selected_test['t1']['temp']}})
-    observed = {'t1': {'em_ttf': np.array(fails)}}
-    print(tm.get_priors(for_user=True))
-    tm.infer_model(observed)
-    #tm.infer_model_custom_algo(observed)
+    if run_inference:
+        tm.set_experiment_conditions({'t1': {'vdd': selected_test['t1']['vdd'], 'temp': selected_test['t1']['temp']}})
+        observed = {'t1': {'em_ttf': np.array(fails)}}
+        print(tm.get_priors(for_user=True))
+        tm.infer_model(observed)
+        #tm.infer_model_custom_algo(observed)
 
     '''
     ===== 7) Prediction and confidence evaluation =====
