@@ -25,7 +25,7 @@ CARDINALITY_MANTISSA_64BIT = 2 ** 53
 # Marginal probability below which a sample observed 'y' will be excluded from EIG computation
 LOW_PROB_CUTOFF = 1e-50
 # Gap between trace samples to reduce memory and performance impact
-TR_GAP = 10
+TR_GAP = 20
 
 
 def p_mx(x: np.ndarray, a: np.ndarray, b: np.ndarray):

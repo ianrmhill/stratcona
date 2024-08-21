@@ -3,9 +3,16 @@
 
 import time as t
 import numpy as np
-import pytensor
-import pytensor.tensor as pt
-import pymc
+
+import jax
+import jax.numpy as jnp
+import jax.random as rand
+
+import numpyro as npyro
+import numpyro.distributions as dist
+from numpyro.handlers import seed, trace
+from numpyro.infer import NUTS, MCMC
+
 from functools import partial
 from itertools import product
 
@@ -20,6 +27,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from matplotlib import pyplot as plt
 
 import stratcona
+from stratcona.engine.metrics import worst_case_quantile_credible_region
+
 
 BOLTZ_EV = 8.617e-5
 
@@ -28,12 +37,12 @@ SHOW_PLOTS = True
 
 def electromigration_qualification():
     analyze_prior = False
-    run_bed_analysis = True
-    run_inference = False
+    run_bed_analysis = False
+    run_inference = True
     run_posterior_analysis = False
     simulated_data_mode = 'model'
 
-    mb = stratcona.ModelBuilder(mdl_name='Electromigration')
+    #mb = stratcona.ModelBuilder(mdl_name='Electromigration')
 
     '''
     ===== 1) Determine long-term reliability requirements =====
@@ -53,43 +62,48 @@ def electromigration_qualification():
     (e.g., threshold voltage) and so are treated as fixed parameters, only the electromigration specific parameters form
     the latent variable space we infer.
     '''
-    num_devices = 5
     vth_typ, i_base, wire_area = 0.320, 0.8, 1.024 * 1000 * 1000 # Wire area is in nm^2
 
     # Express wire current density as a function of the number of transistors and the voltage applied
     def j_n(n_fins, vdd):
-        return pt.where(pt.gt(vdd, vth_typ), n_fins * i_base * ((vdd - vth_typ) ** 2), 0.0)
+        return jnp.where(jnp.greater(vdd, vth_typ), n_fins * i_base * ((vdd - vth_typ) ** 2), 0.0)
 
     # The classic model for electromigration failure estimates, DOI: 10.1109/T-ED.1969.16754
     def em_blacks_equation(jn_wire, temp, em_n, em_eaa):
-        return (wire_area / (jn_wire ** em_n)) * np.exp((em_eaa * 0.01) / (BOLTZ_EV * temp))
+        return (wire_area / (jn_wire ** em_n)) * jnp.exp((em_eaa * 0.01) / (BOLTZ_EV * temp))
 
     # Add inherent variability to electromigration sensor line failure times corresponding to 7% of the average time
     def em_variability(em_ttf, em_var):
-        return pt.abs(em_var * em_ttf)
+        return jnp.abs(em_var * em_ttf)
 
     # Now correspond the degradation mechanisms to the output values
-    mb.add_dependent_variable('jn_wire', partial(j_n, n_fins=np.array([24])))
-    mb.add_dependent_variable('em_ttf', em_blacks_equation)
-    mb.add_dependent_variable('em_variability', partial(em_variability, em_var=np.array([0.07])))
-    mb.set_variable_observed('em_ttf', variability='em_variability')
+    priors = {'n': {'mu': 1.8, 'sigma': 0.3}, 'eaa': {'mu': 2, 'sigma': 0.3}}
+    conds = {'vdd': 0.95, 'temp': 350}
+    cfg = {'n_fins': jnp.array([24]), 'em_var_percent': 0.03}
+    dims = {'dev': 5}
 
-    mb.add_latent_variable('em_n', pymc.Normal, {'mu': 1.8, 'sigma': 0.3})
-    mb.add_latent_variable('em_eaa', pymc.Normal, {'mu': 2, 'sigma': 0.3})
+    def em_mdl(conds, priors, cfg, dims, obs=None):
+        jn_wire = npyro.deterministic('jn_wire', j_n(n_fins=cfg['n_fins'], vdd=conds['vdd']))
 
-    mb.define_experiment_params(
-        ['vdd', 'temp'], simultaneous_experiments=['t1'],
-        samples_per_observation={'em_ttf': num_devices})
-    tm = stratcona.TestDesignManager(mb, sample_per_dev=False)
-    tm_marg_sample = stratcona.TestDesignManager(mb, sample_per_dev=True)
+        n = npyro.sample('em_n', dist.Normal(priors['n']['mu'], priors['n']['sigma']))
+        eaa = npyro.sample('em_eaa', dist.Normal(priors['eaa']['mu'], priors['eaa']['mu']))
+        base_ttf = npyro.deterministic('base_ttf', em_blacks_equation(jn_wire, conds['temp'], n, eaa))
+        meas_var = npyro.deterministic('em_var', em_variability(base_ttf, cfg['em_var_percent']))
+
+        with npyro.plate('dev', dims['dev']):
+            npyro.sample('em_ttf', dist.Normal(base_ttf, meas_var), obs=obs)
 
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
     if analyze_prior:
-        tm.set_experiment_conditions({'t1': {'vdd': 0.85, 'temp': 350}})
-        tm.examine('prior_predictive')
-        tm.override_func('life_sampler', tm._compiled_funcs['obs_sampler'])
-        tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
-        estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
+        rng_key = rand.key(89)
+        em_mdl_s = seed(em_mdl, rng_key)
+
+        def sampler():
+            tr = trace(em_mdl_s).get_trace(conds, priors, cfg, dims)
+            return tr['em_ttf']['value']
+
+        #samples = jax.vmap(sampler, axis_size=30_000)(rand.split(rng_key, 30_000))
+        estimate = worst_case_quantile_credible_region(sampler, 99, 30_000)
         print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
         if SHOW_PLOTS:
             plt.show()
@@ -117,36 +131,37 @@ def electromigration_qualification():
     
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
-    if run_bed_analysis:
-        tm.curr_rig = 3.2
+    #if run_bed_analysis:
+    #    tm.curr_rig = 3.2
 
-        # Compile the lifespan function
-        field_vdd, field_temp = 0.8, 345
-        #em_n, em_eaa = pt.dvector('em_n'), pt.dvector('em_eaa')
-        em_n, em_eaa = pt.dscalar('em_n'), pt.dscalar('em_eaa')
-        fail_time = em_blacks_equation(j_n(24, field_vdd), field_temp, em_n, em_eaa)
-        #fail_time = pt.min(em_blacks_equation(j_n(24, field_vdd), field_temp, em_n, em_eaa))
-        life_func = pytensor.function([em_n, em_eaa], fail_time)
-        tm.override_func('life_func', life_func)
-        tm.set_upper_credible_target(10 * 8760, 99.9)
+    #    # Compile the lifespan function
+    #    field_vdd, field_temp = 0.8, 345
+    #    #em_n, em_eaa = pt.dvector('em_n'), pt.dvector('em_eaa')
+    #    em_n, em_eaa = pt.dscalar('em_n'), pt.dscalar('em_eaa')
+    #    fail_time = em_blacks_equation(j_n(24, field_vdd), field_temp, em_n, em_eaa)
+    #    #fail_time = pt.min(em_blacks_equation(j_n(24, field_vdd), field_temp, em_n, em_eaa))
+    #    life_func = pytensor.function([em_n, em_eaa], fail_time)
+    #    tm.override_func('life_func', life_func)
+    #    tm.set_upper_credible_target(10 * 8760, 99.9)
 
-        tm_marg_sample.compile_func('obs_sampler')
-        #tm_marg_sample.examine('prior_predictive')
-        #plt.show()
-        #tm.override_func('obs_sampler', tm_marg_sample._compiled_funcs['obs_sampler'])
-        # Run the experimental design analysis
-        results = tm.determine_best_test(exp_sampler, num_tests_to_eval=15,
-                                         num_obs_samples_per_test=3000, num_ltnt_samples_per_test=3000,
-                                         life_target=min_lifespan)
+    #    tm_marg_sample.compile_func('obs_sampler')
+    #    #tm_marg_sample.examine('prior_predictive')
+    #    #plt.show()
+    #    #tm.override_func('obs_sampler', tm_marg_sample._compiled_funcs['obs_sampler'])
+    #    # Run the experimental design analysis
+    #    results = tm.determine_best_test(exp_sampler, num_tests_to_eval=15,
+    #                                     num_obs_samples_per_test=3000, num_ltnt_samples_per_test=3000,
+    #                                     life_target=min_lifespan)
 
-        ## TODO: Improve score-based selection criteria
-        def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
-            return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)
-        results['final_score'] = bed_score(results['rig_pass_prob'], results['rig_fails_only_eig_gap'])
-        selected_test = results.iloc[results['final_score'].idxmax()]['design']
-    else:
-        selected_test = {'t1': {'vdd': 0.90, 'temp': 375}}
+    #    ## TODO: Improve score-based selection criteria
+    #    def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
+    #        return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)
+    #    results['final_score'] = bed_score(results['rig_pass_prob'], results['rig_fails_only_eig_gap'])
+    #    selected_test = results.iloc[results['final_score'].idxmax()]['design']
+    #else:
+    #    selected_test = {'t1': {'vdd': 0.90, 'temp': 375}}
 
+    selected_test = {'t1': {'vdd': 0.90, 'temp': 375}}
     print(selected_test)
 
     '''
@@ -155,6 +170,8 @@ def electromigration_qualification():
     temporal models, thus our electromigration failures are determined in an entirely different manner than using a
     similar equation to the inference model.
     '''
+    sim_conds = {'vdd': selected_test['t1']['vdd'], 'temp': selected_test['t1']['temp']}
+
     if simulated_data_mode == 'gerabaldi':
         em_meas = MeasSpec({'interconnect_failure': 5}, {}, 'Bed Height Sampling')
         selected_strs = StrsSpec({'vdd': selected_test['t1']['vdd'], 'temp': selected_test['t1']['temp']}, 1000, 'EM Stress')
@@ -199,16 +216,10 @@ def electromigration_qualification():
     elif simulated_data_mode == 'model':
         # Generate the simulated data points using the same model type as the inference model to allow for validation,
         # since the target posterior is known in this case
-        sim_vdd, sim_temp = selected_test['t1']['vdd'], selected_test['t1']['temp']
-        em_n, em_eaa = pt.dvector('em_n'), pt.dvector('em_eaa')
-        fail_time = em_blacks_equation(j_n(24, sim_vdd), sim_temp, em_n, em_eaa)
-        life_func = pytensor.function([em_n, em_eaa], fail_time)
-
-        rng = np.random.default_rng()
-        n_sampled = rng.normal(1.65, 0.05, num_devices)
-        eaa_sampled = rng.normal(2.05, 0.07, num_devices)
-        base_fails = life_func(n_sampled, eaa_sampled)
-        fails = rng.normal(base_fails, 0.05 * base_fails)
+        sim_priors = {'n': {'mu': 1.65, 'sigma': 0.02}, 'eaa': {'mu': 2.05, 'sigma': 0.02}}
+        rng_key = rand.key(155)
+        tr = trace(seed(em_mdl, rng_key)).get_trace(sim_conds, sim_priors, cfg, {'dev': 10})
+        fails = tr['em_ttf']['value']
     else:
         # Use hard coded data
         fails = [120_000, 98_000, 456_000, 400_000, 234_000]
@@ -221,28 +232,28 @@ def electromigration_qualification():
     fail states.
     '''
     if run_inference:
-        tm.set_experiment_conditions({'t1': {'vdd': selected_test['t1']['vdd'], 'temp': selected_test['t1']['temp']}})
-        observed = {'t1': {'em_ttf': np.array(fails)}}
-        print(tm.get_priors(for_user=True))
-        tm.infer_model(observed)
-        #tm.infer_model_custom_algo(observed)
+        nuts_kern = NUTS(em_mdl)
+        mcmc = MCMC(nuts_kern, num_warmup=500, num_samples=1000)
+        rng_key = rand.key(2384)
+        mcmc.run(rng_key, sim_conds, priors, cfg, {'dev': 10}, obs=fails, extra_fields=('potential_energy',))
+        mcmc.print_summary()
 
     '''
     ===== 7) Prediction and confidence evaluation =====
     Check whether we meet the long-term reliability target and with sufficient confidence.
     '''
-    if run_posterior_analysis:
-        tm.compile_func('obs_sampler')
-        tm.override_func('life_sampler', tm._compiled_funcs['obs_sampler'])
-        tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
-        estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
-        print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
-        if estimate > 10 * 8760:
-            print('Yay! Computed metric meets spec.')
-        else:
-            print('Noooo! Computed metric fails to meet spec.')
-        if SHOW_PLOTS:
-            plt.show()
+    #if run_posterior_analysis:
+    #    tm.compile_func('obs_sampler')
+    #    tm.override_func('life_sampler', tm._compiled_funcs['obs_sampler'])
+    #    tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
+    #    estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
+    #    print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
+    #    if estimate > 10 * 8760:
+    #        print('Yay! Computed metric meets spec.')
+    #    else:
+    #        print('Noooo! Computed metric fails to meet spec.')
+    #    if SHOW_PLOTS:
+    #        plt.show()
 
     '''
     ===== 8) Metrics reporting =====
