@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time as t
-import numpy as np
 import pytensor
 import pytensor.tensor as pt
 import pymc
 from functools import partial
 from itertools import product
+
+import jax.numpy as jnp
+import jax.random as rand
+import numpyro.distributions as dists
 
 import gerabaldi
 from gerabaldi.models import *
@@ -27,13 +30,13 @@ SHOW_PLOTS = True
 
 
 def electromigration_qualification():
-    analyze_prior = False
+    analyze_prior = True
     run_bed_analysis = True
     run_inference = False
     run_posterior_analysis = False
     simulated_data_mode = 'model'
 
-    mb = stratcona.ModelBuilder(mdl_name='Electromigration')
+    mb = stratcona.SPMBuilder(mdl_name='Electromigration')
 
     '''
     ===== 1) Determine long-term reliability requirements =====
@@ -54,43 +57,55 @@ def electromigration_qualification():
     the latent variable space we infer.
     '''
     num_devices = 5
-    vth_typ, i_base, wire_area = 0.320, 0.8, 1.024 * 1000 * 1000 # Wire area is in nm^2
 
     # Express wire current density as a function of the number of transistors and the voltage applied
-    def j_n(n_fins, vdd):
-        return pt.where(pt.gt(vdd, vth_typ), n_fins * i_base * ((vdd - vth_typ) ** 2), 0.0)
+    def j_n(n_fins, vdd, vth_typ, i_base):
+        return jnp.where(jnp.greater(vdd, vth_typ), n_fins * i_base * ((vdd - vth_typ) ** 2), 0.0)
 
     # The classic model for electromigration failure estimates, DOI: 10.1109/T-ED.1969.16754
-    def em_blacks_equation(jn_wire, temp, em_n, em_eaa):
-        return (wire_area / (jn_wire ** em_n)) * np.exp((em_eaa * 0.01) / (BOLTZ_EV * temp))
+    def em_blacks_equation(jn_wire, temp, em_n, em_eaa, wire_area, k):
+        return (wire_area / (jn_wire ** em_n)) * jnp.exp((em_eaa * 0.01) / (k * temp))
 
     # Add inherent variability to electromigration sensor line failure times corresponding to 7% of the average time
-    def em_variability(em_ttf, em_var):
-        return pt.abs(em_var * em_ttf)
+    def em_variability(em_blacks, em_var_percent):
+        return jnp.abs(em_var_percent * em_blacks)
 
     # Now correspond the degradation mechanisms to the output values
-    mb.add_dependent_variable('jn_wire', partial(j_n, n_fins=np.array([24])))
-    mb.add_dependent_variable('em_ttf', em_blacks_equation)
-    mb.add_dependent_variable('em_variability', partial(em_variability, em_var=np.array([0.07])))
-    mb.set_variable_observed('em_ttf', variability='em_variability')
+    mb.add_dependent('jn_wire', j_n)
+    mb.add_dependent('em_blacks', em_blacks_equation)
+    mb.add_dependent('em_variability', em_variability)
+    mb.add_measured('em_ttf', dists.Normal, {'loc': 'em_blacks', 'scale': 'em_variability'}, num_devices)
 
-    mb.add_latent_variable('em_n', pymc.Normal, {'mu': 1.8, 'sigma': 0.3})
-    mb.add_latent_variable('em_eaa', pymc.Normal, {'mu': 2, 'sigma': 0.3})
+    mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 1.8, 'scale': 0.3})
+    mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 2, 'scale': 0.3})
+    mb.add_hyperlatent('eaa_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
+    mb.add_latent('em_n', dists.Normal, {'loc': 'n_nom', 'scale': 'n_var'})
+    mb.add_latent('em_eaa', dists.Normal, {'loc': 'eaa_nom', 'scale': 'eaa_var'})
 
-    mb.define_experiment_params(
-        ['vdd', 'temp'], simultaneous_experiments=['t1'],
-        samples_per_observation={'em_ttf': num_devices})
-    tm = stratcona.TestDesignManager(mb, sample_per_dev=False)
-    tm_marg_sample = stratcona.TestDesignManager(mb, sample_per_dev=True)
+    def fail_time(em_ttf):
+        return jnp.min(em_ttf)
 
+    mb.add_predictor('chip_fail', fail_time, dists.Normal, {'loc': 'chip_fail', 'scale': 'fail_var'},
+                     pred_conds={'vdd': 0.85, 'temp': 330})
+
+    # Wire area in nm^2
+    mb.add_params(n_fins=24, vth_typ=0.32, i_base=0.8, wire_area=1.024 * 1000 * 1000, k=BOLTZ_EV,
+                  em_var_percent=0.07, fail_var=12)
+    model = mb.build_model()
+    #tm = stratcona.TestDesignManager(mb, sample_per_dev=False)
+    #tm_marg_sample = stratcona.TestDesignManager(mb, sample_per_dev=True)
+    rng_key = rand.key(50)
+    samples = model.sample_predictor_from_beliefs(rng_key, 'chip_fail', num_samples=300)
+    print('Sampled!')
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
     if analyze_prior:
-        tm.set_experiment_conditions({'t1': {'vdd': 0.85, 'temp': 350}})
-        tm.examine('prior_predictive')
-        tm.override_func('life_sampler', tm._compiled_funcs['obs_sampler'])
-        tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
-        estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
-        print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
+        #tm.set_experiment_conditions({'t1': {'vdd': 0.85, 'temp': 350}})
+        #tm.examine('prior_predictive')
+        #tm.override_func('life_sampler', tm._compiled_funcs['obs_sampler'])
+        #tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
+        #estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
+        #print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
         if SHOW_PLOTS:
             plt.show()
 

@@ -191,8 +191,3 @@ class TestDesignManager:
                 pt.printing.pydotprint(self._compiled_funcs['life_sampler'], 'func.png')
             case _:
                 raise NotImplementedError()
-
-
-class AnalysisManager:
-    def from_model_builder(self, builder: SPMBuilder):
-        self.tst_mdl, self.lf_mdl = builder.build_model()

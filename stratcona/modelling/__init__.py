@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from . import builder, variables, constructors
-from .builder import ModelBuilder
+from .builder import SPMBuilder
 from .manager import TestDesignManager
 
 __all__ = []
