@@ -101,7 +101,7 @@ def tddb_inference():
 
 
     ### Second example case study ###
-    run_e_model = True
+    run_e_model = False
     if run_e_model:
         mb = stratcona.SPMBuilder(mdl_name='E-Model')
 
@@ -113,12 +113,12 @@ def tddb_inference():
         mb.add_hyperlatent('a_0_nom', dists.Normal, {'loc': 2.2, 'scale': 1}, transform=dists.transforms.SoftplusTransform())
         a_0_var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
         mb.add_hyperlatent('a_0_var', dists.Normal, {'loc': 3, 'scale': 1.5}, transform=a_0_var_tf)
-        mb.add_latent_new('a_0', nom='a_0_nom', dev='a_0_var', chp=None, lot=None)
+        mb.add_latent('a_0', nom='a_0_nom', dev='a_0_var', chp=None, lot=None)
 
         mb.add_hyperlatent('e_aa_nom', dists.Normal, {'loc': 0.7, 'scale': 0.03})
         e_aa_var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.001)])
         mb.add_hyperlatent('e_aa_var', dists.Normal, {'loc': 2, 'scale': 1}, transform=e_aa_var_tf)
-        mb.add_latent_new('e_aa', nom='e_aa_nom', dev='e_aa_var')
+        mb.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_var')
 
         mb.add_params(k=BOLTZ_EV, fit_var=2)
 
@@ -155,25 +155,26 @@ def tddb_inference():
     if sim_data:
         mb_e = stratcona.SPMBuilder(mdl_name='E-Model')
 
-        def e_model_ttf(a_0, e_aa, k, temp):
-            ttf_hours = 1e-5 * a_0 * jnp.exp(e_aa / (k * temp))
+        def e_model_ttf(a_o, e_aa, k, temp):
+            ttf_hours = 1e-5 * a_o * jnp.exp(e_aa / (k * temp))
             ttf_years = ttf_hours / 8760
             return ttf_years
 
-        a_0_var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
-        mb_e.add_params(a_o_nom=2.8, a_o_dev)
-        mb_e.add_known_latent('a_o', nom='a_o_nom', dev=0.1, chp=0.02, lot=0.1)
-        mb_e.add_known_latent('e_aa', nom=0.69, dev=0.01, chp=0.01, lot=0.02)
-        mb.add_params(k=BOLTZ_EV, fit_var=2)
+        mb_e.add_params(a_o_nom=2.8, a_o_dev=0.1, a_o_chp=0.02, a_o_lot=0.1)
+        mb_e.add_latent('a_o', nom='a_o_nom', dev='a_o_dev', chp='a_o_chp', lot='a_o_lot')
+        mb_e.add_params(e_aa_nom=0.69, e_aa_dev=0.01, e_aa_chp=0.01, e_aa_lot=0.02)
+        mb_e.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_dev', chp='e_aa_chp', lot='e_aa_lot')
+        mb_e.add_params(k=BOLTZ_EV, fit_var=1)
+        mb_e.add_dependent('ttf_base', e_model_ttf)
+        mb_e.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'fit_var'}, 10)
 
-        mb.add_dependent('ttf_base', e_model_ttf)
-        mb.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'fit_var'}, 1)
-
-        mb.add_predictor('field_life', lambda ttf: ttf, {'temp': 55 + CELSIUS_TO_KELVIN})
-
-        am = stratcona.AnalysisManager(mb.build_model(), rng_seed=6289383)
+        am_e = stratcona.AnalysisManager(mb_e.build_model(), rng_seed=1299323)
         test = stratcona.ReliabilityTest({'e0': {'lot': 1, 'chp': 1, 'ttf': 10}}, {'e0': {'temp': 125 + CELSIUS_TO_KELVIN}})
-        am.set_test_definition(test)
+        am_e.set_test_definition(test)
+        e_fails = am_e.sim_test_measurements()
+        print(e_fails)
+
+
     # We will compare to "A new clustering-function-based formulation of temporal and spatial
     # clustering model involving area scaling and its application to parameter extraction", an IBM paper from IRPS 2024
     # Multilayer variability modelling of the gate thickness should immediately solve the problems outlined in the paper

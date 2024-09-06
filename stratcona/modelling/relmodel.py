@@ -108,7 +108,7 @@ class ReliabilityModel():
             for exp in dims:
                 measured[exp] = {}
                 for meas in self.test_measurements:
-                    measured[exp][meas] = tr[f'{meas}_{exp}']['value']
+                    measured[exp][meas] = tr[f'{exp}_{meas}']['value']
             return measured
 
         return jax.vmap(sampler, axis_size=num_samples)(rand.split(rng_key, num_samples))
