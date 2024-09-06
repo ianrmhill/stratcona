@@ -5,7 +5,6 @@ import time as t
 import pytensor
 import pytensor.tensor as pt
 import pymc
-from functools import partial
 from itertools import product
 
 import jax.numpy as jnp
@@ -30,9 +29,9 @@ SHOW_PLOTS = True
 
 
 def electromigration_qualification():
-    analyze_prior = True
-    run_bed_analysis = True
-    run_inference = False
+    analyze_prior = False
+    run_bed_analysis = False
+    run_inference = True
     run_posterior_analysis = False
     simulated_data_mode = 'model'
 
@@ -45,7 +44,7 @@ def electromigration_qualification():
     electromigration failures occur before the 10 year intended product useful life. This translates to a metric of a
     worst case 0.1% quantile credible region of at least 10 years.
     '''
-    percent_bound, min_lifespan = 99.9, 10 * 8760 # 8760 hours per year on average
+    objective = stratcona.ReliabilityRequirement(metric='lbci', quantile=99.9, target_lifespan=10 * 8760)
 
     '''
     ===== 2) Model selection =====
@@ -78,7 +77,7 @@ def electromigration_qualification():
 
     mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 1.8, 'scale': 0.3})
     mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
-    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 2, 'scale': 0.3})
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 8, 'scale': 1})
     mb.add_hyperlatent('eaa_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
     mb.add_latent('em_n', dists.Normal, {'loc': 'n_nom', 'scale': 'n_var'})
     mb.add_latent('em_eaa', dists.Normal, {'loc': 'eaa_nom', 'scale': 'eaa_var'})
@@ -86,26 +85,17 @@ def electromigration_qualification():
     def fail_time(em_ttf):
         return jnp.min(em_ttf)
 
-    mb.add_predictor('chip_fail', fail_time, dists.Normal, {'loc': 'chip_fail', 'scale': 'fail_var'},
-                     pred_conds={'vdd': 0.85, 'temp': 330})
+    mb.add_predictor('chip_fail', fail_time, pred_conds={'vdd': 0.85, 'temp': 330})
 
     # Wire area in nm^2
     mb.add_params(n_fins=24, vth_typ=0.32, i_base=0.8, wire_area=1.024 * 1000 * 1000, k=BOLTZ_EV,
-                  em_var_percent=0.07, fail_var=12)
-    model = mb.build_model()
-    #tm = stratcona.TestDesignManager(mb, sample_per_dev=False)
-    #tm_marg_sample = stratcona.TestDesignManager(mb, sample_per_dev=True)
-    rng_key = rand.key(50)
-    samples = model.sample_predictor_from_beliefs(rng_key, 'chip_fail', num_samples=300)
-    print('Sampled!')
+                  em_var_percent=0.04, fail_var=12)
+
+    am = stratcona.AnalysisManager(mb.build_model(), rel_req=objective, rng_seed=2338923)
+
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
     if analyze_prior:
-        #tm.set_experiment_conditions({'t1': {'vdd': 0.85, 'temp': 350}})
-        #tm.examine('prior_predictive')
-        #tm.override_func('life_sampler', tm._compiled_funcs['obs_sampler'])
-        #tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
-        #estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
-        #print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
+        am.evaluate_reliability('chip_fail')
         if SHOW_PLOTS:
             plt.show()
 
@@ -162,7 +152,13 @@ def electromigration_qualification():
     else:
         selected_test = {'t1': {'vdd': 0.90, 'temp': 375}}
 
-    print(selected_test)
+    #cfg = {'e1': {'lot': 1, 'chp': 1}, 'e2': {'lot': 1, 'chp': 1}, 'e3': {'lot': 3, 'chp': 2}}
+    cfg = {'e1': {'lot': 2, 'chp': 2}, 'e2': {'lot': 2, 'chp': 2}}
+    #conds = {'e1': {'vdd': 0.95, 'temp': 420}, 'e2': {'vdd': 0.95, 'temp': 360}, 'e3': {'vdd': 0.9, 'temp': 360}}
+    conds = {'e1': {'vdd': 0.9, 'temp': 330}, 'e2': {'vdd': 0.95, 'temp': 370}}
+    test = stratcona.ReliabilityTest(cfg, conds)
+    am.set_test_definition(test)
+    print(am.test)
 
     '''
     ===== 5) Conduct the selected test =====
@@ -212,23 +208,16 @@ def electromigration_qualification():
                 fails.append(876_000)
 
     elif simulated_data_mode == 'model':
-        # Generate the simulated data points using the same model type as the inference model to allow for validation,
-        # since the target posterior is known in this case
-        sim_vdd, sim_temp = selected_test['t1']['vdd'], selected_test['t1']['temp']
-        em_n, em_eaa = pt.dvector('em_n'), pt.dvector('em_eaa')
-        fail_time = em_blacks_equation(j_n(24, sim_vdd), sim_temp, em_n, em_eaa)
-        life_func = pytensor.function([em_n, em_eaa], fail_time)
 
-        rng = np.random.default_rng()
-        n_sampled = rng.normal(1.65, 0.05, num_devices)
-        eaa_sampled = rng.normal(2.05, 0.07, num_devices)
-        base_fails = life_func(n_sampled, eaa_sampled)
-        fails = rng.normal(base_fails, 0.05 * base_fails)
+
+        sim_priors = {'n_nom': {'loc': 1.65, 'scale': 0.002}, 'n_var': {'loc': 0.12, 'scale': 0.002},
+                      'eaa_nom': {'loc': 8.5, 'scale': 0.002}, 'eaa_var': {'loc': 0.09, 'scale': 0.002}, }
+        sim_data = am.sim_test_measurements(alt_priors=sim_priors)
     else:
         # Use hard coded data
         fails = [120_000, 98_000, 456_000, 400_000, 234_000]
 
-    print(f"Simulated failure times: {fails}")
+    print(f"Simulated failure times: {sim_data}")
 
     '''
     ===== 6) Perform model inference =====
@@ -236,11 +225,7 @@ def electromigration_qualification():
     fail states.
     '''
     if run_inference:
-        tm.set_experiment_conditions({'t1': {'vdd': selected_test['t1']['vdd'], 'temp': selected_test['t1']['temp']}})
-        observed = {'t1': {'em_ttf': np.array(fails)}}
-        print(tm.get_priors(for_user=True))
-        tm.infer_model(observed)
-        #tm.infer_model_custom_algo(observed)
+        am.do_inference(sim_data)
 
     '''
     ===== 7) Prediction and confidence evaluation =====

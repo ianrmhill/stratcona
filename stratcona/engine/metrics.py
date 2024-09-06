@@ -1,7 +1,7 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
+import jax.numpy as jnp
 from datetime import timedelta
 
 from gerabaldi.models.reports import TestSimReport
@@ -9,7 +9,7 @@ import gracefall
 
 
 def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | float, num_samples: int = 30000,
-                                        plot_sampled=True):
+                                        plot_sampled=True, sampler_style='vectorized'):
     """
     Here we compute the X% quantile credible interval for lifespan. This means that in X% of possible outcomes, the
     lifespan will be longer than the computed bound. Since we have no information about the model, this computation is
@@ -20,8 +20,11 @@ def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | f
     float
         The estimated X% quantile lifespan.
     """
-    sampled = [lifespan_sampler() for _ in range(num_samples)]
-    sampled = np.array(sampled).flatten()
+    if sampler_style == 'vectorized':
+        sampled = lifespan_sampler(num_samples)
+    else:
+        sampled = [lifespan_sampler() for _ in range(num_samples)]
+    sampled = jnp.array(sampled).flatten()
 
     # Optionally generate a plot of all the sampled failure times
     if plot_sampled:
@@ -32,7 +35,7 @@ def worst_case_quantile_credible_region(lifespan_sampler, interval_size: int | f
         gracefall.static.gen_violinplot(report.measurements)
 
     # Determine the failure time at the specified quantile (representing the effective product lifespan)
-    bound = np.quantile(sampled, 1 - (interval_size / 100))
+    bound = jnp.quantile(sampled, 1 - (interval_size / 100))
     return bound
 
 

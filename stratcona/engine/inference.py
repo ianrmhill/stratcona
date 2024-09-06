@@ -4,14 +4,19 @@
 import pymc
 import arviz
 import numpy as np
+import jax.numpy as jnp
 import scipy
+
+from numpyro.infer import NUTS, MCMC
+from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 
 from multiprocess import Pool
 from functools import partial
 
 from matplotlib import pyplot as plt
 
-from stratcona.assistants.dist_translate import pymc_to_scipy
+from stratcona.assistants.dist_translate import pymc_to_scipy, npyro_to_scipy
+from stratcona.modelling.relmodel import ReliabilityModel
 
 __all__ = ['inference_model', 'fit_latent_params_to_posterior_samples', 'importance_sampling_inference']
 
@@ -74,33 +79,42 @@ def importance_sampling_inference(y, latents, prm_map, i_s, lp_i, lp_y, num_samp
     return fit_latent_params_to_posterior_samples(latents, prm_map, fit_samples)
 
 
-def inference_model(model, num_samples: int = None, num_chains: int = None, seeding: tuple = None):
-    # TODO: Would make sense to have this function or its parent take the observed data as an argument and set it using
-    #       the shared variable handle
+def inference_model(model: ReliabilityModel, hyl_info, observed_data, rng_key, num_samples: int = 5_000, num_chains: int = 4):
+    kernel = NUTS(model)
+    sampler = MCMC(kernel, num_warmup=1_000, num_samples=num_samples, num_chains=num_chains)
+    sampler.run(rng_key, measured=observed_data, extra_fields=('potential_energy',))
+    samples = sampler.get_samples(group_by_chain=True)
 
-    # Set up a dictionary of all the optional arguments that we may want to override the defaults for
-    extra_args = {}
-    if seeding:
-        # To force the random draws during inference we need to ensure a random seed is provided for each chain
-        if num_chains and not len(seeding) == num_chains:
-            raise ValueError(f"Number of seeds in tuple must match the number of MCMC chains.")
-        elif not num_chains:
-            num_chains = len(seeding)
-        extra_args['random_seed'] = seeding
-    if num_chains:
-        extra_args['chains'] = num_chains
-    if num_samples:
-        extra_args['draws'] = num_samples
-
-    # Now run the MCMC sampling to get a sample trace of the posterior
-    with model:
-        step = pymc.NUTS()
-        #step = pymc.Metropolis()
-        trace = pymc.sample(step=step, **extra_args)
-        #trace = pymc.sample_smc()
-    #trace = pymc.sample(model=model, **extra_args)
+    convergence_stats = {}
+    for site in samples:
+        convergence_stats[site] = {'ess': effective_sample_size(samples[site]), 'srhat': split_gelman_rubin(samples[site])}
+    extra_info = sampler.get_extra_fields()
+    diverging = extra_info['diverging'] if 'diverging' in extra_info else 0
+    diverging = jnp.sum(diverging)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
-    return trace
+    print(convergence_stats)
+    print(f'Divergences: {diverging}')
+
+    new_prior = {}
+    for hyl in hyl_info:
+        new_prior[hyl] = fit_dist_to_samples(hyl_info[hyl]['dist'], samples[hyl], fixed_prms=hyl_info[hyl]['fixed'])
+    return new_prior
+
+
+def fit_dist_to_samples(numpyro_dist, samples, fixed_prms=None):
+    """Fits a numpyro distribution's parameters to a set of sampled values using MLE methods."""
+    data = samples.flatten()
+    dist, prm_names, prm_transforms, fit_kwargs = npyro_to_scipy(numpyro_dist)
+    prms = dist.fit(data, **fit_kwargs)
+    npyro_prms = {}
+    for i, val in enumerate(prms):
+        if prm_names[i] is not None:
+            npyro_prms[prm_names[i]] = prm_transforms[i](val)
+    if fixed_prms is not None:
+        for prm in fixed_prms:
+            npyro_prms[prm] = fixed_prms[prm]
+    # FIXME: Need to know the transformations applied to back-calculate the posterior params as the scipy dists are not transformed
+    return npyro_prms
 
 
 def fit_latent_params_to_posterior_samples(latents: list, prm_map: dict, idata: arviz.InferenceData | dict[np.ndarray],
