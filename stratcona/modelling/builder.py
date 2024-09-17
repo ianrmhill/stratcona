@@ -237,7 +237,7 @@ class SPMBuilder():
                             sorted_vars = list(TopologicalSorter(self.measures[obs].dep_graph).static_order())
 
                             samples[exp]['dev'][obs], ltnts[exp][obs], deps[exp][obs] = {}, {}, {}
-                            with npyro.plate(f'{exp}_{obs}_dev', dims[exp][obs]):
+                            with npyro.plate(f'{exp}_{obs}_dev', self.measurement_counts[obs]):
                                 for ltnt in self.latents:
                                     samples[exp]['dev'][obs][ltnt] = npyro.sample(f'{exp}_{obs}_{ltnt}_dev', TrDist(
                                         dists.Normal(), AffineTr(0, spm_nodes[self.latents[ltnt].dev])))
@@ -251,7 +251,13 @@ class SPMBuilder():
                                 # Now compute dependent variables, only providing the necessary inputs to each function
                                 for dep in [n for n in sorted_vars if n in self.dependents]:
                                     args = {arg: val for arg, val in {**ltnts[exp][obs], **deps[exp][obs], **conds[exp], **spm_nodes}.items() if arg in self.dependents[dep].requires}
-                                    deps[exp][obs][dep] = npyro.deterministic(f'{exp}_{obs}_{dep}', self.dependents[dep].compute(**args))
+                                    try:
+                                        deps[exp][obs][dep] = npyro.deterministic(f'{exp}_{obs}_{dep}', self.dependents[dep].compute(**args))
+                                    except KeyError as e:
+                                        if e.args[0] == 'fn':
+                                            raise Exception(f'Dependent variable {dep} compute function does not return!')
+                                        raise e
+
 
                                 # Next, create the observed variables measured in the experiment
                                 # Observed variable distributions can be parameterized in terms of dependent variables or params
@@ -287,7 +293,7 @@ class SPMBuilder():
                         sorted_vars = list(TopologicalSorter(self.measures[obs].dep_graph).static_order())
 
                         samples['dev'][obs], ltnts[obs], deps[obs] = {}, {}, {}
-                        with npyro.plate(f'pred_{obs}_dev', dims[obs]):
+                        with npyro.plate(f'pred_{obs}_dev', self.measurement_counts[obs]):
                             for ltnt in self.latents:
                                 samples['dev'][obs][ltnt] = npyro.sample(f'pred_{obs}_{ltnt}_dev', TrDist(
                                     dists.Normal(), AffineTr(0, spm_nodes[self.latents[ltnt].dev])))

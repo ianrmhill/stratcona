@@ -134,6 +134,16 @@ class ReliabilityModel():
 
         return jax.vmap(sampler, axis_size=num_samples)(rand.split(rng_key, num_samples))
 
+    def hyl_logp(self, rng_key: rand.key, test: ReliabilityTest, hyl_vals: dict):
+        mdl = condition(self.test_spm, data=hyl_vals)
+
+        seeded = seed(mdl, rng_key)
+        tr = trace(seeded).get_trace(test.config, test.conditions, self.hyl_beliefs, self.param_vals)
+        logp = 0
+        for site in hyl_vals:
+            logp += tr[site]['fn'].log_prob(hyl_vals[site])
+        return logp
+
     def logp(self, rng_key: rand.key, test: ReliabilityTest, sum_sites: list = None):
         mdl = self.test_spm if hyl_vals is None else condition(self.test_spm, data=hyl_vals)
 
