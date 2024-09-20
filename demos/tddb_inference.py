@@ -6,12 +6,14 @@ import jax
 import jax.numpy as jnp
 import jax.random as rand
 import numpy as np
-import numpyro
+import numpyro as npyro
 import numpyro.distributions as dists
 
 from functools import partial
 from scipy.optimize import curve_fit
 from numpy.linalg import cholesky
+import reliability
+
 import seaborn as sb
 from matplotlib import pyplot as plt
 
@@ -32,7 +34,7 @@ SHOW_PLOTS = True
 
 
 def tddb_inference():
-    numpyro.set_host_device_count(4)
+    npyro.set_host_device_count(4)
 
     ### JEDEC HTOL use of Arrhenius ###
     run_htol_est = False
@@ -134,6 +136,171 @@ def tddb_inference():
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=6289383)
 
+    # Data manipulation helper function
+    def convert(vals):
+        return vals['ttf'].flatten()
+
+    weibull_analysis = True
+    if weibull_analysis:
+
+        # E model for simulating some data to fit
+        mb_e = stratcona.SPMBuilder(mdl_name='E-Model')
+
+        def e_model_ttf(temp, a_o, e_aa, k):
+            ttf_hours = 1e-5 * a_o * jnp.exp(e_aa / (k * temp))
+            ttf_years = ttf_hours / 8760
+            return ttf_years
+
+        mb_e.add_params(a_o_nom=3.8, a_o_dev=0.05, a_o_chp=0.02, a_o_lot=0.05)
+        mb_e.add_latent('a_o', nom='a_o_nom', dev='a_o_dev', chp='a_o_chp', lot='a_o_lot')
+        mb_e.add_params(e_aa_nom=0.70, e_aa_dev=0.02, e_aa_chp=0.01, e_aa_lot=0.01)
+        mb_e.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_dev', chp='e_aa_chp', lot='e_aa_lot')
+
+        mb_e.add_params(k=BOLTZ_EV, ttf_var=0.001)
+        mb_e.add_dependent('ttf_base', e_model_ttf)
+        mb_e.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'ttf_var'}, 10)
+
+        # Define the simulation test
+        th = 130 + CELSIUS_TO_KELVIN
+        test_130 = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 5}}, {'e': {'temp': th, 'vg': 1.1}})
+
+        am_e = stratcona.AnalysisManager(mb_e.build_model(), rng_seed=1295323)
+        am_e.set_test_definition(test_130)
+        ttfs = am_e.sim_test_measurements()
+        fails = convert(ttfs['e'])
+
+        # Frequentist analysis of the failure data
+        mean, var = fails.mean(), fails.var()
+        fit_info = reliability.Fitters.Fit_Weibull_2P(fails.tolist(), show_probability_plot=True)
+
+        # Weibull CDF
+        def CDF(x, k, L):
+            return 1 - jnp.exp(- (x / L) ** k)
+
+        # SPM for Weibull analysis
+        mb_w = stratcona.SPMBuilder(mdl_name='weibull-2p')
+        mb_w.add_hyperlatent('k_nom', dists.Normal, {'loc': 4.0, 'scale': 1.0}, transform=dists.transforms.SoftplusTransform())
+        mb_w.add_hyperlatent('sc_nom', dists.Normal, {'loc': 1.9, 'scale': 0.4}, transform=dists.transforms.SoftplusTransform())
+        var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+        mb_w.add_hyperlatent('k_dev', dists.Normal, {'loc': 0.3, 'scale': 0.1}, transform=var_tf)
+        mb_w.add_hyperlatent('sc_dev', dists.Normal, {'loc': 0.4, 'scale': 0.1}, transform=var_tf)
+        mb_w.add_hyperlatent('k_chp', dists.Normal, {'loc': 0.5, 'scale': 0.2}, transform=var_tf)
+        mb_w.add_hyperlatent('sc_chp', dists.Normal, {'loc': 1.0, 'scale': 0.3}, transform=var_tf)
+        mb_w.add_latent('k', nom='k_nom', dev='k_dev', chp='k_chp', lot=None)
+        mb_w.add_latent('sc', nom='sc_nom', dev='sc_dev', chp='sc_chp', lot=None)
+        #mb_w.add_latent('k', nom='k_nom', dev='k_dev', chp=None, lot=None)
+        #mb_w.add_latent('sc', nom='sc_nom', dev='sc_dev', chp=None, lot=None)
+        #mb_w.add_dependent('k_pos', lambda k: jnp.abs(k))
+        #mb_w.add_dependent('sc_pos', lambda sc: jnp.abs(sc))
+        mb_w.add_measured('ttf', dists.Weibull, {'concentration': 'k', 'scale': 'sc'}, 10)
+        #mb_w.add_measured('ttf', dists.Normal, {'loc': 'k', 'scale': 'sc'}, 10)
+
+        am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92740189)
+
+        test_130_sing = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, {'e': {'temp': th, 'vg': 1.1}})
+        k1, k2, k3, k4 = rand.split(rand.key(428027234), 4)
+        eval_sites = ['e_ttf_k_dev', 'e_ttf_sc_dev', 'e_k_chp', 'e_sc_chp',
+                      'k_nom', 'sc_nom', 'k_dev', 'sc_dev', 'k_chp', 'sc_chp']
+
+        prm_samples = am_w.relmdl.sample(k1, test_130_sing, 1000)
+        ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
+        pri_probs = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, ltnt_vals, prm_samples))
+        pri_probs = (pri_probs / (jnp.max(pri_probs) * 2)).flatten()
+
+        x = jnp.logspace(-2, 1, 50)
+        pri_fits = CDF(x, prm_samples['e_ttf_k'], prm_samples['e_ttf_sc'])
+
+        am_w.do_inference(ttfs, test_130)
+
+        prm_samples = am_w.relmdl.sample(k3, test_130_sing, 1000)
+        ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
+        pst_probs = jnp.exp(am_w.relmdl.logp(k4, test_130_sing, ltnt_vals, prm_samples))
+        pst_probs = (pst_probs / (jnp.max(pst_probs) * 2)).flatten()
+
+        pst_fits = CDF(x, prm_samples['e_ttf_k'], prm_samples['e_ttf_sc'])
+
+
+        #def weibull(dev_count, fail_data=None):
+        #    k = npyro.sample('k', dists.Normal(4.0, 2.0))
+        #    sc = npyro.sample('sc', dists.Normal(1.9, 0.8))
+        #    with npyro.plate('dev', dev_count):
+        #        k_dev = npyro.sample('k_dev', dists.Normal(0.0, 0.05))
+        #        sc_dev = npyro.sample('sc_dev', dists.Normal(0.0, 0.1))
+
+        #        k_sum = k + k_dev
+        #        sc_sum = sc + sc_dev
+        #        fails = npyro.sample('fails', dists.Weibull(concentration=k, scale=sc), obs=fail_data)
+
+        ## Inference the weibull model
+        #kernel = npyro.infer.NUTS(weibull)
+        #sampler = npyro.infer.MCMC(kernel, num_warmup=500, num_samples=3_000, num_chains=4)
+        #rng_key = rand.key(6439578)
+        #sampler.run(rng_key, dev_count=30, fail_data=fails, extra_fields=('potential_energy',))
+        #samples = sampler.get_samples(group_by_chain=True)
+
+        #convergence_stats = {}
+        #for site in samples:
+        #    convergence_stats[site] = {'ess': npyro.diagnostics.effective_sample_size(samples[site]),
+        #                               'srhat': npyro.diagnostics.split_gelman_rubin(samples[site])}
+        #extra_info = sampler.get_extra_fields()
+        #diverging = extra_info['diverging'] if 'diverging' in extra_info else 0
+        #diverging = jnp.sum(diverging)
+        #print(convergence_stats)
+        #print(f'Divergences: {diverging}')
+
+        #k_new = stratcona.engine.inference.fit_dist_to_samples(dists.Normal, samples['k'])
+        #sc_new = stratcona.engine.inference.fit_dist_to_samples(dists.Normal, samples['sc'])
+        #print(f'k: {k_new}, sc: {sc_new}')
+
+        # Generate some data series from the inferred model
+        rng = rand.key(48408)
+        k1, k2 = rand.split(rng)
+        #prm_samples = am.relmdl.sample(k1, test_130, 100, keep_sites=['a_0_nom', 'e_aa_nom'])
+        #pri_sample_probs = jnp.exp(am.relmdl.hyl_logp(k2, test_130, prm_samples))
+        #pri_sample_probs = pri_sample_probs / (jnp.max(pri_sample_probs) * 2)
+        #spm_temps = jnp.full((100, 13,), jnp.linspace(300, 420, 13)).T
+        #pri_spm_vals = e_model_ttf(spm_temps, prm_samples['a_0_nom'], prm_samples['e_aa_nom'], BOLTZ_EV)
+        #pri_spm_vals = pri_spm_vals.T
+
+        # Get data for the weibull fit plot
+        x = jnp.logspace(-2, 1, 50)
+        fit_fails = CDF(x, fit_info.beta, fit_info.alpha)
+
+        # Generate a Weibull plot!
+        fails = jnp.sort(fails)
+        n = len(fails)
+        i = jnp.arange(1, n + 1)
+        fail_order = (i - 0.5) / (n + 0.25)
+        # Functions to correctly set up the axis scales
+        ax_fwdy = lambda p: jnp.log(jnp.fmax(1e-20, -jnp.log(jnp.fmax(1e-20, 1 - p))))
+        ax_bcky = lambda q: 1 - jnp.exp(-jnp.exp(q))
+        ax_fwdx = lambda x: jnp.log(jnp.fmax(1e-20, x))
+        ax_bckx = lambda y: jnp.exp(y)
+
+        fig, p = plt.subplots(1, 1)
+        p.plot(fails, fail_order, color='black', alpha=0.3, linestyle='', marker='.', markersize=4)
+        p.plot(x, fit_fails, color='lightseagreen')
+
+        # Plot the probabilistic fits
+        for i in range(len(pri_fits)):
+            p.plot(x, pri_fits[i].flatten(), alpha=float(pri_probs[i]), color='sienna')
+        for i in range(len(pst_fits)):
+            p.plot(x, pst_fits[i].flatten(), alpha=float(pst_probs[i]), color='rebeccapurple')
+
+        p.set_xscale('function', functions=(ax_fwdx, ax_bckx))
+        ln_min, ln_max = jnp.log(min(fails)), jnp.log(max(fails))
+        lim_l = jnp.exp(ln_min - (0.05 * (ln_max - ln_min)))
+        lim_h = jnp.exp(ln_max + (0.05 * (ln_max - ln_min)))
+        p.set_xlim(lim_l, lim_h)
+        p.set_yscale('function', functions=(ax_fwdy, ax_bcky))
+        p.set_ylim(0.01, 0.99)
+        weibull_ticks = [0.01, 0.02, 0.05, 0.1, 0.25, 0.50, 0.75, 0.90, 0.96, 0.99]
+        p.set_yticks(weibull_ticks)
+
+        p.set_xlabel('Time to Failure (years)')
+        p.set_ylabel('CDF [ln(ln(1-F))]')
+        plt.show()
+
     run_e_model = False
     if run_e_model:
         test = stratcona.ReliabilityTest({'e0': {'lot': 1, 'chp': 1, 'ttf': 10}}, {'e0': {'temp': 125 + CELSIUS_TO_KELVIN}})
@@ -156,7 +323,7 @@ def tddb_inference():
 
     # Simulate TDDB distributions using all four classic TDDB models, then infer a model using both Bayesian and
     # frequentist techniques to compare. Only temperature acceleration considered.
-    sim_data = True
+    sim_data = False
     if sim_data:
         # Define the simulation test
         tl, tm, th = 85 + CELSIUS_TO_KELVIN, 125 + CELSIUS_TO_KELVIN, 145 + CELSIUS_TO_KELVIN
@@ -170,9 +337,6 @@ def tddb_inference():
         ttfs = {'s': {}, 'l': {}}
         fails_l = {'el': {}, 'em': {}, 'eh': {}}
         means, vars = {}, {}
-
-        def convert(vals):
-            return vals['ttf'].flatten()
 
         # E model
         mb_e = stratcona.SPMBuilder(mdl_name='E-Model')
@@ -311,7 +475,7 @@ def tddb_inference():
         vars['p']['el_l'], vars['p']['em_l'], vars['p']['eh_l'] = ttfs['l']['p']['el']['ttf'].var(), ttfs['l']['p']['em']['ttf'].var(), ttfs['l']['p']['eh']['ttf'].var()
         fails_l['el']['p'], fails_l['em']['p'], fails_l['eh']['p'] = convert(ttfs['l']['p']['el']), convert(ttfs['l']['p']['em']), convert(ttfs['l']['p']['eh'])
 
-        plot_sim_data = False
+        plot_sim_data = True
         if plot_sim_data:
 
             for k in means:
@@ -436,7 +600,7 @@ def tddb_inference():
             if infer_spm:
                 for i in range(100):
                     p.plot(spm_temps[i], pri_spm_vals[i], color='burlywood', linestyle='-', alpha=float(pri_sample_probs[i]))
-                    p.plot(spm_temps[i], spm_vals[i], color='lightsteelblue', linestyle='-', alpha=float(sample_probs[i]))
+                    p.plot(spm_temps[i], spm_vals[i], color='royalblue', linestyle='-', alpha=float(sample_probs[i]))
 
             s_fails = jnp.concatenate((convert(ttfs['s']['e']['el']), convert(ttfs['s']['e']['em']), convert(ttfs['s']['e']['eh'])))
             p.plot(temps_s, s_fails, color='sienna', linestyle='', marker='.', markersize=15)

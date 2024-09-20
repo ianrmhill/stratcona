@@ -116,9 +116,6 @@ class ReliabilityModel():
     def sample(self, rng_key: rand.key, test: ReliabilityTest, num_samples: int = 1, keep_sites: list = None,
                hyl_vals: dict[float] = None, ltnt_vals: dict = None, meas_vals: dict[float] = None,
                alt_priors: dict[dict[float]] = None):
-        dims = {}
-        for exp in test.config:
-            dims[exp] = test.config[exp] | self.meas_per_chp
         pri = alt_priors if alt_priors is not None else self.hyl_beliefs
 
         # Now handle any conditioning where sample sites are fixed to values
@@ -128,7 +125,7 @@ class ReliabilityModel():
 
         def sampler(rng):
             seeded = seed(mdl, rng)
-            tr = trace(seeded).get_trace(dims, test.conditions, pri, self.param_vals)
+            tr = trace(seeded).get_trace(test.config, test.conditions, pri, self.param_vals)
             samples = {site: tr[site]['value'] for site in tr}
             return dict((k, samples[k]) for k in keep_sites) if keep_sites is not None else samples
 
@@ -144,13 +141,17 @@ class ReliabilityModel():
             logp += tr[site]['fn'].log_prob(hyl_vals[site])
         return logp
 
-    def logp(self, rng_key: rand.key, test: ReliabilityTest, sum_sites: list = None):
-        mdl = self.test_spm if hyl_vals is None else condition(self.test_spm, data=hyl_vals)
+    def logp(self, rng_key: rand.key, test: ReliabilityTest, site_vals: dict, conditional: dict = None):
 
-        def logp(rng):
+        def logp(rng, vals, cond):
+            mdl = self.test_spm if cond is None else condition(self.test_spm, data=cond)
             seeded = seed(mdl, rng)
-            tr = trace(seeded).get_trace(dims, test.conditions, pri, self.param_vals)
-            samples = {site: tr[site]['value'] for site in tr}
-            to_logp = dict((k, samples[k]) for k in keep_sites) if keep_sites is not None else samples
+            tr = trace(seeded).get_trace(test.config, test.conditions, self.hyl_beliefs, self.param_vals)
+            lp = 0
+            for site in vals:
+                lp += tr[site]['fn'].log_prob(vals[site])
+            return lp
 
-        return jax.vmap(sampler, axis_size=num_samples)(rand.split(rng_key, num_samples))
+        num_vals = next(iter(site_vals.values())).shape[0]
+        cond_vals = [None for _ in range(num_vals)] if conditional is None else conditional
+        return jax.vmap(logp, axis_size=num_vals)(rand.split(rng_key, num_vals), site_vals, cond_vals)

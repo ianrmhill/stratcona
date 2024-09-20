@@ -16,7 +16,6 @@ from functools import partial
 from matplotlib import pyplot as plt
 
 from stratcona.assistants.dist_translate import pymc_to_scipy, npyro_to_scipy
-from stratcona.modelling.relmodel import ReliabilityModel
 
 __all__ = ['inference_model', 'fit_latent_params_to_posterior_samples', 'importance_sampling_inference']
 
@@ -79,7 +78,7 @@ def importance_sampling_inference(y, latents, prm_map, i_s, lp_i, lp_y, num_samp
     return fit_latent_params_to_posterior_samples(latents, prm_map, fit_samples)
 
 
-def inference_model(model: ReliabilityModel, hyl_info, observed_data, rng_key, num_samples: int = 2_000, num_chains: int = 4):
+def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 2_000, num_chains: int = 4):
     kernel = NUTS(model)
     sampler = MCMC(kernel, num_warmup=1_000, num_samples=num_samples, num_chains=num_chains)
     sampler.run(rng_key, measured=observed_data, extra_fields=('potential_energy',))
@@ -93,7 +92,7 @@ def inference_model(model: ReliabilityModel, hyl_info, observed_data, rng_key, n
     diverging = jnp.sum(diverging)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
     #print(convergence_stats)
-    #print(f'Divergences: {diverging}')
+    print(f'Divergences: {diverging}')
 
     new_prior = {}
     for hyl in hyl_info:

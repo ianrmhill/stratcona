@@ -237,10 +237,12 @@ class SPMBuilder():
                             sorted_vars = list(TopologicalSorter(self.measures[obs].dep_graph).static_order())
 
                             samples[exp]['dev'][obs], ltnts[exp][obs], deps[exp][obs] = {}, {}, {}
-                            with npyro.plate(f'{exp}_{obs}_dev', self.measurement_counts[obs]):
+                            obs_dev_count = dims[exp][obs] if obs in dims[exp] else self.measurement_counts[obs]
+                            with npyro.plate(f'{exp}_{obs}_dev', obs_dev_count):
                                 for ltnt in self.latents:
-                                    samples[exp]['dev'][obs][ltnt] = npyro.sample(f'{exp}_{obs}_{ltnt}_dev', TrDist(
-                                        dists.Normal(), AffineTr(0, spm_nodes[self.latents[ltnt].dev])))
+                                    if self.latents[ltnt].dev is not None:
+                                        samples[exp]['dev'][obs][ltnt] = npyro.sample(f'{exp}_{obs}_{ltnt}_dev', TrDist(
+                                            dists.Normal(), AffineTr(0, spm_nodes[self.latents[ltnt].dev])))
 
                                     nom = spm_nodes[self.latents[ltnt].nom]
                                     dev = samples[exp]['dev'][obs][ltnt] if self.latents[ltnt].dev else 0
@@ -337,7 +339,7 @@ class SPMBuilder():
         ltnt_subsample_site_names.extend([f'{ltnt}_lot' for ltnt in self.latents if self.latents[ltnt].lot is not None])
 
         return ReliabilityModel(self.model_name, test_model, lifespan_model, self.params,
-                                self.hyls.keys(), hyl_priors, hyl_info,
-                                self.latents.keys(), ltnt_subsample_site_names,
-                                self.measures.keys(), self.measurement_counts,
-                                self.predictors.keys(), self.predictor_conds)
+                                list(self.hyls.keys()), hyl_priors, hyl_info,
+                                list(self.latents.keys()), ltnt_subsample_site_names,
+                                list(self.measures.keys()), self.measurement_counts,
+                                list(self.predictors.keys()), self.predictor_conds)
