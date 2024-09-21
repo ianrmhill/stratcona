@@ -3,6 +3,7 @@
 
 import inspect
 from graphlib import TopologicalSorter
+import jax.numpy as jnp
 import numpyro as npyro
 import numpyro.distributions as dists
 from numpyro.distributions import TransformedDistribution as TrDist
@@ -16,7 +17,7 @@ __all__ = ['SPMBuilder']
 
 
 class _HyperLatent():
-    def __init__(self, name, distribution, prior_params, transform=None, fixed_prms=None):
+    def __init__(self, name, distribution, prior_params, transform=None, fixed_prms=None, scaling=1.0):
         self.dist = distribution
         self.dist_type = self.get_dist_type()
         self.dist_transform = transform
@@ -24,6 +25,7 @@ class _HyperLatent():
         self.fixed_prms = fixed_prms
         self.site_name = name
         self.variance_norm_factor = None
+        self.scale_factor = scaling
 
     def compute_prior_entropy(self):
         temp = self.dist(**self.prms)
@@ -119,7 +121,10 @@ class SPMBuilder():
         self.params = {}
 
     def add_hyperlatent(self, name, distribution, prior, transform=None, fixed_prms=None):
-        self.hyls[name] = _HyperLatent(name, distribution, prior, transform, fixed_prms)
+        # Determine the scaling factor applied to the variable, if any
+        def unity(x): return x
+        scaling = unity if transform is None else transform._inverse
+        self.hyls[name] = _HyperLatent(name, distribution, prior, transform, fixed_prms, scaling)
 
     def add_latent(self, name, nom, dev, chp=None, lot=None):
         self.latents[name] = _Latent(name, nom, dev, chp, lot)
@@ -333,7 +338,8 @@ class SPMBuilder():
 
         # Assemble the contextual information for the model needed to work with the defined SPMs
         hyl_priors = {hyl: self.hyls[hyl].prms for hyl in self.hyls}
-        hyl_info = {hyl: {'dist': self.hyls[hyl].dist, 'fixed': self.hyls[hyl].fixed_prms} for hyl in self.hyls}
+        hyl_info = {hyl: {'dist': self.hyls[hyl].dist, 'fixed': self.hyls[hyl].fixed_prms,
+                          'scale': self.hyls[hyl].scale_factor} for hyl in self.hyls}
         ltnt_subsample_site_names = [f'{ltnt}_dev' for ltnt in self.latents]
         ltnt_subsample_site_names.extend([f'{ltnt}_chp' for ltnt in self.latents if self.latents[ltnt].chp is not None])
         ltnt_subsample_site_names.extend([f'{ltnt}_lot' for ltnt in self.latents if self.latents[ltnt].lot is not None])

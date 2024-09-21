@@ -75,8 +75,7 @@ class AnalysisManager:
         rng = self._derive_key()
         test_info = test if test is not None else self.test
         inf_mdl = partial(self.relmdl.test_spm, test_info.config, test_info.conditions, self.relmdl.hyl_beliefs, self.relmdl.param_vals)
-        new_prior = inference_model(inf_mdl, self.relmdl.hyl_aux_info, observations, rng)
-        print(new_prior)
+        new_prior = inference_model(inf_mdl, self.relmdl.hyl_info, observations, rng)
         if auto_update_prior:
             self.relmdl.hyl_beliefs = new_prior
 

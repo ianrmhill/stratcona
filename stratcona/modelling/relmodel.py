@@ -38,9 +38,9 @@ class ReliabilityModel():
     measurements_per_chp: dict[int]
     life_predictors: list[str]
     life_conds: dict[str: float]
-    hyls: list[str]
+    hyls: dict[str]
     hyl_beliefs: dict[dict[str: float]]
-    hyl_aux_info: dict[dict]
+    hyl_info: dict[dict]
 
     def __init__(self, name, test_model, lifespan_model, param_vals, hyl_sites, prior, hyl_info, ltnt_sites,
                  ltnt_subsample_sites, meas_sites, meas_counts, pred_sites, pred_conds):
@@ -52,7 +52,7 @@ class ReliabilityModel():
 
         self.hyls = hyl_sites
         self.hyl_beliefs = prior
-        self.hyl_aux_info = hyl_info
+        self.hyl_info = hyl_info
 
         self.ltnts = ltnt_sites
         self._ltnt_subsamples = ltnt_subsample_sites

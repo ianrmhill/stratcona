@@ -91,28 +91,29 @@ def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 
     diverging = extra_info['diverging'] if 'diverging' in extra_info else 0
     diverging = jnp.sum(diverging)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
-    #print(convergence_stats)
+    print(convergence_stats)
     print(f'Divergences: {diverging}')
 
     new_prior = {}
     for hyl in hyl_info:
-        new_prior[hyl] = fit_dist_to_samples(hyl_info[hyl]['dist'], samples[hyl], fixed_prms=hyl_info[hyl]['fixed'])
+        new_prior[hyl] = fit_dist_to_samples(hyl_info[hyl], samples[hyl])
     return new_prior
 
 
-def fit_dist_to_samples(numpyro_dist, samples, fixed_prms=None):
+def fit_dist_to_samples(hyl_info, samples):
     """Fits a numpyro distribution's parameters to a set of sampled values using MLE methods."""
-    data = samples.flatten()
-    dist, prm_names, prm_transforms, fit_kwargs = npyro_to_scipy(numpyro_dist)
+    # Apply the inverse of any transforms of the hyl base distribution to the data, otherwise the base distribution
+    # is erroneously fit to the transformed data instead
+    data = hyl_info['scale'](samples.flatten())
+    dist, prm_names, prm_transforms, fit_kwargs = npyro_to_scipy(hyl_info['dist'])
     prms = dist.fit(data, **fit_kwargs)
     npyro_prms = {}
     for i, val in enumerate(prms):
         if prm_names[i] is not None:
             npyro_prms[prm_names[i]] = prm_transforms[i](val)
-    if fixed_prms is not None:
-        for prm in fixed_prms:
-            npyro_prms[prm] = fixed_prms[prm]
-    # FIXME: Need to know the transformations applied to back-calculate the posterior params as the scipy dists are not transformed
+    if hyl_info['fixed'] is not None:
+        for prm in hyl_info['fixed']:
+            npyro_prms[prm] = hyl_info['fixed'][prm]
     return npyro_prms
 
 

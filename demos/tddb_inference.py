@@ -13,10 +13,12 @@ from functools import partial
 from scipy.optimize import curve_fit
 from numpy.linalg import cholesky
 import reliability
+import pandas as pd
 
 import seaborn as sb
 from matplotlib import pyplot as plt
 
+import gracefall
 import gerabaldi
 from gerabaldi.models import *
 
@@ -142,154 +144,150 @@ def tddb_inference():
 
     weibull_analysis = True
     if weibull_analysis:
-
-        # E model for simulating some data to fit
-        mb_e = stratcona.SPMBuilder(mdl_name='E-Model')
-
-        def e_model_ttf(temp, a_o, e_aa, k):
-            ttf_hours = 1e-5 * a_o * jnp.exp(e_aa / (k * temp))
-            ttf_years = ttf_hours / 8760
-            return ttf_years
-
-        mb_e.add_params(a_o_nom=3.8, a_o_dev=0.05, a_o_chp=0.02, a_o_lot=0.05)
-        mb_e.add_latent('a_o', nom='a_o_nom', dev='a_o_dev', chp='a_o_chp', lot='a_o_lot')
-        mb_e.add_params(e_aa_nom=0.70, e_aa_dev=0.02, e_aa_chp=0.01, e_aa_lot=0.01)
-        mb_e.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_dev', chp='e_aa_chp', lot='e_aa_lot')
-
-        mb_e.add_params(k=BOLTZ_EV, ttf_var=0.001)
-        mb_e.add_dependent('ttf_base', e_model_ttf)
-        mb_e.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'ttf_var'}, 10)
-
-        # Define the simulation test
+        ## Define the simulation test
+        num_devs, num_chps, num_lots = 8, 5, 3
         th = 130 + CELSIUS_TO_KELVIN
-        test_130 = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 5}}, {'e': {'temp': th, 'vg': 1.1}})
-
-        am_e = stratcona.AnalysisManager(mb_e.build_model(), rng_seed=1295323)
-        am_e.set_test_definition(test_130)
-        ttfs = am_e.sim_test_measurements()
-        fails = convert(ttfs['e'])
-
-        # Frequentist analysis of the failure data
-        mean, var = fails.mean(), fails.var()
-        fit_info = reliability.Fitters.Fit_Weibull_2P(fails.tolist(), show_probability_plot=True)
-
+        test_130 = stratcona.ReliabilityTest({'e': {'lot': num_lots, 'chp': num_chps}}, {'e': {'temp': th, 'vg': 1.1}})
         # Weibull CDF
         def CDF(x, k, L):
             return 1 - jnp.exp(- (x / L) ** k)
 
+        # Helper function to convert likelihoods to alpha values that result in clear plots
+        def likelihood_to_alpha(probs, max_alpha=0.5):
+            min_alpha = 0.1
+            alphas = min_alpha + ((probs / jnp.max(probs)) * (max_alpha - min_alpha))
+            return alphas
+
         # SPM for Weibull analysis
         mb_w = stratcona.SPMBuilder(mdl_name='weibull-2p')
-        mb_w.add_hyperlatent('k_nom', dists.Normal, {'loc': 4.0, 'scale': 1.0}, transform=dists.transforms.SoftplusTransform())
-        mb_w.add_hyperlatent('sc_nom', dists.Normal, {'loc': 1.9, 'scale': 0.4}, transform=dists.transforms.SoftplusTransform())
-        var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
-        mb_w.add_hyperlatent('k_dev', dists.Normal, {'loc': 0.3, 'scale': 0.1}, transform=var_tf)
-        mb_w.add_hyperlatent('sc_dev', dists.Normal, {'loc': 0.4, 'scale': 0.1}, transform=var_tf)
-        mb_w.add_hyperlatent('k_chp', dists.Normal, {'loc': 0.5, 'scale': 0.2}, transform=var_tf)
-        mb_w.add_hyperlatent('sc_chp', dists.Normal, {'loc': 1.0, 'scale': 0.3}, transform=var_tf)
-        mb_w.add_latent('k', nom='k_nom', dev='k_dev', chp='k_chp', lot=None)
-        mb_w.add_latent('sc', nom='sc_nom', dev='sc_dev', chp='sc_chp', lot=None)
-        #mb_w.add_latent('k', nom='k_nom', dev='k_dev', chp=None, lot=None)
-        #mb_w.add_latent('sc', nom='sc_nom', dev='sc_dev', chp=None, lot=None)
-        #mb_w.add_dependent('k_pos', lambda k: jnp.abs(k))
-        #mb_w.add_dependent('sc_pos', lambda sc: jnp.abs(sc))
-        mb_w.add_measured('ttf', dists.Weibull, {'concentration': 'k', 'scale': 'sc'}, 10)
-        #mb_w.add_measured('ttf', dists.Normal, {'loc': 'k', 'scale': 'sc'}, 10)
+        mb_w.add_hyperlatent('k_nom', dists.Normal, {'loc': 1.8, 'scale': 0.02}, transform=dists.transforms.SoftplusTransform())
+        mb_w.add_hyperlatent('sc_nom', dists.Normal, {'loc': 1.9, 'scale': 0.02}, transform=dists.transforms.SoftplusTransform())
+        var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.01)])
+        #mb_w.add_hyperlatent('k_dev', dists.Normal, {'loc': 2, 'scale': 0.2}, transform=var_tf)
+        #mb_w.add_hyperlatent('sc_dev', dists.Normal, {'loc': 2, 'scale': 0.2}, transform=var_tf)
+        mb_w.add_hyperlatent('k_lot', dists.Normal, {'loc': 6, 'scale': 0.2}, transform=var_tf)
+        mb_w.add_hyperlatent('sc_lot', dists.Normal, {'loc': 6, 'scale': 0.2}, transform=var_tf)
+        #mb_w.add_latent('k', nom='k_nom', dev='k_dev', chp=None, lot='k_lot')
+        #mb_w.add_latent('sc', nom='sc_nom', dev='sc_dev', chp=None, lot='sc_lot')
+        mb_w.add_latent('k', nom='k_nom', dev=None, chp=None, lot='k_lot')
+        mb_w.add_latent('sc', nom='sc_nom', dev=None, chp=None, lot='sc_lot')
+        mb_w.add_dependent('k_pos', lambda k: jnp.log(1 + jnp.exp(k)))
+        mb_w.add_dependent('sc_pos', lambda sc: jnp.log(1 + jnp.exp(sc)))
+        mb_w.add_measured('ttf', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'}, num_devs)
 
-        am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92740189)
+        am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92733429)
+
+        am_w.set_test_definition(test_130)
+        # TODO: Return the three values for k_pos and sc_pos used to generate each series, then can plot the 'true' functions
+        ttfs = am_w.sim_test_measurements()
+        ttfs_0 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 0]}}
+        ttfs_1 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 1]}}
+        ttfs_2 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 2]}}
 
         test_130_sing = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, {'e': {'temp': th, 'vg': 1.1}})
         k1, k2, k3, k4 = rand.split(rand.key(428027234), 4)
-        eval_sites = ['e_ttf_k_dev', 'e_ttf_sc_dev', 'e_k_chp', 'e_sc_chp',
-                      'k_nom', 'sc_nom', 'k_dev', 'sc_dev', 'k_chp', 'sc_chp']
+        eval_sites = ['e_ttf_k_dev', 'e_ttf_sc_dev', 'e_k_lot', 'e_sc_lot',
+                      'k_nom', 'sc_nom', 'k_dev', 'sc_dev', 'k_lot', 'sc_lot']
 
-        prm_samples = am_w.relmdl.sample(k1, test_130_sing, 1000)
+        am_w.relmdl.hyl_beliefs = {'k_nom': {'loc': 2.0, 'scale': 1.5}, 'k_dev': {'loc': 5, 'scale': 3}, 'k_lot': {'loc': 12, 'scale': 3},
+                                   'sc_nom': {'loc': 1.8, 'scale': 0.8}, 'sc_dev': {'loc': 5, 'scale': 3}, 'sc_lot': {'loc': 13, 'scale': 5}}
+        prm_samples = am_w.relmdl.sample(k1, test_130_sing, 400)
         ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
         pri_probs = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, ltnt_vals, prm_samples))
-        pri_probs = (pri_probs / (jnp.max(pri_probs) * 2)).flatten()
+        pri_probs = likelihood_to_alpha(pri_probs, 0.4).flatten()
 
         x = jnp.logspace(-2, 1, 50)
-        pri_fits = CDF(x, prm_samples['e_ttf_k'], prm_samples['e_ttf_sc'])
+        pri_fits = CDF(x, prm_samples['e_ttf_k_pos'], prm_samples['e_ttf_sc_pos'])
 
         am_w.do_inference(ttfs, test_130)
+        print(am_w.relmdl.hyl_beliefs)
 
-        prm_samples = am_w.relmdl.sample(k3, test_130_sing, 1000)
+        prm_samples = am_w.relmdl.sample(k3, test_130_sing, 400)
         ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
         pst_probs = jnp.exp(am_w.relmdl.logp(k4, test_130_sing, ltnt_vals, prm_samples))
-        pst_probs = (pst_probs / (jnp.max(pst_probs) * 2)).flatten()
+        pst_probs = likelihood_to_alpha(pst_probs, 0.4).flatten()
 
-        pst_fits = CDF(x, prm_samples['e_ttf_k'], prm_samples['e_ttf_sc'])
+        pst_fits = CDF(x, prm_samples['e_ttf_k_pos'], prm_samples['e_ttf_sc_pos'])
 
+        # Frequentist analysis of the failure data
+        fails_0, fails_1, fails_2 = convert(ttfs_0['e']), convert(ttfs_1['e']), convert(ttfs_2['e'])
+        fails = jnp.concatenate((fails_0, fails_1, fails_2))
+        lots = jnp.array([0, 1, 2]).repeat(num_devs * num_chps)
 
-        #def weibull(dev_count, fail_data=None):
-        #    k = npyro.sample('k', dists.Normal(4.0, 2.0))
-        #    sc = npyro.sample('sc', dists.Normal(1.9, 0.8))
-        #    with npyro.plate('dev', dev_count):
-        #        k_dev = npyro.sample('k_dev', dists.Normal(0.0, 0.05))
-        #        sc_dev = npyro.sample('sc_dev', dists.Normal(0.0, 0.1))
+        mean, var = fails.mean(), fails.var()
+        fit_full = reliability.Fitters.Fit_Weibull_2P(fails.tolist(), show_probability_plot=False)
+        fit_0 = reliability.Fitters.Fit_Weibull_2P(fails_0.tolist(), show_probability_plot=False)
+        fit_1 = reliability.Fitters.Fit_Weibull_2P(fails_1.tolist(), show_probability_plot=False)
+        fit_2 = reliability.Fitters.Fit_Weibull_2P(fails_2.tolist(), show_probability_plot=False)
 
-        #        k_sum = k + k_dev
-        #        sc_sum = sc + sc_dev
-        #        fails = npyro.sample('fails', dists.Weibull(concentration=k, scale=sc), obs=fail_data)
-
-        ## Inference the weibull model
-        #kernel = npyro.infer.NUTS(weibull)
-        #sampler = npyro.infer.MCMC(kernel, num_warmup=500, num_samples=3_000, num_chains=4)
-        #rng_key = rand.key(6439578)
-        #sampler.run(rng_key, dev_count=30, fail_data=fails, extra_fields=('potential_energy',))
-        #samples = sampler.get_samples(group_by_chain=True)
-
-        #convergence_stats = {}
-        #for site in samples:
-        #    convergence_stats[site] = {'ess': npyro.diagnostics.effective_sample_size(samples[site]),
-        #                               'srhat': npyro.diagnostics.split_gelman_rubin(samples[site])}
-        #extra_info = sampler.get_extra_fields()
-        #diverging = extra_info['diverging'] if 'diverging' in extra_info else 0
-        #diverging = jnp.sum(diverging)
-        #print(convergence_stats)
-        #print(f'Divergences: {diverging}')
-
-        #k_new = stratcona.engine.inference.fit_dist_to_samples(dists.Normal, samples['k'])
-        #sc_new = stratcona.engine.inference.fit_dist_to_samples(dists.Normal, samples['sc'])
-        #print(f'k: {k_new}, sc: {sc_new}')
-
-        # Generate some data series from the inferred model
-        rng = rand.key(48408)
-        k1, k2 = rand.split(rng)
-        #prm_samples = am.relmdl.sample(k1, test_130, 100, keep_sites=['a_0_nom', 'e_aa_nom'])
-        #pri_sample_probs = jnp.exp(am.relmdl.hyl_logp(k2, test_130, prm_samples))
-        #pri_sample_probs = pri_sample_probs / (jnp.max(pri_sample_probs) * 2)
-        #spm_temps = jnp.full((100, 13,), jnp.linspace(300, 420, 13)).T
-        #pri_spm_vals = e_model_ttf(spm_temps, prm_samples['a_0_nom'], prm_samples['e_aa_nom'], BOLTZ_EV)
-        #pri_spm_vals = pri_spm_vals.T
 
         # Get data for the weibull fit plot
         x = jnp.logspace(-2, 1, 50)
-        fit_fails = CDF(x, fit_info.beta, fit_info.alpha)
+        # NOTE: Some of these fits are bad! This is good for the Bayesian approach!
+        fit_fails = CDF(x, fit_full.beta, fit_full.alpha)
+        fit_fails_0 = CDF(x, fit_0.beta, fit_0.alpha)
+        fit_fails_1 = CDF(x, fit_1.beta, fit_1.alpha)
+        fit_fails_2 = CDF(x, fit_2.beta, fit_2.alpha)
 
-        # Generate a Weibull plot!
-        fails = jnp.sort(fails)
         n = len(fails)
         i = jnp.arange(1, n + 1)
         fail_order = (i - 0.5) / (n + 0.25)
+
+        n = len(fails_0)
+        i = jnp.arange(1, n + 1)
+        fail_order_s = (i - 0.5) / (n + 0.25)
+
+        # Generate a Weibull plot!
+        srtd_inds = jnp.argsort(fails)
+        fails = fails[srtd_inds]
+        srtd_lots = lots[srtd_inds]
+
+        fails_0 = np.sort(fails_0)
+        fails_1 = np.sort(fails_1)
+        fails_2 = np.sort(fails_2)
+
+        n0 = np.argwhere(srtd_lots != 0)
+        f0 = jnp.delete(fails, n0)
+        x0 = jnp.delete(fail_order, n0)
+        n1 = np.argwhere(srtd_lots != 1)
+        f1 = jnp.delete(fails, n1)
+        x1 = jnp.delete(fail_order, n1)
+        n2 = np.argwhere(srtd_lots != 2)
+        f2 = jnp.delete(fails, n2)
+        x2 = jnp.delete(fail_order, n2)
+
         # Functions to correctly set up the axis scales
         ax_fwdy = lambda p: jnp.log(jnp.fmax(1e-20, -jnp.log(jnp.fmax(1e-20, 1 - p))))
         ax_bcky = lambda q: 1 - jnp.exp(-jnp.exp(q))
         ax_fwdx = lambda x: jnp.log(jnp.fmax(1e-20, x))
         ax_bckx = lambda y: jnp.exp(y)
 
+        sb.set_context('notebook')
         fig, p = plt.subplots(1, 1)
-        p.plot(fails, fail_order, color='black', alpha=0.3, linestyle='', marker='.', markersize=4)
-        p.plot(x, fit_fails, color='lightseagreen')
-
+        p.grid()
         # Plot the probabilistic fits
         for i in range(len(pri_fits)):
-            p.plot(x, pri_fits[i].flatten(), alpha=float(pri_probs[i]), color='sienna')
+            p.plot(x, pri_fits[i].flatten(), alpha=float(pri_probs[i]), color='yellowgreen')
         for i in range(len(pst_fits)):
-            p.plot(x, pst_fits[i].flatten(), alpha=float(pst_probs[i]), color='rebeccapurple')
+            p.plot(x, pst_fits[i].flatten(), alpha=float(pst_probs[i]), color='lightseagreen')
+
+        p.plot(x, fit_fails, color='indigo', linewidth=2)
+        p.plot(x, fit_fails_0, color='orchid', linestyle='--', linewidth=2)
+        p.plot(x, fit_fails_1, color='darkorchid', linestyle='--', linewidth=2)
+        p.plot(x, fit_fails_2, color='mediumvioletred', linestyle='--', linewidth=2)
+
+        p.plot(fails_0, fail_order_s, color='orchid', linestyle='', marker='.', markersize=8)
+        p.plot(fails_1, fail_order_s, color='darkorchid', linestyle='', marker='.', markersize=8)
+        p.plot(fails_2, fail_order_s, color='mediumvioletred', linestyle='', marker='.', markersize=8)
+
+        p.plot(f0, x0, color='orchid', linestyle='', marker='.', markersize=6)
+        p.plot(f1, x1, color='darkorchid', linestyle='', marker='.', markersize=6)
+        p.plot(f2, x2, color='mediumvioletred', linestyle='', marker='.', markersize=6)
+        #p.plot(fails, fail_order, color='black', linestyle='', marker='.', markersize=5)
 
         p.set_xscale('function', functions=(ax_fwdx, ax_bckx))
         ln_min, ln_max = jnp.log(min(fails)), jnp.log(max(fails))
-        lim_l = jnp.exp(ln_min - (0.05 * (ln_max - ln_min)))
+        lim_l = jnp.exp(ln_min - (0.01 * (ln_max - ln_min)))
         lim_h = jnp.exp(ln_max + (0.05 * (ln_max - ln_min)))
         p.set_xlim(lim_l, lim_h)
         p.set_yscale('function', functions=(ax_fwdy, ax_bcky))
@@ -542,6 +540,8 @@ def tddb_inference():
             ttf_m = e_model_ttf(temp=tm, a_o=a_o_infd, e_aa=e_aa_infd, k=BOLTZ_EV)
             ttf_h = e_model_ttf(temp=th, a_o=a_o_infd, e_aa=e_aa_infd, k=BOLTZ_EV)
 
+            mean_temps = jnp.linspace(300, 420, 13)
+            mean_infd = e_model_ttf(temp=mean_temps, a_o=a_o_infd, e_aa=e_aa_infd, k=BOLTZ_EV)
             print(f'Inference model predicted MTTF: 85C={ttf_l}, 125C={ttf_m}, 145C={ttf_h}')
 
 
@@ -595,13 +595,16 @@ def tddb_inference():
             y_ttfs['s']['p'] = funcs['p'](x_temps, *fits['s']['p']['e'][0])
             y_ttfs['l']['p'] = funcs['p'](x_temps, *fits['l']['p']['e'][0])
 
+            sb.set_context('notebook')
             fig, p = plt.subplots(1, 1)
+            p.grid()
             # If the Bayesian model was inferred plot that first since it adds many series to the plot
             if infer_spm:
                 for i in range(100):
                     p.plot(spm_temps[i], pri_spm_vals[i], color='burlywood', linestyle='-', alpha=float(pri_sample_probs[i]))
                     p.plot(spm_temps[i], spm_vals[i], color='royalblue', linestyle='-', alpha=float(sample_probs[i]))
 
+            p.plot(mean_temps, mean_infd, color='crimson')
             s_fails = jnp.concatenate((convert(ttfs['s']['e']['el']), convert(ttfs['s']['e']['em']), convert(ttfs['s']['e']['eh'])))
             p.plot(temps_s, s_fails, color='sienna', linestyle='', marker='.', markersize=15)
             l_fails = jnp.concatenate((convert(ttfs['l']['e']['el']), convert(ttfs['l']['e']['em']), convert(ttfs['l']['e']['eh'])))
@@ -639,9 +642,94 @@ def tddb_inference():
     # allow for a more realistic and effective assessment of reliability. Compare to point estimate + covariance fitting
     # via regression models, try and follow some frequentist paper.
 
+    def avg_same_time_measurements(measd, average=True, normalize=False):
+        avgd = pd.DataFrame()
+        t_prev = -10000
+        # Average the measurements of the same parameter taken near the same time relative to the total test length
+        for prm in measd['param'].unique():
+            prm_meas = measd.loc[measd['param'] == prm]
+            # Averaging for repeated measurement of devices during each measurement time step
+            for lot in range(prm_meas['lot #'].min(), prm_meas['lot #'].max() + 1):
+                for chp in range(prm_meas['chip #'].min(), prm_meas['chip #'].max() + 1):
+                    for dev in range(prm_meas['device #'].min(), prm_meas['device #'].max() + 1):
+                        # For every individual device measured, we find measured times that are close together (+-6 mins)
+                        dev_meas = prm_meas.loc[(prm_meas['device #'] == dev) &
+                                                (prm_meas['chip #'] == chp) &
+                                                (prm_meas['lot #'] == lot)]
+                        for t in dev_meas['time']:
+                            # Only process each time 'group' once
+                            if t <= t_prev - 360 or t >= t_prev + 360:
+                                meas_group = dev_meas.loc[(dev_meas['time'] >= t - 360) & (dev_meas['time'] <= t + 360)]
+                                # Find the average of all the measurements taken near the specified time
+                                avg = meas_group['measured'].mean()
+                                dev_meas.loc[dev_meas['time'] == t, 'measured'] = avg
+                                # Assemble the new dataframe by appending each averaged row in turn
+                                avgd = pd.concat((avgd, dev_meas.loc[dev_meas['time'] == t]), ignore_index=True)
+                                t_prev = t
+                        # print(f"Finished a device for param {prm}!")
+        return avgd
 
-    # Simulate four groups of two data sets, one with less observed data points, one with lots of points for each
-    # of the four commonly used TDDB models
+    def diff_from_max_val(measd, return_maxes=False):
+        vals = measd.copy()
+        for prm in vals['param'].unique():
+            prm_data = vals.loc[vals['param'] == prm]
+            for lot in range(prm_data['lot #'].min(), prm_data['lot #'].max() + 1):
+                for chp in range(prm_data['chip #'].min(), prm_data['chip #'].max() + 1):
+                    for dev in range(prm_data['device #'].min(), prm_data['device #'].max() + 1):
+                        max_val = prm_data.loc[(prm_data['device #'] == dev) & (prm_data['chip #'] == chp) & (
+                                    prm_data['lot #'] == lot), 'measured'].max()
+                        if return_maxes:
+                            vals.loc[(vals['param'] == prm) & (vals['device #'] == dev) & (vals['chip #'] == chp) & (
+                                        vals['lot #'] == lot), 'measured'] = max_val
+                        else:
+                            vals.loc[(vals['param'] == prm) & (vals['device #'] == dev) & (vals['chip #'] == chp) & (
+                                        vals['lot #'] == lot), 'measured'] -= max_val
+
+        return vals
+
+    def rename_series(measd, prm, new_name, device):
+        new_df = measd.copy()
+        new_df.loc[new_df['param'] == prm, 'device #'] = device
+        new_df.loc[new_df['param'] == prm, 'param'] = new_name
+        return new_df
+
+
+    study_three = False
+    if study_three:
+        # Import the data from a JSON file
+        h_data = gracefall.load_gerabaldi_report('C:/Users/Ian Hill/PycharmProjects/hill-scripts/data_files/idfbcamp_htol_lt_meas.json')
+        h_data = h_data['Measurements']
+        # Remove the measurement time that was only conducted for one of the lots
+        h_data.drop(h_data[h_data['time'] == 3034800].index, inplace=True)
+        h_data.drop(h_data[h_data['time'] == 3034860].index, inplace=True)
+        h_data.drop(h_data[h_data['time'] == 3034920].index, inplace=True)
+        # Rename direct measurement sensors
+        h_data = rename_series(h_data, prm='pbti_vth_direct', new_name='pbti_vth', device=4)
+        h_data = rename_series(h_data, prm='nbti_vth_direct', new_name='nbti_vth', device=4)
+        h_data = rename_series(h_data, prm='nhci_vth_direct', new_name='nhci_vth', device=4)
+        h_data = rename_series(h_data, prm='phci_vth_direct', new_name='phci_vth', device=4)
+        # Drop all but the vth sensor measurements
+        sensor_types = ['pbti_vth', 'nbti_vth', 'nhci_vth', 'phci_vth']
+        h_data = h_data[h_data['param'].isin(sensor_types)]
+        # Average the three measurements taken at each 100 hour mark
+        h_data = avg_same_time_measurements(h_data)
+        # Now extract the vth shift as the difference from the max value
+        h_data = diff_from_max_val(h_data)
+        # Don't care about which board the chip was on, just the chip IDs
+        h_data['chip #'] = h_data['chip #'] + (2 * h_data['lot #'])
+
+        deg_data = {}
+        for t in jnp.linspace(0, 3_600_000, 11):
+            hours = int(t / 3600)
+            deg_data[f't{hours}'] = {}
+            for sensor in sensor_types:
+                vth = h_data.loc[(h_data['param'] == sensor) & (h_data['time'] == t)].drop(columns=['param', 'lot #', 'time'])
+                vth = vth.sort_values(['chip #', 'device #'], ascending=[True, True])
+                vth_array = jnp.array(vth['measured'].values).reshape((vth['chip #'].nunique(), vth['device #'].nunique()))
+                deg_data[f't{hours}'][sensor] = vth_array
+
+        # Now to work with the extracted measurement data
+        print('ready')
 
 
 if __name__ == '__main__':
