@@ -66,9 +66,12 @@ class AnalysisManager:
             report.add_measurements(as_dataframe)
             gracefall.static.gen_violinplot(report.measurements.loc[report.measurements['param'] == site])
 
-    def sim_test_measurements(self, alt_priors=None):
+    def sim_test_measurements(self, alt_priors=None, rtrn_tr=False):
         rng = self._derive_key()
-        measd = self.relmdl.sample_measurements(rng, self.test.config, self.test.conditions, priors=alt_priors)
+        if rtrn_tr:
+            measd = self.relmdl.sample(rng, self.test)
+        else:
+            measd = self.relmdl.sample_measurements(rng, self.test.config, self.test.conditions, priors=alt_priors, rtrn_tr=False)
         return measd
 
     def do_inference(self, observations, test: ReliabilityTest = None, auto_update_prior=True):

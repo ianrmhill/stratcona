@@ -165,8 +165,8 @@ def tddb_inference():
         var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.01)])
         #mb_w.add_hyperlatent('k_dev', dists.Normal, {'loc': 2, 'scale': 0.2}, transform=var_tf)
         #mb_w.add_hyperlatent('sc_dev', dists.Normal, {'loc': 2, 'scale': 0.2}, transform=var_tf)
-        mb_w.add_hyperlatent('k_lot', dists.Normal, {'loc': 6, 'scale': 0.2}, transform=var_tf)
-        mb_w.add_hyperlatent('sc_lot', dists.Normal, {'loc': 6, 'scale': 0.2}, transform=var_tf)
+        mb_w.add_hyperlatent('k_lot', dists.Normal, {'loc': 8, 'scale': 0.2}, transform=var_tf)
+        mb_w.add_hyperlatent('sc_lot', dists.Normal, {'loc': 8, 'scale': 0.2}, transform=var_tf)
         #mb_w.add_latent('k', nom='k_nom', dev='k_dev', chp=None, lot='k_lot')
         #mb_w.add_latent('sc', nom='sc_nom', dev='sc_dev', chp=None, lot='sc_lot')
         mb_w.add_latent('k', nom='k_nom', dev=None, chp=None, lot='k_lot')
@@ -175,15 +175,70 @@ def tddb_inference():
         mb_w.add_dependent('sc_pos', lambda sc: jnp.log(1 + jnp.exp(sc)))
         mb_w.add_measured('ttf', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'}, num_devs)
 
-        am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92733429)
+        am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633819)
 
         am_w.set_test_definition(test_130)
-        # TODO: Return the three values for k_pos and sc_pos used to generate each series, then can plot the 'true' functions
-        ttfs = am_w.sim_test_measurements()
+        ttfs = am_w.sim_test_measurements(rtrn_tr=True)
+
+        sim_ks, sim_scs = ttfs['e_ttf_k_pos'], ttfs['e_ttf_sc_pos']
+        ttfs = {'e': {'ttf': ttfs['e_ttf']}}
         ttfs_0 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 0]}}
         ttfs_1 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 1]}}
         ttfs_2 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 2]}}
 
+        fails_0, fails_1, fails_2 = convert(ttfs_0['e']), convert(ttfs_1['e']), convert(ttfs_2['e'])
+        fails = jnp.concatenate((fails_0, fails_1, fails_2))
+        fails_0, fails_1, fails_2 = np.sort(fails_0), np.sort(fails_1), np.sort(fails_2)
+        n = len(fails_0)
+        i = jnp.arange(1, n + 1)
+        fail_order_s = (i - 0.5) / (n + 0.25)
+
+        # Generate the line for the 'true' weibull distributions used to simulate the data
+        sim_fits = []
+        x = jnp.logspace(-2, 1, 50)
+        for i in range(3):
+            sim_fits.append(CDF(x, sim_ks[0, i], sim_scs[0, i]))
+
+        # Plot the simulated data
+        # Functions to correctly set up the axis scales
+        ax_fwdy = lambda p: jnp.log(jnp.fmax(1e-20, -jnp.log(jnp.fmax(1e-20, 1 - p))))
+        ax_bcky = lambda q: 1 - jnp.exp(-jnp.exp(q))
+        ax_fwdx = lambda x: jnp.log(jnp.fmax(1e-20, x))
+        ax_bckx = lambda y: jnp.exp(y)
+
+        sb.set_context('notebook')
+        fig, p = plt.subplots(1, 1)
+        p.grid()
+
+        p.plot(fails_0, fail_order_s, color='orchid', linestyle='', marker='.', markersize=8)
+        p.plot(fails_1, fail_order_s, color='darkorchid', linestyle='', marker='.', markersize=8)
+        p.plot(fails_2, fail_order_s, color='mediumvioletred', linestyle='', marker='.', markersize=8)
+
+        p.plot(x, sim_fits[0], color='grey', linestyle='--', linewidth=2)
+        p.plot(x, sim_fits[1], color='grey', linestyle='--', linewidth=2)
+        p.plot(x, sim_fits[2], color='grey', linestyle='--', linewidth=2)
+
+        #p.plot(f0, x0, color='orchid', linestyle='', marker='.', markersize=6)
+        #p.plot(f1, x1, color='darkorchid', linestyle='', marker='.', markersize=6)
+        #p.plot(f2, x2, color='mediumvioletred', linestyle='', marker='.', markersize=6)
+        # p.plot(fails, fail_order, color='black', linestyle='', marker='.', markersize=5)
+
+        p.set_xscale('function', functions=(ax_fwdx, ax_bckx))
+        ln_min, ln_max = jnp.log(min(fails)), jnp.log(max(fails))
+        lim_l = jnp.exp(ln_min - (0.01 * (ln_max - ln_min)))
+        lim_h = jnp.exp(ln_max + (0.05 * (ln_max - ln_min)))
+        p.set_xlim(lim_l, lim_h)
+        p.set_yscale('function', functions=(ax_fwdy, ax_bcky))
+        p.set_ylim(0.01, 0.99)
+        weibull_ticks = [0.01, 0.02, 0.05, 0.1, 0.25, 0.50, 0.75, 0.90, 0.96, 0.99]
+        p.set_yticks(weibull_ticks)
+
+        p.set_xlabel('Time to Failure (years)')
+        p.set_ylabel('CDF [ln(ln(1-F))]')
+        plt.show()
+
+
+        # Now try to inference models to the simulated data
         test_130_sing = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, {'e': {'temp': th, 'vg': 1.1}})
         k1, k2, k3, k4 = rand.split(rand.key(428027234), 4)
         eval_sites = ['e_ttf_k_dev', 'e_ttf_sc_dev', 'e_k_lot', 'e_sc_lot',
@@ -242,9 +297,7 @@ def tddb_inference():
         fails = fails[srtd_inds]
         srtd_lots = lots[srtd_inds]
 
-        fails_0 = np.sort(fails_0)
-        fails_1 = np.sort(fails_1)
-        fails_2 = np.sort(fails_2)
+
 
         n0 = np.argwhere(srtd_lots != 0)
         f0 = jnp.delete(fails, n0)
@@ -256,11 +309,7 @@ def tddb_inference():
         f2 = jnp.delete(fails, n2)
         x2 = jnp.delete(fail_order, n2)
 
-        # Functions to correctly set up the axis scales
-        ax_fwdy = lambda p: jnp.log(jnp.fmax(1e-20, -jnp.log(jnp.fmax(1e-20, 1 - p))))
-        ax_bcky = lambda q: 1 - jnp.exp(-jnp.exp(q))
-        ax_fwdx = lambda x: jnp.log(jnp.fmax(1e-20, x))
-        ax_bckx = lambda y: jnp.exp(y)
+
 
         sb.set_context('notebook')
         fig, p = plt.subplots(1, 1)
@@ -279,6 +328,10 @@ def tddb_inference():
         p.plot(fails_0, fail_order_s, color='orchid', linestyle='', marker='.', markersize=8)
         p.plot(fails_1, fail_order_s, color='darkorchid', linestyle='', marker='.', markersize=8)
         p.plot(fails_2, fail_order_s, color='mediumvioletred', linestyle='', marker='.', markersize=8)
+
+        p.plot(x, sim_fits[0], color='grey', linestyle='--', linewidth=2)
+        p.plot(x, sim_fits[1], color='grey', linestyle='--', linewidth=2)
+        p.plot(x, sim_fits[2], color='grey', linestyle='--', linewidth=2)
 
         p.plot(f0, x0, color='orchid', linestyle='', marker='.', markersize=6)
         p.plot(f1, x1, color='darkorchid', linestyle='', marker='.', markersize=6)
