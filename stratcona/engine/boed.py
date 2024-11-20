@@ -6,6 +6,7 @@ import time as t
 import datetime
 import json
 import warnings
+import jax.numpy as jnp
 import numpy as np
 import wquantiles
 import pandas as pd
@@ -21,16 +22,66 @@ __all__ = ['eig_smc_refined', 'bed_runner']
 NATS_TO_BITS = np.log2(np.e)
 # Machine precision is defaulted to 32 bits since most instruments don't have 64 bit precision and/or noise floors. Less
 # precise but smaller entropy values makes things nicer to deal with.
-CARDINALITY_MANTISSA_64BIT = 2 ** 53
+CARDINALITY_MANTISSA_64BIT = float(2 ** 53)
 # Marginal probability below which a sample observed 'y' will be excluded from EIG computation
 LOW_PROB_CUTOFF = 1e-50
 # Gap between trace samples to reduce memory and performance impact
 TR_GAP = 20
 
 
-def p_mx(x: np.ndarray, a: np.ndarray, b: np.ndarray):
+def p_mx(x: np.ndarray, a: float, b: float):
     """The probability distribution function of a continuous uniform distribution on the interval [a, b]."""
     return np.average(np.where(np.less_equal(a, x) & np.less_equal(x, b), 1 / (b - a), 0))
+
+
+def entropy_new(samples, lp_func, p_args=None, in_bits=False,
+            limiting_density_range: tuple = None, precision=CARDINALITY_MANTISSA_64BIT):
+    # Entropy is predicated on iterating over all possible values that theta can take, thus the overall probability
+    # summed across all samples of theta is 1. In the continuous case or to compute via sampling, we need to normalize
+    # with respect to the probability sum across all the samples of theta.
+    lps = lp_func(samples, *p_args) if p_args else lp_func(samples)
+    p_s = jnp.exp(lps)
+    p_s_theory = jnp.sum(p_s)
+
+    if limiting_density_range is not None:
+        a, b = limiting_density_range[0], limiting_density_range[1]
+        p_u = p_mx(samples, a, b)
+        p_u_tot = jnp.sum(p_u)
+        prob = p_s / p_u
+        lps = jnp.log(prob)
+
+    h = jnp.sum(-p_s * lps)
+    h_norm = jnp.sum(p_s)
+    h = h / h_norm
+
+    # Try to inform the user on how well the samples captured the probability distribution
+    # Metric for detecting whether the full high probability region of the distribution was sampled well
+    if limiting_density_range is not None:
+        s_to_u_ratio = h_norm / p_u_tot
+        if s_to_u_ratio > 1:
+            print(f"Sampling successfully found high probability regions.")
+            if s_to_u_ratio > 10:
+                print(f"Bounded region of possibility may be unnecessarily large. Ratio: {s_to_u_ratio}.")
+        elif s_to_u_ratio < 0.1:
+            print(f"Sampling did not find high probability regions. Rework likely required. Ratio: {s_to_u_ratio}.")
+        else:
+            print(f"Sampling went acceptably well.")
+
+        # Inform the user if the bounded region u may be too small
+        oob_percent = (p_s_theory - h_norm) / p_s_theory
+        if oob_percent > 0.01:
+            print(f"{round(oob_percent * 100, 2)}% of the sampled PDF fell outside of u bounds. You may want to extend u.")
+
+        # For limiting density, the entropy is log(N) + h, where N is the number of discrete points in the interval
+        # [a, b]. For our floating point representations, we assume that the exponent bits determine a and b, then
+        # N is the number of possible values for the mantissa bits, i.e., the cardinality. This way N doesn't change
+        # regardless of if our random variable support is [0, 1] or [-1e10, 1e10] and represents a physical property
+        # of our measurements in terms of their precision once converted to floating point representations.
+        # Note that 'h' will always be negative until the precision has been added in the limiting density formulation.
+        h += jnp.log(precision)
+
+    # Support representing entropy in units of 'nats' or 'bits'
+    return h if not in_bits else h * NATS_TO_BITS
 
 
 def entropy(x_sampler, p, m=1e5, p_args=None, in_bits=False,

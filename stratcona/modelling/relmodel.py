@@ -152,6 +152,7 @@ class ReliabilityModel():
                 lp += tr[site]['fn'].log_prob(vals[site])
             return lp
 
-        num_vals = next(iter(site_vals.values())).shape[0]
+        shape = next(iter(site_vals.values())).shape
+        num_vals = 1 if len(shape) == 0 else shape[0]
         cond_vals = [None for _ in range(num_vals)] if conditional is None else conditional
         return jax.vmap(logp, axis_size=num_vals)(rand.split(rng_key, num_vals), site_vals, cond_vals)

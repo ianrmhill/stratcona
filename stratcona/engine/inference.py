@@ -91,7 +91,7 @@ def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 
     diverging = extra_info['diverging'] if 'diverging' in extra_info else 0
     diverging = jnp.sum(diverging)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
-    print(convergence_stats)
+    #print(convergence_stats)
     print(f'Divergences: {diverging}')
 
     new_prior = {}

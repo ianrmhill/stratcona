@@ -71,7 +71,7 @@ class AnalysisManager:
         if rtrn_tr:
             measd = self.relmdl.sample(rng, self.test)
         else:
-            measd = self.relmdl.sample_measurements(rng, self.test.config, self.test.conditions, priors=alt_priors, rtrn_tr=False)
+            measd = self.relmdl.sample_measurements(rng, self.test.config, self.test.conditions, priors=alt_priors)
         return measd
 
     def do_inference(self, observations, test: ReliabilityTest = None, auto_update_prior=True):

@@ -20,6 +20,7 @@ import pandas as pd
 import seaborn as sb
 from matplotlib import pyplot as plt
 from matplotlib.collections import PolyCollection
+import matplotlib.lines as pltlines
 
 import gracefall
 
@@ -85,7 +86,15 @@ def weibull_inference():
     am_w.set_test_definition(test_130)
     ttfs = am_w.sim_test_measurements(rtrn_tr=True)
 
+    # Determine the probability of the sampled lot distributions under the simulation model
     sim_ks, sim_scs = ttfs['e_ttf_k_pos'], ttfs['e_ttf_sc_pos']
+    lot_vals = (ttfs['e_k_lot'], ttfs['e_sc_lot'])
+    k1, k2 = rand.split(rand.key(7932854))
+    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130, {'e_k_lot': jnp.full_like(lot_vals[0], 0.0),
+                                                        'e_sc_lot': jnp.full_like(lot_vals[1], 0.0)}, ttfs))
+    lot_prob = jnp.exp(am_w.relmdl.logp(k2, test_130, {'e_k_lot': lot_vals[0], 'e_sc_lot': lot_vals[1]}, ttfs))
+    normd_probs = lot_prob / mean_prob
+
     ttfs = {'e': {'ttf': ttfs['e_ttf']}}
     ttfs_0 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 0]}}
     ttfs_1 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 1]}}
@@ -184,6 +193,7 @@ def weibull_inference():
     # Plot the simulated data and frequentist fits to that data
     ######################################################
     sb.set_context('notebook')
+    sb.set_theme(style='ticks', font='Times New Roman')
     fig, p = plt.subplots(1, 1)
     p.grid()
 
@@ -191,7 +201,6 @@ def weibull_inference():
     #p.plot(fails_1, fail_order_s, color='darkorchid', linestyle='', marker='.', markersize=8)
     #p.plot(fails_2, fail_order_s, color='mediumvioletred', linestyle='', marker='.', markersize=8)
 
-    p.plot(x, fit_fails, color='darkblue', linewidth=2)
     #p.plot(x, fit_fails_0, color='orchid', linestyle='-', linewidth=2)
     #p.plot(x, fit_fails_1, color='darkorchid', linestyle='-', linewidth=2)
     #p.plot(x, fit_fails_2, color='mediumvioletred', linestyle='-', linewidth=2)
@@ -203,15 +212,17 @@ def weibull_inference():
     col = PolyCollection([polygon], color='darkblue', alpha=0.3)
     p.add_collection(col, autolim=False)
 
-    p.plot(f0, x0, color='darkorange', linestyle='', marker='.', markersize=8)
-    p.plot(f1, x1, color='sienna', linestyle='', marker='.', markersize=8)
-    p.plot(f2, x2, color='gold', linestyle='', marker='.', markersize=8)
-
-    p.plot(x, sim_fits[0], color='darkorange', linestyle='--', linewidth=2)
-    p.plot(x, sim_fits[1], color='sienna', linestyle='--', linewidth=2)
-    p.plot(x, sim_fits[2], color='gold', linestyle='--', linewidth=2)
 
 
+    p.plot(x, sim_fits[0], color='darkorange', linestyle='--', linewidth=2, label=f'Lot 1 - normalized sim. prob.: {round(float(normd_probs[0, 0] * 100), 1)}%')
+    p.plot(x, sim_fits[1], color='sienna', linestyle='--', linewidth=2, label=f'Lot 2 - normalized sim. prob.: {round(float(normd_probs[0, 1] * 100), 1)}%')
+    p.plot(x, sim_fits[2], color='gold', linestyle='--', linewidth=2, label=f'Lot 3 - normalized sim. prob.: {round(float(normd_probs[0, 2] * 100), 1)}%')
+
+    p.plot(x, fit_fails, color='darkblue', linewidth=2)
+
+    p.plot(f0, x0, color='darkorange', linestyle='', marker='.', markersize=6)
+    p.plot(f1, x1, color='sienna', linestyle='', marker='.', markersize=6)
+    p.plot(f2, x2, color='gold', linestyle='', marker='.', markersize=6)
 
     # Set up the plot axes scales and bounds
     p.set_xscale('function', functions=(fwdx, bckx))
@@ -227,7 +238,19 @@ def weibull_inference():
 
     p.set_xlabel('Time to Failure (years)')
     p.set_ylabel('CDF [ln(ln(1-F))]')
-    #plt.show()
+
+    hndl, lbls = p.get_legend_handles_labels()
+    lgnd1 = pltlines.Line2D([0], [0], color='darkblue', linestyle='-')
+    lgnd2 = pltlines.Line2D([0], [0], color='black', linestyle='', marker='.')
+    hndl.insert(0, lgnd1)
+    lbls.insert(0, 'Weibull MLE fit to simulation data')
+    hndl.insert(0, lgnd2)
+    lbls.insert(0, 'Simulated data - hue by source lot')
+    p.legend(hndl, lbls, loc='lower right')
+
+    # Add annotations that highlight key elements for readers
+    p.annotate('Lot 1 distribution outside 95% confidence\ninterval of frequentist MLE fit', (3.5, 0.96), (0.3, 0.85),
+               arrowprops={'arrowstyle': 'simple', 'color': 'black'})
 
 
     ######################################################
@@ -239,8 +262,8 @@ def weibull_inference():
                   'k_nom', 'sc_nom', 'k_dev', 'sc_dev', 'k_lot', 'sc_lot']
 
     # Priors for the SPM are defined here
-    am_w.relmdl.hyl_beliefs = {'k_nom': {'loc': 2.0, 'scale': 1.5}, 'k_dev': {'loc': 5, 'scale': 3}, 'k_lot': {'loc': 12, 'scale': 3},
-                               'sc_nom': {'loc': 1.8, 'scale': 0.8}, 'sc_dev': {'loc': 5, 'scale': 3}, 'sc_lot': {'loc': 13, 'scale': 5}}
+    am_w.relmdl.hyl_beliefs = {'k_nom': {'loc': 2.0, 'scale': 1.5}, 'k_dev': {'loc': 5, 'scale': 3}, 'k_lot': {'loc': 15, 'scale': 5},
+                               'sc_nom': {'loc': 1.8, 'scale': 0.8}, 'sc_dev': {'loc': 5, 'scale': 3}, 'sc_lot': {'loc': 15, 'scale': 5}}
     prm_samples = am_w.relmdl.sample(k1, test_130_sing, 400)
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
     pri_probs = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, ltnt_vals, prm_samples))
@@ -259,17 +282,27 @@ def weibull_inference():
 
     pst_fits = CDF(x, prm_samples['e_ttf_k_pos'], prm_samples['e_ttf_sc_pos'])
 
+    # Determine the probability of the simulation traces under the posterior inference model
+    k1, k2 = rand.split(rand.key(7932854))
+    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130, {'e_k_lot': jnp.full_like(lot_vals[0], 0.0),
+                                                        'e_sc_lot': jnp.full_like(lot_vals[1], 0.0)}, ttfs))
+    lot_prob = jnp.exp(am_w.relmdl.logp(k2, test_130, {'e_k_lot': lot_vals[0], 'e_sc_lot': lot_vals[1]}, ttfs))
+    pst_sim_probs = lot_prob / mean_prob
+    # FIXME: This only accounts for lot probability, should probably also account for nom variability and uncertainty
+    print(f'Posterior model simulation lot probs: {pst_sim_probs}')
+
     ######################################################
     # Generate the second plot that shows the Bayesian inference approach
     ######################################################
-    sb.set_context('notebook')
     fig, p = plt.subplots(1, 1)
     p.grid()
     # Plot the probabilistic fits
     for i in range(len(pri_fits)):
-        p.plot(x, pri_fits[i].flatten(), alpha=float(pri_probs[i]), color='skyblue')
+        lbl = 'Prior predictive distribution' if i == 0 else None
+        p.plot(x, pri_fits[i].flatten(), alpha=float(pri_probs[i]), color='skyblue', label=lbl)
     for i in range(len(pst_fits)):
-        p.plot(x, pst_fits[i].flatten(), alpha=float(pst_probs[i]), color='darkblue')
+        lbl = 'Posterior predictive distribution' if i == 0 else None
+        p.plot(x, pst_fits[i].flatten(), alpha=float(pst_probs[i]), color='darkblue', label=lbl)
 
     #p.plot(x, fit_fails, color='indigo', linewidth=2)
     #p.plot(x, fit_fails_0, color='orchid', linestyle='--', linewidth=2)
@@ -284,9 +317,9 @@ def weibull_inference():
     p.plot(x, sim_fits[1], color='sienna', linestyle='--', linewidth=2)
     p.plot(x, sim_fits[2], color='gold', linestyle='--', linewidth=2)
 
-    p.plot(f0, x0, color='darkorange', linestyle='', marker='.', markersize=8)
-    p.plot(f1, x1, color='sienna', linestyle='', marker='.', markersize=8)
-    p.plot(f2, x2, color='gold', linestyle='', marker='.', markersize=8)
+    p.plot(f0, x0, color='darkorange', linestyle='', marker='.', markersize=6)
+    p.plot(f1, x1, color='sienna', linestyle='', marker='.', markersize=6)
+    p.plot(f2, x2, color='gold', linestyle='', marker='.', markersize=6)
 
     p.set_xscale('function', functions=(fwdx, bckx))
     ln_min, ln_max = jnp.log(min(fails)), jnp.log(max(fails))
@@ -301,6 +334,25 @@ def weibull_inference():
 
     p.set_xlabel('Time to Failure (years)')
     p.set_ylabel('CDF [ln(ln(1-F))]')
+
+    hndl, lbls = p.get_legend_handles_labels()
+    lgnd1 = pltlines.Line2D([0], [0], color='black', linestyle='--')
+    lgnd2 = pltlines.Line2D([0], [0], color='black', linestyle='', marker='.')
+    hndl.insert(0, lgnd1)
+    lbls.insert(0, 'Lot simulation distributions')
+    hndl.insert(0, lgnd2)
+    lbls.insert(0, 'Simulated data, coloured by lot')
+
+    # plot the legend
+    leg = p.legend(hndl, lbls, loc='lower right')
+    for lbl in leg.legend_handles:
+        lbl.set_alpha(1)
+
+    # Add annotations that highlight key elements for readers
+    p.annotate(f'Lot 1 normalized probability\nunder posterior: {round(float(pst_sim_probs[0, 0] * 100), 1)}%',
+               (3.5, 0.96), (0.4, 0.85),
+               arrowprops={'arrowstyle': 'simple', 'color': 'black'})
+
     plt.show()
 
 

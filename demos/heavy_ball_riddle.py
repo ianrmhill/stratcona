@@ -1,9 +1,7 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
-import pytensor.tensor as pt
-import pytensor
+import jax.numpy as jnp
 import pymc
 
 # TEMP
@@ -18,12 +16,13 @@ import stratcona
 
 
 def riddle_demo():
-    mb = stratcona.ModelBuilder(mdl_name='Heavy Ball Riddle')
+    mb = stratcona.SPMBuilder(mdl_name='Heavy Ball Riddle')
 
     def scale_weigh(i_heavy_ball, b0p, b1p, b2p, b3p, b4p, b5p, b6p, b7p):
-        positions = pt.as_tensor([b0p, b1p, b2p, b3p, b4p, b5p, b6p, b7p])
-        weights = pt.ones_like(positions)
-        adj_weights = pt.subtensor.set_subtensor(weights[i_heavy_ball, :, :], 2)
+        positions = jnp.array([b0p, b1p, b2p, b3p, b4p, b5p, b6p, b7p])
+        weights = jnp.ones_like(positions)
+        weights[i_heavy_ball] = 2
+        adj_weights = weights
 
         w_one = pt.sum(pt.where(pt.eq(positions, 0), 1, 0) * adj_weights)
         w_two = pt.sum(pt.where(pt.eq(positions, 1), 1, 0) * adj_weights)
@@ -31,7 +30,7 @@ def riddle_demo():
         scale_state = pt.where(w_one < w_two, -1, scale_state)
         return scale_state
 
-    mb.add_latent_variable('i_heavy_ball', pymc.Categorical,
+    mb.add_hyperlatent('i_heavy_ball', pymc.Categorical,
                            {'p': [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]})
 
     mb.define_experiment_params(['b0p', 'b1p', 'b2p', 'b3p', 'b4p', 'b5p', 'b6p', 'b7p'],
