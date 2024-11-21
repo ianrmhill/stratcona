@@ -3,3 +3,4 @@
 
 from . import boed
 from . import inference
+from . import metrics
