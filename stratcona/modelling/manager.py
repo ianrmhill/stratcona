@@ -21,6 +21,7 @@ import gracefall
 from stratcona.assistants.probability import shorthand_compile # noqa: ImportNotAtTopOfFile
 from stratcona.engine.inference import inference_model
 from stratcona.engine.boed import *
+from stratcona.engine.bed import bed_run
 from stratcona.engine.metrics import *
 from stratcona.modelling.builder import SPMBuilder
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement
@@ -95,3 +96,7 @@ class AnalysisManager:
             print(f'Target lifespan of {self.relreq.target_lifespan} met! Predicted: {lifespan}.')
         else:
             print(f'Target lifespan of {self.relreq.target_lifespan} not met! Predicted: {lifespan}.')
+
+    def find_best_experiment(self, l, n, m, exp_sampler):
+        rng = self._derive_key()
+        return bed_run(rng, l, n, m, exp_sampler, self.relmdl)

@@ -4,6 +4,7 @@
 from typing import Callable
 
 import jax
+import jax.numpy as jnp
 import jax.random as rand
 
 import numpyro as npyro
@@ -131,6 +132,32 @@ class ReliabilityModel():
 
         return jax.vmap(sampler, axis_size=num_samples)(rand.split(rng_key, num_samples))
 
+    def sample_new(self, rng_key: rand.key, test: ReliabilityTest, num_samples: tuple = (1,), keep_sites: list = None,
+                   conditionals: dict = None):
+        # Now handle any conditioning where sample sites are fixed to values
+        #mdl = self.test_spm if conditionals is None else condition(self.test_spm, data=conditionals)
+        # Convert any keep_sites that need more complex node names
+        sites = keep_sites.copy()
+        for i, site in enumerate(sites):
+            if site in self.test_measurements:
+                sites[i] = f'{next(iter(test.config))}_{site}'
+
+        def sampler(rng, set_vals):
+            mdl = self.test_spm if set_vals is None else condition(self.test_spm, data=set_vals)
+            seeded = seed(mdl, rng)
+            tr = trace(seeded).get_trace(test.config, test.conditions, self.hyl_beliefs, self.param_vals)
+            samples = {site: tr[site]['value'] for site in tr}
+            return dict((k, samples[k]) for k in sites) if sites is not None else samples
+
+        wrapped = sampler
+        size = 1
+        for i, dim in enumerate(num_samples):
+            size *= dim
+            wrapped = jax.vmap(wrapped, 0, 0)
+        keys = jnp.reshape(rand.split(rng_key, size), num_samples)
+
+        return wrapped(keys, conditionals)
+
     def hyl_logp(self, rng_key: rand.key, test: ReliabilityTest, hyl_vals: dict):
         mdl = condition(self.test_spm, data=hyl_vals)
 
@@ -154,5 +181,26 @@ class ReliabilityModel():
 
         shape = next(iter(site_vals.values())).shape
         num_vals = 1 if len(shape) == 0 else shape[0]
-        cond_vals = [None for _ in range(num_vals)] if conditional is None else conditional
+        #cond_vals = [None for _ in range(num_vals)] if conditional is None else conditional
+        cond_vals = conditional
         return jax.vmap(logp, axis_size=num_vals)(rand.split(rng_key, num_vals), site_vals, cond_vals)
+
+    def logp_new(self, rng_key: rand.key, test: ReliabilityTest, site_vals: dict, conditional: dict, dims: tuple):
+
+        def logp(rng, vals, cond):
+            mdl = self.test_spm if cond is None else condition(self.test_spm, data=cond)
+            seeded = seed(mdl, rng)
+            tr = trace(seeded).get_trace(test.config, test.conditions, self.hyl_beliefs, self.param_vals)
+            lp = 0
+            for site in vals:
+                lp += jnp.sum(tr[site]['fn'].log_prob(vals[site]))
+            return lp
+
+        wrapped = logp
+        size = 1
+        for dim in dims:
+            size *= dim
+            wrapped = jax.vmap(wrapped, 0, 0)
+
+        keys = jnp.reshape(rand.split(rng_key, size), dims)
+        return wrapped(keys, site_vals, conditional)
