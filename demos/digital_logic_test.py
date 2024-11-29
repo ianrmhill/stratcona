@@ -29,22 +29,12 @@ def logic_test_demo():
         n5 = jnp.where(n5_f == 2, n3 & n4, n5_f)
         return n5
 
-    def n4_testpoint(n1_f, n2_f, n4_f, inputs):
-        n1 = jnp.where(n1_f == 2, inputs[0], n1_f)
-        n2 = jnp.where(n2_f == 2, inputs[1], n2_f)
-        n4 = jnp.where(n4_f == 2, n1 | n2, n4_f)
-        return n4
-
     def is_faulty(n1_f, n2_f, n3_f, n4_f, n5_f):
         faulty = jnp.where(n1_f != 2, True, False)
         faulty = jnp.where(n2_f != 2, True, faulty)
         faulty = jnp.where(n3_f != 2, True, faulty)
         faulty = jnp.where(n4_f != 2, True, faulty)
         faulty = jnp.where(n5_f != 2, True, faulty)
-        return faulty
-
-    def n3_is_sa0(n3_f):
-        faulty = jnp.where(n3_f == 0, True, False)
         return faulty
 
     mb.add_hyperlatent('n1_f', dists.Categorical, {'probs': jnp.array([0.05, 0.05, 0.9])})
@@ -54,12 +44,10 @@ def logic_test_demo():
     mb.add_hyperlatent('n5_f', dists.Categorical, {'probs': jnp.array([0.05, 0.05, 0.9])})
 
     mb.add_dependent('o', run_circuit)
-    mb.add_dependent('n4', n4_testpoint)
     mb.add_predictor('faulty', is_faulty, {})
-    mb.add_predictor('n3_sa0', n3_is_sa0, {})
     mb.add_params(o_var=0.03)
     mb.add_measured('v_meas', dists.Normal, {'loc': 'o', 'scale': 'o_var'}, 1)
-    mb.add_measured('n4_meas', dists.Normal, {'loc': 'n4', 'scale': 'o_var'}, 1)
+
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48939837832)
 
@@ -73,8 +61,9 @@ def logic_test_demo():
 
     am.relmdl.y_s_override = True
     def y_s_scale(d, num_samples):
-        return {'t1_v_meas': jnp.array([[[[0]]], [[[1]]], [[[0]]], [[[1]]]], dtype=jnp.float32),
-                't1_n4_meas': jnp.array([[[[0]]], [[[0]]], [[[1]]], [[[1]]]], dtype=jnp.float32)}
+        return {'t1_v_meas': jnp.array([[[[0]]], [[[1]]], [[[0]]], [[[1]]], [[[0]]], [[[1]]], [[[0]]], [[[1]]]], dtype=jnp.float32),
+                't2_v_meas': jnp.array([[[[0]]], [[[0]]], [[[1]]], [[[1]]], [[[0]]], [[[0]]], [[[1]]], [[[1]]]], dtype=jnp.float32),
+                't3_v_meas': jnp.array([[[[0]]], [[[0]]], [[[0]]], [[[0]]], [[[1]]], [[[1]]], [[[1]]], [[[1]]]], dtype=jnp.float32)}
     am.relmdl.y_s_custom = y_s_scale
 
     am.relmdl.i_s_override = True
@@ -86,27 +75,38 @@ def logic_test_demo():
         n4 = jnp.tile(jnp.repeat(fault_states, 3*3*3), 3)
         n5 = jnp.repeat(fault_states, 3*3*3*3)
 
-        n1 = jnp.repeat(jnp.expand_dims(n1, 0), 4, axis=0)
-        n2 = jnp.repeat(jnp.expand_dims(n2, 0), 4, axis=0)
-        n3 = jnp.repeat(jnp.expand_dims(n3, 0), 4, axis=0)
-        n4 = jnp.repeat(jnp.expand_dims(n4, 0), 4, axis=0)
-        n5 = jnp.repeat(jnp.expand_dims(n5, 0), 4, axis=0)
+        n1 = jnp.repeat(jnp.expand_dims(n1, 0), 8, axis=0)
+        n2 = jnp.repeat(jnp.expand_dims(n2, 0), 8, axis=0)
+        n3 = jnp.repeat(jnp.expand_dims(n3, 0), 8, axis=0)
+        n4 = jnp.repeat(jnp.expand_dims(n4, 0), 8, axis=0)
+        n5 = jnp.repeat(jnp.expand_dims(n5, 0), 8, axis=0)
         return {'n1_f': n1, 'n2_f': n2, 'n3_f': n3, 'n4_f': n4, 'n5_f': n5}
     am.relmdl.i_s_custom = i_s_ball_pos
 
-    exp_sampler = stratcona.assistants.iterator.iter_sampler([
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([0, 0, 0])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([0, 0, 1])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([0, 1, 0])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([0, 1, 1])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([1, 0, 0])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([1, 0, 1])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([1, 1, 0])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([1, 1, 1])}}),
-    ])
-    eigs = am.find_best_experiment(8, 4, 243, exp_sampler)
+    tests = [jnp.array([0, 0, 0]), jnp.array([0, 0, 1]), jnp.array([0, 1, 0]), jnp.array([0, 1, 1]),
+             jnp.array([1, 0, 0]), jnp.array([1, 0, 1]), jnp.array([1, 1, 0]), jnp.array([1, 1, 1])]
+    test_list = []
+    for i in range(8):
+        for j in range(8):
+            for k in range(8):
+                test = stratcona.ReliabilityTest(
+                    {'t1': {'lot': 1, 'chp': 1}, 't2': {'lot': 1, 'chp': 1}, 't3': {'lot': 1, 'chp': 1}},
+                    {'t1': {'inputs': tests[i]}, 't2': {'inputs': tests[j]}, 't3': {'inputs': tests[k]}})
+                test_list.append(test)
+
+    exp_sampler = stratcona.assistants.iterator.iter_sampler(test_list)
+
+    eigs = am.find_best_experiment(512, 8, 243, exp_sampler)
     eigs_bits = [eigs[i] * 1.442695 for i in range(len(eigs))]
-    print(eigs)
+    #eigs_bits = eigs
+    eig_max = 0
+    test_max = None
+    for i, test in enumerate(test_list):
+        if eigs_bits[i] > eig_max:
+            eig_max = eigs_bits[i]
+            test_max = test
+    print(f'Max: {test_max.conditions}: {eig_max} bits')
+    #print(f'Max: {test_max.conditions}: {eig_max * 100}%')
 
     ### Simulate the Experiment Step ###
     observed_pos = -1

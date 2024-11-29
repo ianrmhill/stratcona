@@ -137,10 +137,13 @@ class ReliabilityModel():
         # Now handle any conditioning where sample sites are fixed to values
         #mdl = self.test_spm if conditionals is None else condition(self.test_spm, data=conditionals)
         # Convert any keep_sites that need more complex node names
-        sites = keep_sites.copy()
-        for i, site in enumerate(sites):
+        sites = []
+        for i, site in enumerate(keep_sites):
             if site in self.test_measurements:
-                sites[i] = f'{next(iter(test.config))}_{site}'
+                for test in test.config:
+                    sites.append(f'{test}_{site}')
+            else:
+                sites.append(site)
 
         def sampler(rng, set_vals):
             mdl = self.test_spm if set_vals is None else condition(self.test_spm, data=set_vals)

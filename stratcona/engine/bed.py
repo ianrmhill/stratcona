@@ -25,7 +25,7 @@ NATS_TO_BITS = jnp.log2(jnp.e)
 # precise but smaller entropy values makes things nicer to deal with.
 CARDINALITY_MANTISSA_64BIT = float(2 ** 53)
 # Marginal probability below which a sample observed 'y' will be excluded from EIG computation
-LOW_PROB_CUTOFF = 1e-30
+LOW_PROB_CUTOFF = 1e-20
 # Gap between trace samples to reduce memory and performance impact
 TR_GAP = 20
 
@@ -491,7 +491,10 @@ def bed_run(rng_key, l, n, m, exp_sampler, spm, u_threshold=None):
     for i in range(l):
         # Get the next proposal experiment design
         d = exp_sampler()
-        eus.append(evaluate_design(keys[i], d, n, m, spm, u_threshold))
+        eu = evaluate_design(keys[i], d, n, m, spm, u_threshold)
+        eus.append(eu)
+        print(f'{d.conditions}: {eu * NATS_TO_BITS} bits')
+        #print(f'{d.conditions}: {eu * 100}%')
     return eus
 
 
@@ -529,6 +532,8 @@ def evaluate_design(rng_key, d, n, m, spm, u_threshold=None, entropy_in_bits=Fal
 
     lp_lkly = lp_ygi + lp_i
     p_lkly = jnp.exp(lp_lkly)
+    p_lkly = jnp.where(p_lkly == jnp.nan, 0.0, p_lkly)
+    p_lkly = jnp.where(p_lkly < LOW_PROB_CUTOFF, 0.0, p_lkly)
 
     p_y = jnp.sum(p_lkly, axis=1) / i_norm
 
@@ -536,9 +541,9 @@ def evaluate_design(rng_key, d, n, m, spm, u_threshold=None, entropy_in_bits=Fal
     # TODO: Switching logic for different and multiple utility definitions
     u = u_ig(lp_i, p_i, lp_lkly, p_y)
 
-    lf_samples = spm.sample_new(k5, d, num_samples=(n, m), keep_sites=spm.life_predictors, conditionals=i_s)
-    u = u_pp(lf_samples, p_lkly, p_y)
-    return u
+    #lf_samples = spm.sample_new(k5, d, num_samples=(n, m), keep_sites=spm.life_predictors, conditionals=i_s)
+    #u = u_pp(lf_samples, p_lkly, p_y)
+    #return u
     # Zero out the utility of extremely low probability observation space samples, as these often end up with infinite
     # utility due to numerical instability of log and division operations
     u = jnp.where(p_y < LOW_PROB_CUTOFF, 0.0, u)
@@ -580,8 +585,7 @@ def u_ig(lp_i, p_i, lp_lkly, p_y):
 
 def u_pp(lf_samples, p_lkly, p_y):
     posterior = p_lkly / jnp.expand_dims(p_y, -1)
-    total_pri = jnp.sum(posterior, axis=1)
+    posterior = jnp.where(jnp.isnan(posterior), 0, posterior)
     clean = jnp.where(lf_samples['faulty'], 0, posterior)
     p_clean = jnp.sum(clean)
-    n1f = jnp.sum(jnp.where(lf_samples['n3_sa0'], posterior, 0), axis=1)
     return p_clean

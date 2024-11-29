@@ -273,18 +273,18 @@ class SPMBuilder():
                                 measd = measured[exp][obs] if measured is not None else None
                                 observes[exp][obs] = npyro.sample(f'{exp}_{obs}', self.measures[obs].dist(**obs_dist_args), obs=measd)
 
-                        # Finally are lifespan variables that are special dependent variables predicting reliability
-                        preds, pred_funcs = {}, {}
-                        for pred in self.predictors:
-                            args = {arg: val for arg, val in {**observes, **conds, **spm_nodes}.items() if arg in self.predictors[pred].requires}
-                            if self.predictors[pred].dist is None:
-                                pred_funcs[pred] = npyro.deterministic(f'{pred}', self.predictors[pred].compute(**args))
-                            else:
-                                pred_funcs[pred] = npyro.deterministic(f'{pred}_lf', self.predictors[pred].compute(**args))
-                                concated = {**pred_funcs, **spm_nodes}
-                                obs_dist_args = {arg: concated[val] for arg, val in self.predictors[pred].prms.items()}
-                                actual = measured[pred] if measured is not None else None
-                                preds[pred] = npyro.sample(f'{pred}', self.predictors[pred].dist(**obs_dist_args), obs=actual)
+            # Finally are lifespan variables that are special dependent variables predicting reliability
+            preds, pred_funcs = {}, {}
+            for pred in self.predictors:
+                args = {arg: val for arg, val in {**observes, **conds, **spm_nodes}.items() if arg in self.predictors[pred].requires}
+                if self.predictors[pred].dist is None:
+                    pred_funcs[pred] = npyro.deterministic(f'{pred}', self.predictors[pred].compute(**args))
+                else:
+                    pred_funcs[pred] = npyro.deterministic(f'{pred}_lf', self.predictors[pred].compute(**args))
+                    concated = {**pred_funcs, **spm_nodes}
+                    obs_dist_args = {arg: concated[val] for arg, val in self.predictors[pred].prms.items()}
+                    actual = measured[pred] if measured is not None else None
+                    preds[pred] = npyro.sample(f'{pred}', self.predictors[pred].dist(**obs_dist_args), obs=actual)
 
         # Construct the probabilistic function that defines the physical model
         def lifespan_model(dims, conds, priors, params, measured=None):
