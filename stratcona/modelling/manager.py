@@ -39,9 +39,9 @@ class AnalysisManager:
         meas_sites = []
         for exp in self.test.config:
             if 'meas' in model_components:
-                meas_sites.extend([f'{meas}_{exp}' for meas in self.relmdl.test_measurements])
+                meas_sites.extend([f'{meas}_{exp}' for meas in self.relmdl.observes])
             if 'ltnts' in model_components:
-                for meas in self.relmdl.test_measurements:
+                for meas in self.relmdl.observes:
                     meas_sites.extend([f'{ltnt}_{meas}_{exp}' for ltnt in self.relmdl.ltnts])
         if 'hyls' in model_components:
             meas_sites.extend(self.relmdl.hyls)
@@ -63,7 +63,7 @@ class AnalysisManager:
     def do_inference(self, observations, test: ReliabilityTest = None, auto_update_prior=True):
         rng = self._derive_key()
         test_info = test if test is not None else self.test
-        inf_mdl = partial(self.relmdl.test_spm, test_info.config, test_info.conditions, self.relmdl.hyl_beliefs, self.relmdl.param_vals)
+        inf_mdl = partial(self.relmdl.spm, test_info.config, test_info.conditions, self.relmdl.hyl_beliefs, self.relmdl.param_vals)
         new_prior = inference_model(inf_mdl, self.relmdl.hyl_info, observations, rng)
         if auto_update_prior:
             self.relmdl.hyl_beliefs = new_prior

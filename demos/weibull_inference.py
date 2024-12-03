@@ -78,9 +78,9 @@ def weibull_inference():
     #mb_w.add_latent('sc', nom='sc_nom', dev='sc_dev', chp=None, lot='sc_lot')
     mb_w.add_latent('k', nom='k_nom', dev=None, chp=None, lot='k_lot')
     mb_w.add_latent('sc', nom='sc_nom', dev=None, chp=None, lot='sc_lot')
-    mb_w.add_dependent('k_pos', lambda k: jnp.log(1 + jnp.exp(k)))
-    mb_w.add_dependent('sc_pos', lambda sc: jnp.log(1 + jnp.exp(sc)))
-    mb_w.add_measured('ttf', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'}, num_devs)
+    mb_w.add_intermediate('k_pos', lambda k: jnp.log(1 + jnp.exp(k)))
+    mb_w.add_intermediate('sc_pos', lambda sc: jnp.log(1 + jnp.exp(sc)))
+    mb_w.add_observed('ttf', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'}, num_devs)
 
     am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633839)
 
@@ -306,7 +306,7 @@ def weibull_inference():
     conds = test_130.conditions
     priors = am_w.relmdl.hyl_beliefs
     params = am_w.relmdl.param_vals
-    npyro.render_model(am_w.relmdl.test_spm, model_args=(dims, conds, priors, params),
+    npyro.render_model(am_w.relmdl.spm, model_args=(dims, conds, priors, params),
                        filename='renders/weibull_model.png')
 
     ######################################################

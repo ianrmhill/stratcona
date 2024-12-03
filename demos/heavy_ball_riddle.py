@@ -1,4 +1,4 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2024 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 import jax.numpy as jnp
@@ -30,9 +30,9 @@ def riddle_demo():
 
     mb.add_hyperlatent('i_heavy_ball', dists.Categorical, {'probs': jnp.array([0.32, 0.32, 0.06, 0.06, 0.06, 0.06, 0.06, 0.06])})
 
-    mb.add_dependent('scale_pos', scale_weigh)
+    mb.add_intermediate('scale_pos', scale_weigh)
     mb.add_params(outcome_var=0.03)
-    mb.add_measured('outcome', dists.Normal, {'loc': 'scale_pos', 'scale': 'outcome_var'}, 1)
+    mb.add_observed('outcome', dists.Normal, {'loc': 'scale_pos', 'scale': 'outcome_var'}, 1)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=92764927)
 

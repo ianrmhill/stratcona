@@ -32,19 +32,19 @@ class ReliabilityTest():
 
 class ReliabilityModel():
     name: str
-    test_spm: Callable
-    test_measurements: list[str]
-    measurements_per_chp: dict[int]
-    life_predictors: list[str]
-    life_conds: dict[str: float]
+    spm: Callable
+    observes: list[str]
+    predictors: list[str]
+    obs_per_chp: dict[int]
+    fail_criteria: list[str]
     hyls: dict[str]
     hyl_beliefs: dict[dict[str: float]]
     hyl_info: dict[dict]
 
-    def __init__(self, name, test_model, param_vals, hyl_sites, prior, hyl_info, ltnt_sites,
-                 ltnt_subsample_sites, meas_sites, meas_counts, pred_sites, pred_conds):
+    def __init__(self, name, spm, param_vals, hyl_sites, prior, hyl_info, ltnt_sites,
+                 ltnt_subsample_sites, obs_sites, meas_counts, pred_sites, fail_sites):
         self.name = name
-        self.test_spm = test_model
+        self.spm = spm
 
         self.param_vals = param_vals
 
@@ -55,11 +55,11 @@ class ReliabilityModel():
         self.ltnts = ltnt_sites
         self._ltnt_subsamples = ltnt_subsample_sites
 
-        self.test_measurements = meas_sites
-        self.meas_per_chp = meas_counts
+        self.observes = obs_sites
+        self.obs_per_chp = meas_counts
 
-        self.life_predictors = pred_sites
-        self.life_conds = pred_conds
+        self.predictors = pred_sites
+        self.fail_criteria = fail_sites
 
     def validate_model(self):
         # TODO
@@ -71,7 +71,7 @@ class ReliabilityModel():
         if keep_sites is not None:
             sites = []
             for i, site in enumerate(keep_sites):
-                if site in self.test_measurements:
+                if site in self.observes:
                     for tst in test.config:
                         sites.append(f'{tst}_{site}')
                 else:
@@ -82,7 +82,7 @@ class ReliabilityModel():
         priors = self.hyl_beliefs if alt_priors is None else alt_priors
 
         def sampler(rng, set_vals):
-            mdl = self.test_spm if set_vals is None else condition(self.test_spm, data=set_vals)
+            mdl = self.spm if set_vals is None else condition(self.spm, data=set_vals)
             seeded = seed(mdl, rng)
             tr = trace(seeded).get_trace(test.config, test.conditions, priors, self.param_vals)
             samples = {site: tr[site] if full_trace else tr[site]['value'] for site in tr}
@@ -100,7 +100,7 @@ class ReliabilityModel():
     def logp(self, rng_key: rand.key, test: ReliabilityTest, site_vals: dict, conditional: dict | None, dims: tuple = ()):
 
         def get_log_prob(rng, vals, cond):
-            mdl = self.test_spm if cond is None else condition(self.test_spm, data=cond)
+            mdl = self.spm if cond is None else condition(self.spm, data=cond)
             seeded = seed(mdl, rng)
             tr = trace(seeded).get_trace(test.config, test.conditions, self.hyl_beliefs, self.param_vals)
             lp = 0

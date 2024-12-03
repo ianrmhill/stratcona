@@ -1,4 +1,4 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2024 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 import jax
@@ -43,10 +43,10 @@ def logic_test_demo():
     mb.add_hyperlatent('n4_f', dists.Categorical, {'probs': jnp.array([0.05, 0.05, 0.9])})
     mb.add_hyperlatent('n5_f', dists.Categorical, {'probs': jnp.array([0.05, 0.05, 0.9])})
 
-    mb.add_dependent('o', run_circuit)
-    mb.add_predictor('faulty', is_faulty, {})
+    mb.add_intermediate('o', run_circuit)
+    mb.add_predictor('faulty', is_faulty)
     mb.add_params(o_var=0.03)
-    mb.add_measured('v_meas', dists.Normal, {'loc': 'o', 'scale': 'o_var'}, 1)
+    mb.add_observed('v_meas', dists.Normal, {'loc': 'o', 'scale': 'o_var'}, 1)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48939837832)
 
