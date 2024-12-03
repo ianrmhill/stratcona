@@ -507,12 +507,12 @@ def evaluate_design(rng_key, d, n, m, spm, u_threshold=None, entropy_in_bits=Fal
 
     # First generate 'n' samples of possible experiment outcomes
     if not spm.y_s_override:
-        y_s = spm.sample_new(k1, d, num_samples=(n,), keep_sites=spm.test_measurements)
+        y_s = spm.sample(k1, d, num_samples=(n,), keep_sites=spm.test_measurements)
     else:
         y_s = spm.y_s_custom(d, num_samples=(n,))
     # Now generate 'm' samples of possible latent space values for each of the 'n' outcomes
     if not spm.i_s_override:
-        i_s = spm.sample_new(k2, d, num_samples=(n, m), keep_sites=spm.ltnts + spm.hyls)
+        i_s = spm.sample(k2, d, num_samples=(n, m), keep_sites=spm.ltnts + spm.hyls)
     else:
         i_s = spm.i_s_custom(d, num_samples=(n, m))
     # The latent space consists of latents and hyper-latents, experiment value only depends on how much is learned about
@@ -521,10 +521,10 @@ def evaluate_design(rng_key, d, n, m, spm, u_threshold=None, entropy_in_bits=Fal
 
     # Now compute log probabilities, subtracting normalization factors to try and bias everything towards probability 1
     # for numerical stability
-    lp_i = spm.logp_new(k3, d, i_s, i_s, (n, m)) - lp_i_avg # TODO: Check exactly how log_prob of a variable works in relation to conditioning
-    lp_hyl = spm.logp_new(k4, d, hyl_s, None, (n, m)) - lp_hyl_avg
+    lp_i = spm.logp(k3, d, i_s, i_s, (n, m)) - lp_i_avg # TODO: Check exactly how log_prob of a variable works in relation to conditioning
+    lp_hyl = spm.logp(k4, d, hyl_s, None, (n, m)) - lp_hyl_avg
     y_tiled = {y: jnp.repeat(jnp.expand_dims(y_s[y], 1), m, axis=1) for y in y_s}
-    lp_ygi = spm.logp_new(k5, d, y_tiled, i_s, (n, m)) - lp_y_avg
+    lp_ygi = spm.logp(k5, d, y_tiled, i_s, (n, m)) - lp_y_avg
 
     # Compute likelihood weightings and the marginal probability of each sampled observation
     p_i = jnp.exp(lp_i)

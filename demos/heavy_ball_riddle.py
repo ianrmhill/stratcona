@@ -1,11 +1,8 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import jax
 import jax.numpy as jnp
-import jax.random as rand
 import numpyro.distributions as dists
-from numpyro.handlers import trace, seed
 
 # TEMP
 from matplotlib import pyplot as plt
@@ -31,7 +28,6 @@ def riddle_demo():
         scale_state = jnp.where(w_one < w_two, -1, scale_state)
         return scale_state
 
-    #mb.add_hyperlatent('i_heavy_ball', dists.Categorical, {'probs': jnp.full((8,), 0.125)})
     mb.add_hyperlatent('i_heavy_ball', dists.Categorical, {'probs': jnp.array([0.32, 0.32, 0.06, 0.06, 0.06, 0.06, 0.06, 0.06])})
 
     mb.add_dependent('scale_pos', scale_weigh)
@@ -40,31 +36,7 @@ def riddle_demo():
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=92764927)
 
-    test = stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 2, 2, 2, 2, 2, 2])}})
-    am.set_test_definition(test)
-    res = am.sim_test_measurements(rtrn_tr=True)
-    print(res['t1_outcome'])
-
     ### Determine Best Experiment Step ###
-    #rng_key = rand.key(89)
-
-    #ltnt_samples = am.relmdl.sample(rng_key, test, num_samples=3, keep_sites=am.relmdl.hyls + am.relmdl.ltnts)
-    #ltnt_lps = am.relmdl.logp(rng_key, test, ltnt_samples)
-
-    #obs_sample = am.relmdl.sample(rng_key, test, num_samples=1, keep_sites=[f't1_outcome'])
-    #obs_samples = {'t1_outcome': jnp.repeat(obs_sample['t1_outcome'], 3, axis=0)}
-
-    #obs_lps = am.relmdl.logp(rng_key, test, obs_samples, ltnt_samples)
-    #print(obs_lps)
-
-    #obs_samples = am.relmdl.sample(rng_key, test, num_samples=3, keep_sites=[f't1_outcome'])
-    #obs_samples = {'t1_outcome': jnp.repeat(jnp.expand_dims(obs_samples['t1_outcome'], 0), 3, axis=0)}
-    #ltnt_samples = am.relmdl.sample_new(rng_key, test, num_samples=(3, 3), keep_sites=am.relmdl.hyls + am.relmdl.ltnts)
-    #obs_lp = am.relmdl.logp_new(rng_key, test, obs_samples, ltnt_samples | obs_samples)
-
-    #ltnt_sampler = stratcona.assistants.iterator.iter_sampler([[[0]], [[1]], [[2]], [[3]], [[4]], [[5]], [[6]], [[7]]])
-    #obs_sampler = stratcona.assistants.iterator.iter_sampler([jnp.array([[[-1]]]), jnp.array([[[0]]]), jnp.array([[[1]]])])
-
     am.relmdl.y_s_override = True
     def y_s_scale(d, num_samples):
         return {'t1_outcome': jnp.array([[[[-1]]], [[[0]]], [[[1]]]], dtype=jnp.float32)}
@@ -77,7 +49,7 @@ def riddle_demo():
         return {'i_heavy_ball': tiled}
     am.relmdl.i_s_custom = i_s_ball_pos
 
-    exp_sampler = stratcona.assistants.iterator.iter_sampler([
+    exp_sampler = stratcona.assistants.iter_sampler([
         stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 2, 2, 2, 2, 2, 2])}}),
         stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 2, 2, 2, 2])}}),
         stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 2, 0, 1, 1, 2, 2, 2])}}),
@@ -90,9 +62,6 @@ def riddle_demo():
     eigs = am.find_best_experiment(7, 3, 8, exp_sampler)
     eigs_bits = [eigs[i] * 1.442695 for i in range(len(eigs))]
     print(eigs_bits)
-
-    # RIG threshold to ensure that the test narrows it down to three balls is:
-    # <entropy of 1 in 8> - <entropy of 1 in 3> = 3 bits - 1.5849625 bits = 1.4150375 bits = 0.980829253 nats
 
     # EIG of one per side: 1.061278, two: 1.5, three: 1.561278, four: 1.0 (bits)
 

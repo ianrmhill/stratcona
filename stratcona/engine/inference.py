@@ -13,9 +13,7 @@ from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 from multiprocess import Pool
 from functools import partial
 
-from matplotlib import pyplot as plt
-
-from stratcona.assistants.dist_translate import pymc_to_scipy, npyro_to_scipy
+from stratcona.assistants.dist_translate import npyro_to_scipy
 
 __all__ = ['inference_model', 'fit_latent_params_to_posterior_samples', 'importance_sampling_inference']
 

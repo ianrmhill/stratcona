@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pprint import pprint
+
+import numpyro as npyro
+import numpyro.distributions as dists
+# This call has to occur before importing jax
+npyro.set_host_device_count(4)
+
 import jax
 import jax.numpy as jnp
 import jax.random as rand
 import numpy as np
-import numpyro as npyro
-import numpyro.distributions as dists
 
 from functools import partial
 from scipy.optimize import curve_fit
@@ -38,7 +42,6 @@ SHOW_PLOTS = True
 
 
 def weibull_inference():
-    npyro.set_host_device_count(4)
 
     # Data manipulation helper function
     def convert(vals):
@@ -58,6 +61,7 @@ def weibull_inference():
     num_devs, num_chps, num_lots = 8, 5, 3
     th = 130 + CELSIUS_TO_KELVIN
     test_130 = stratcona.ReliabilityTest({'e': {'lot': num_lots, 'chp': num_chps}}, {'e': {'temp': th, 'vg': 1.1}})
+    test_130_sing = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, {'e': {'temp': th, 'vg': 1.1}})
 
     ######################################################
     # Define the SPM for Weibull analysis
@@ -84,21 +88,23 @@ def weibull_inference():
     # Simulate some Weibull distributed failure data
     ######################################################
     am_w.set_test_definition(test_130)
-    ttfs = am_w.sim_test_measurements(rtrn_tr=True)
+    ttfs = am_w.sim_test_measurements()
 
     # Determine the probability of the sampled lot distributions under the simulation model
     sim_ks, sim_scs = ttfs['e_ttf_k_pos'], ttfs['e_ttf_sc_pos']
     lot_vals = (ttfs['e_k_lot'], ttfs['e_sc_lot'])
     k1, k2 = rand.split(rand.key(7932854))
-    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130, {'e_k_lot': jnp.full_like(lot_vals[0], 0.0),
-                                                        'e_sc_lot': jnp.full_like(lot_vals[1], 0.0)}, ttfs))
-    lot_prob = jnp.exp(am_w.relmdl.logp(k2, test_130, {'e_k_lot': lot_vals[0], 'e_sc_lot': lot_vals[1]}, ttfs))
-    normd_probs = lot_prob / mean_prob
+    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130_sing, {'e_k_lot': jnp.array([0.0]),
+                                                             'e_sc_lot': jnp.array([0.0])}, ttfs))
+    p1 = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, {'e_k_lot': lot_vals[0][0], 'e_sc_lot': lot_vals[1][0]}, ttfs))
+    p2 = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, {'e_k_lot': lot_vals[0][1], 'e_sc_lot': lot_vals[1][1]}, ttfs))
+    p3 = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, {'e_k_lot': lot_vals[0][2], 'e_sc_lot': lot_vals[1][2]}, ttfs))
+    normd_probs = jnp.array([p1, p2, p3]) / mean_prob
 
     ttfs = {'e': {'ttf': ttfs['e_ttf']}}
-    ttfs_0 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 0]}}
-    ttfs_1 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 1]}}
-    ttfs_2 = {'e': {'ttf': ttfs['e']['ttf'][:, :, :, 2]}}
+    ttfs_0 = {'e': {'ttf': ttfs['e']['ttf'][:, :, 0]}}
+    ttfs_1 = {'e': {'ttf': ttfs['e']['ttf'][:, :, 1]}}
+    ttfs_2 = {'e': {'ttf': ttfs['e']['ttf'][:, :, 2]}}
 
     fails_0, fails_1, fails_2 = convert(ttfs_0['e']), convert(ttfs_1['e']), convert(ttfs_2['e'])
     fails = jnp.concatenate((fails_0, fails_1, fails_2))
@@ -111,7 +117,7 @@ def weibull_inference():
     sim_fits = []
     x = jnp.logspace(-2, 1, 50)
     for i in range(3):
-        sim_fits.append(CDF(x, sim_ks[0, i], sim_scs[0, i]))
+        sim_fits.append(CDF(x, sim_ks[i], sim_scs[i]))
 
     # Sort the simulated data points for Weibull plotting and colour them according to lot
     n = len(fails)
@@ -132,7 +138,6 @@ def weibull_inference():
     n2 = np.argwhere(srtd_lots != 2)
     f2 = jnp.delete(fails, n2)
     x2 = jnp.delete(fail_order, n2)
-
 
     ######################################################
     # Frequentist analysis of the failure data
@@ -214,9 +219,9 @@ def weibull_inference():
 
 
 
-    p.plot(x, sim_fits[0], color='darkorange', linestyle='--', linewidth=2, label=f'Lot 1 - normalized sim. prob.: {round(float(normd_probs[0, 0] * 100), 1)}%')
-    p.plot(x, sim_fits[1], color='sienna', linestyle='--', linewidth=2, label=f'Lot 2 - normalized sim. prob.: {round(float(normd_probs[0, 1] * 100), 1)}%')
-    p.plot(x, sim_fits[2], color='gold', linestyle='--', linewidth=2, label=f'Lot 3 - normalized sim. prob.: {round(float(normd_probs[0, 2] * 100), 1)}%')
+    p.plot(x, sim_fits[0], color='darkorange', linestyle='--', linewidth=2, label=f'Lot 1 - normalized sim. prob.: {round(float(normd_probs[0] * 100), 1)}%')
+    p.plot(x, sim_fits[1], color='sienna', linestyle='--', linewidth=2, label=f'Lot 2 - normalized sim. prob.: {round(float(normd_probs[1] * 100), 1)}%')
+    p.plot(x, sim_fits[2], color='gold', linestyle='--', linewidth=2, label=f'Lot 3 - normalized sim. prob.: {round(float(normd_probs[2] * 100), 1)}%')
 
     p.plot(x, fit_fails, color='darkblue', linewidth=2)
 
@@ -256,7 +261,6 @@ def weibull_inference():
     ######################################################
     # Now inference the SPM on the simulated data
     ######################################################
-    test_130_sing = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, {'e': {'temp': th, 'vg': 1.1}})
     k1, k2, k3, k4 = rand.split(rand.key(428027234), 4)
     eval_sites = ['e_ttf_k_dev', 'e_ttf_sc_dev', 'e_k_lot', 'e_sc_lot',
                   'k_nom', 'sc_nom', 'k_dev', 'sc_dev', 'k_lot', 'sc_lot']
@@ -264,9 +268,9 @@ def weibull_inference():
     # Priors for the SPM are defined here
     am_w.relmdl.hyl_beliefs = {'k_nom': {'loc': 2.0, 'scale': 1.5}, 'k_dev': {'loc': 5, 'scale': 3}, 'k_lot': {'loc': 15, 'scale': 5},
                                'sc_nom': {'loc': 1.8, 'scale': 0.8}, 'sc_dev': {'loc': 5, 'scale': 3}, 'sc_lot': {'loc': 15, 'scale': 5}}
-    prm_samples = am_w.relmdl.sample(k1, test_130_sing, 400)
+    prm_samples = am_w.relmdl.sample(k1, test_130_sing, (400,))
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
-    pri_probs = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, ltnt_vals, prm_samples))
+    pri_probs = jnp.exp(am_w.relmdl.logp(k2, test_130_sing, ltnt_vals, prm_samples, dims=(400,)))
     pri_probs = likelihood_to_alpha(pri_probs, 0.4).flatten()
 
     x = jnp.logspace(-2, 1, 50)
@@ -274,22 +278,36 @@ def weibull_inference():
 
     am_w.do_inference(ttfs, test_130)
     print(am_w.relmdl.hyl_beliefs)
+    post_cond = {'e': {'k_nom': am_w.relmdl.hyl_beliefs['k_nom']['loc'], 'sc_nom': am_w.relmdl.hyl_beliefs['sc_nom']['loc'],
+                       'k_lot': am_w.relmdl.hyl_beliefs['k_lot']['loc'], 'sc_lot': am_w.relmdl.hyl_beliefs['sc_lot']['loc']}}
 
-    prm_samples = am_w.relmdl.sample(k3, test_130_sing, 400)
+    prm_samples = am_w.relmdl.sample(k3, test_130_sing, (400,))
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
-    pst_probs = jnp.exp(am_w.relmdl.logp(k4, test_130_sing, ltnt_vals, prm_samples))
+    pst_probs = jnp.exp(am_w.relmdl.logp(k4, test_130_sing, ltnt_vals, prm_samples, dims=(400,)))
     pst_probs = likelihood_to_alpha(pst_probs, 0.4).flatten()
 
     pst_fits = CDF(x, prm_samples['e_ttf_k_pos'], prm_samples['e_ttf_sc_pos'])
 
     # Determine the probability of the simulation traces under the posterior inference model
     k1, k2 = rand.split(rand.key(7932854))
-    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130, {'e_k_lot': jnp.full_like(lot_vals[0], 0.0),
-                                                        'e_sc_lot': jnp.full_like(lot_vals[1], 0.0)}, ttfs))
-    lot_prob = jnp.exp(am_w.relmdl.logp(k2, test_130, {'e_k_lot': lot_vals[0], 'e_sc_lot': lot_vals[1]}, ttfs))
-    pst_sim_probs = lot_prob / mean_prob
+    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130_sing, {'e_k_lot': jnp.array([0.0]),
+                                                             'e_sc_lot': jnp.array([0.0])}, post_cond))
+    p1 = jnp.exp(am_w.relmdl.logp(k1, test_130_sing, {'e_k_lot': lot_vals[0][0], 'e_sc_lot': lot_vals[1][0]}, post_cond))
+    p2 = jnp.exp(am_w.relmdl.logp(k1, test_130_sing, {'e_k_lot': lot_vals[0][1], 'e_sc_lot': lot_vals[1][1]}, post_cond))
+    p3 = jnp.exp(am_w.relmdl.logp(k1, test_130_sing, {'e_k_lot': lot_vals[0][2], 'e_sc_lot': lot_vals[1][2]}, post_cond))
+    pst_sim_probs = jnp.array([p1, p2, p3]) / mean_prob
     # FIXME: This only accounts for lot probability, should probably also account for nom variability and uncertainty
     print(f'Posterior model simulation lot probs: {pst_sim_probs}')
+
+    ######################################################
+    # Render the SPM for viewing
+    ######################################################
+    dims = test_130.config
+    conds = test_130.conditions
+    priors = am_w.relmdl.hyl_beliefs
+    params = am_w.relmdl.param_vals
+    npyro.render_model(am_w.relmdl.test_spm, model_args=(dims, conds, priors, params),
+                       filename='renders/weibull_model.png')
 
     ######################################################
     # Generate the second plot that shows the Bayesian inference approach
@@ -349,7 +367,7 @@ def weibull_inference():
         lbl.set_alpha(1)
 
     # Add annotations that highlight key elements for readers
-    p.annotate(f'Lot 1 normalized probability\nunder posterior: {round(float(pst_sim_probs[0, 0] * 100), 1)}%',
+    p.annotate(f'Lot 1 normalized probability\nunder posterior: {round(float(pst_sim_probs[0] * 100), 1)}%',
                (3.5, 0.96), (0.4, 0.85),
                arrowprops={'arrowstyle': 'simple', 'color': 'black'})
 

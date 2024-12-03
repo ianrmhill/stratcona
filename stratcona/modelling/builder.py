@@ -132,6 +132,9 @@ class SPMBuilder():
     def add_dependent(self, name, compute_func):
         self.dependents[name] = _Dependent(name, compute_func)
 
+    def add_dependent_stochastic(self, name, distribution, dist_prms):
+        pass
+
     def add_measured(self, name, distribution, dist_prms, count_per_chp):
         self.measures[name] = _Measured(name, distribution, dist_prms)
         self.measurement_counts[name] = count_per_chp
@@ -176,42 +179,14 @@ class SPMBuilder():
         self.predictors[var_name] = first_to_fail
         self.pred_args[var_name] = list(self.latents.keys()) + list(self.dependents.keys())
 
-    # TODO: Update
-    def _normalize_latent_space(self, normalization_strategy = None):
-        """
-        Normalizes the variance of the latent variable space to make the entropy approximately equal for each variable.
-        This reduces the bias of EIG calculation towards variables with higher entropy. Note that this is not the best
-        way to do this, as the relative importance of each variable to the output quantity(ies) of interest depends on
-        the sensitivity of those quantities with respect to the latent variables. This method will be updated in the
-        future to use a better approach based on sensitivity analysis once output quantities of interest and sensitivity
-        analysis have been implemented (TODO).
-        """
-        if normalization_strategy is None:
-            return
-        # 1. Check if any latents are discrete, as their entropy cannot be adjusted, unlike the differential entropy
-        if len(self.discrete_latent_entropy) > 0:
-            target_variance = 1.0 # TODO: Get mean entropy of discrete latent variables, target is the variance of a Gaussian with that differential entropy
-        else:
-            target_variance = 1.0 # TODO: Get average variance of continuous latents
-
-        # 2. Adjust all latent variables by scaling factors to match the average and update helpful properties so the
-        # user can view the variable as though the transformation was not made (for ease of use)
-        for ltnt in self.latents.values():
-            if ltnt.dist_type == 'continuous':
-                ltnt.variance_to_prms(target_variance)
-
     def build_model(self, hyl_normalization=None):
-        # Perform any hyperlatent normalization
-        if hyl_normalization is not None:
-            # TODO
-            pass
-
         # Figure out the dependency graph for each observable
-        for observed in self.measures:
-            self.measures[observed].build_dep_graph(self.dependents)
+        for obs in self.measures | self.predictors:
+            obs_info = self.measures[obs] if obs in self.measures else self.predictors[obs]
+            obs_info.build_dep_graph(self.dependents)
 
         # Construct the probabilistic function that defines the physical model
-        def test_model(dims, conds, priors, params, measured=None):
+        def spm(dims, conds, priors, params, measured=None, compute_predictors=True):
             spm_nodes, samples, ltnts, deps, observes = params.copy(), {}, {}, {}, {}
             # First define the hyper-latents that we wish to reduce the entropy of
             for name, hyl in self.hyls.items():
@@ -220,8 +195,8 @@ class SPMBuilder():
                 else:
                     spm_nodes[name] = npyro.sample(name, TrDist(hyl.dist(**priors[name]), hyl.dist_transform))
 
-            # Experimental variables are constructed independently for each experiment to ensure each experiment within
-            # a test is statistically independent
+            # Experimental variables are constructed independently for each experiment to ensure each experiment
+            # within a test is statistically independent
             for exp in dims:
                 samples[exp], ltnts[exp], deps[exp], observes[exp] = {'lot': {}, 'chp': {}, 'dev': {}}, {}, {}, {}
 
@@ -237,9 +212,11 @@ class SPMBuilder():
 
                         # Device level behaves differently since each chip may have multiple types of observed circuits,
                         # so this final layer has to have separate configuration per measurement type that is involved
-                        for obs in self.measures:
+                        obs_vars = self.measures | self.predictors if compute_predictors else self.measures
+                        for obs in obs_vars:
+                            obs_info = self.measures[obs] if obs in self.measures else self.predictors[obs]
                             # Sort the model variables so that some dependent variables can use others as args
-                            sorted_vars = list(TopologicalSorter(self.measures[obs].dep_graph).static_order())
+                            sorted_vars = list(TopologicalSorter(obs_info.dep_graph).static_order())
 
                             samples[exp]['dev'][obs], ltnts[exp][obs], deps[exp][obs] = {}, {}, {}
                             obs_dev_count = dims[exp][obs] if obs in dims[exp] else self.measurement_counts[obs]
@@ -265,89 +242,15 @@ class SPMBuilder():
                                             raise Exception(f'Dependent variable {dep} compute function does not return!')
                                         raise e
 
-
                                 # Next, create the observed variables measured in the experiment
                                 # Observed variable distributions can be parameterized in terms of dependent variables or params
                                 concated = {**ltnts[exp][obs], **deps[exp][obs], **conds[exp], **spm_nodes}
-                                obs_dist_args = {arg: concated[val] for arg, val in self.measures[obs].prms.items()}
+                                obs_dist_args = {arg: concated[val] for arg, val in obs_info.prms.items()}
                                 measd = measured[exp][obs] if measured is not None else None
-                                observes[exp][obs] = npyro.sample(f'{exp}_{obs}', self.measures[obs].dist(**obs_dist_args), obs=measd)
-
-            # Finally are lifespan variables that are special dependent variables predicting reliability
-            preds, pred_funcs = {}, {}
-            for pred in self.predictors:
-                args = {arg: val for arg, val in {**observes, **conds, **spm_nodes}.items() if arg in self.predictors[pred].requires}
-                if self.predictors[pred].dist is None:
-                    pred_funcs[pred] = npyro.deterministic(f'{pred}', self.predictors[pred].compute(**args))
-                else:
-                    pred_funcs[pred] = npyro.deterministic(f'{pred}_lf', self.predictors[pred].compute(**args))
-                    concated = {**pred_funcs, **spm_nodes}
-                    obs_dist_args = {arg: concated[val] for arg, val in self.predictors[pred].prms.items()}
-                    actual = measured[pred] if measured is not None else None
-                    preds[pred] = npyro.sample(f'{pred}', self.predictors[pred].dist(**obs_dist_args), obs=actual)
-
-        # Construct the probabilistic function that defines the physical model
-        def lifespan_model(dims, conds, priors, params, measured=None):
-            spm_nodes, samples, ltnts, deps, observes = params.copy(), {'lot': {}, 'chp': {}, 'dev': {}}, {}, {}, {}
-            # First define the hyper-latents that we wish to reduce the entropy of
-            for name, hyl in self.hyls.items():
-                if hyl.dist_transform is None:
-                    spm_nodes[name] = npyro.sample(name, hyl.dist(**priors[name]))
-                else:
-                    spm_nodes[name] = npyro.sample(name, TrDist(hyl.dist(**priors[name]), hyl.dist_transform))
-
-            with npyro.plate(f'pred_lot', dims['lot']):
-                for ltnt in [l for l in self.latents if self.latents[l].lot is not None]:
-                    samples['lot'][ltnt] = npyro.sample(f'pred_{ltnt}_lot', TrDist(
-                        dists.Normal(), AffineTr(0, spm_nodes[self.latents[ltnt].lot])))
-
-                with npyro.plate(f'pred_chp', dims['chp']):
-                    for ltnt in [l for l in self.latents if self.latents[l].chp is not None]:
-                        samples['chp'][ltnt] = npyro.sample(f'pred_{ltnt}_chp', TrDist(
-                            dists.Normal(), AffineTr(0, spm_nodes[self.latents[ltnt].chp])))
-
-                    # Device level behaves differently since each chip may have multiple types of observed circuits,
-                    # so this final layer has to have separate configuration per measurement type that is involved
-                    for obs in self.measures:
-                        # Topological sort the model variables so that some dependent variables can use others as args
-                        sorted_vars = list(TopologicalSorter(self.measures[obs].dep_graph).static_order())
-
-                        samples['dev'][obs], ltnts[obs], deps[obs] = {}, {}, {}
-                        with npyro.plate(f'pred_{obs}_dev', self.measurement_counts[obs]):
-                            for ltnt in self.latents:
-                                samples['dev'][obs][ltnt] = npyro.sample(f'pred_{obs}_{ltnt}_dev', TrDist(
-                                    dists.Normal(), AffineTr(0, spm_nodes[self.latents[ltnt].dev])))
-
-                                nom = spm_nodes[self.latents[ltnt].nom]
-                                dev = samples['dev'][obs][ltnt] if self.latents[ltnt].dev else 0
-                                chp = samples['chp'][ltnt] if self.latents[ltnt].chp else 0
-                                lot = samples['lot'][ltnt] if self.latents[ltnt].lot else 0
-                                ltnts[obs][ltnt] = npyro.deterministic(f'pred_{obs}_{ltnt}', nom + dev + chp + lot)
-
-                            # Now compute the dependent variables, only providing the necessary inputs to each function
-                            for dep in [n for n in sorted_vars if n in self.dependents]:
-                                args = {arg: val for arg, val in {**ltnts[obs], **deps[obs], **conds, **spm_nodes}.items() if arg in self.dependents[dep].requires}
-                                deps[obs][dep] = npyro.deterministic(f'pred_{obs}_{dep}', self.dependents[dep].compute(**args))
-
-                            # Next, create the observed variables measured in the experiment
-                            # Observed variable distributions can be parameterized in terms of dependent variables or params
-                            concated = {**ltnts[obs], **deps[obs], **conds, **spm_nodes}
-                            obs_dist_args = {arg: concated[val] for arg, val in self.measures[obs].prms.items()}
-                            #measd = measured[obs] if measured is not None else None
-                            observes[obs] = npyro.sample(f'pred_{obs}', self.measures[obs].dist(**obs_dist_args))
-
-                    # Finally are lifespan variables that are special dependent variables predicting reliability
-                    preds, pred_funcs = {}, {}
-                    for pred in self.predictors:
-                        args = {arg: val for arg, val in {**observes, **conds, **spm_nodes}.items() if arg in self.predictors[pred].requires}
-                        if self.predictors[pred].dist is None:
-                            pred_funcs[pred] = npyro.deterministic(f'{pred}', self.predictors[pred].compute(**args))
-                        else:
-                            pred_funcs[pred] = npyro.deterministic(f'{pred}_lf', self.predictors[pred].compute(**args))
-                            concated = {**pred_funcs, **spm_nodes}
-                            obs_dist_args = {arg: concated[val] for arg, val in self.predictors[pred].prms.items()}
-                            actual = measured[pred] if measured is not None else None
-                            preds[pred] = npyro.sample(f'{pred}', self.predictors[pred].dist(**obs_dist_args), obs=actual)
+                                if obs_info.dist is not None:
+                                    observes[exp][obs] = npyro.sample(f'{exp}_{obs}', obs_info.dist(**obs_dist_args), obs=measd)
+                                else:
+                                    observes[exp][obs] = npyro.deterministic(f'{exp}_{obs}', obs_info.compute(**obs_dist_args))
 
         # Assemble the contextual information for the model needed to work with the defined SPMs
         hyl_priors = {hyl: self.hyls[hyl].prms for hyl in self.hyls}
@@ -357,7 +260,7 @@ class SPMBuilder():
         ltnt_subsample_site_names.extend([f'{ltnt}_chp' for ltnt in self.latents if self.latents[ltnt].chp is not None])
         ltnt_subsample_site_names.extend([f'{ltnt}_lot' for ltnt in self.latents if self.latents[ltnt].lot is not None])
 
-        return ReliabilityModel(self.model_name, test_model, lifespan_model, self.params,
+        return ReliabilityModel(self.model_name, spm, self.params,
                                 list(self.hyls.keys()), hyl_priors, hyl_info,
                                 list(self.latents.keys()), ltnt_subsample_site_names,
                                 list(self.measures.keys()), self.measurement_counts,

@@ -2,29 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time as t
-import pytensor
-import pytensor.tensor as pt
-import pymc
 from itertools import product
 
-import jax.numpy as jnp
-import jax.random as rand
+import numpyro
 import numpyro.distributions as dists
+# This call has to occur before importing jax
+numpyro.set_host_device_count(4)
+
+import jax.numpy as jnp # noqa: ImportNotAtTopOfFile
+import jax.random as rand
 
 import gerabaldi
 from gerabaldi.models import *
+
+from matplotlib import pyplot as plt
 
 import os
 import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from matplotlib import pyplot as plt
-
 import stratcona
 
 BOLTZ_EV = 8.617e-5
-
 SHOW_PLOTS = True
 
 
@@ -35,8 +35,6 @@ def electromigration_qualification():
     run_posterior_analysis = False
     simulated_data_mode = 'model'
 
-    mb = stratcona.SPMBuilder(mdl_name='Electromigration')
-
     '''
     ===== 1) Determine long-term reliability requirements =====
     We will base the requirement on the SIL3 specification of less than 10^-3 (0.001) probability of failure on demand,
@@ -44,7 +42,8 @@ def electromigration_qualification():
     electromigration failures occur before the 10 year intended product useful life. This translates to a metric of a
     worst case 0.1% quantile credible region of at least 10 years.
     '''
-    objective = stratcona.ReliabilityRequirement(metric='lbci', quantile=99.9, target_lifespan=10 * 8760)
+    objective = stratcona.ReliabilityRequirement(metric=stratcona.engine.metrics.qx_lbci,
+                                                 quantile=99.9, target_lifespan=10 * 8760)
 
     '''
     ===== 2) Model selection =====
@@ -53,8 +52,9 @@ def electromigration_qualification():
     
     Physical parameters that are not directly related to wear-out are assumed to be already characterized
     (e.g., threshold voltage) and so are treated as fixed parameters, only the electromigration specific parameters form
-    the latent variable space we infer.
+    the latent variable space to learn.
     '''
+    mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
     num_devices = 5
 
     # Express wire current density as a function of the number of transistors and the voltage applied
@@ -79,8 +79,8 @@ def electromigration_qualification():
     mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
     mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 8, 'scale': 1})
     mb.add_hyperlatent('eaa_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
-    mb.add_latent('em_n', dists.Normal, {'loc': 'n_nom', 'scale': 'n_var'})
-    mb.add_latent('em_eaa', dists.Normal, {'loc': 'eaa_nom', 'scale': 'eaa_var'})
+    mb.add_latent('em_n', 'n_nom', 'n_var')
+    mb.add_latent('em_eaa', 'eaa_nom', 'eaa_var')
 
     def fail_time(em_ttf):
         return jnp.min(em_ttf)
@@ -112,7 +112,7 @@ def electromigration_qualification():
     volts = [0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
     permute_conds = product(temps, volts)
     possible_tests = [{'t1': {'vdd': v, 'temp': t}} for t, v in permute_conds]
-    exp_sampler = stratcona.assistants.iterator.iter_sampler(possible_tests)
+    exp_sampler = stratcona.assistants.iter_sampler(possible_tests)
 
     '''
     ===== 4) Accelerated test design analysis =====
@@ -162,9 +162,11 @@ def electromigration_qualification():
 
     '''
     ===== 5) Conduct the selected test =====
-    Here we will use Gerabaldi to emulate running the test on a real-world product. The simulator only works with
-    temporal models, thus our electromigration failures are determined in an entirely different manner than using a
-    similar equation to the inference model.
+    Here we use Gerabaldi to emulate running the test on a real-world product. The simulator only works with
+    temporal models, thus our electromigration failures are determined not by Black's equation but by an entirely
+    different custom probabilistic model.
+    
+    Optional fallbacks to Black's equation or manual entry failure data are provided.
     '''
     if simulated_data_mode == 'gerabaldi':
         em_meas = MeasSpec({'interconnect_failure': 5}, {}, 'Bed Height Sampling')
@@ -208,14 +210,12 @@ def electromigration_qualification():
                 fails.append(876_000)
 
     elif simulated_data_mode == 'model':
-
-
         sim_priors = {'n_nom': {'loc': 1.65, 'scale': 0.002}, 'n_var': {'loc': 0.12, 'scale': 0.002},
                       'eaa_nom': {'loc': 8.5, 'scale': 0.002}, 'eaa_var': {'loc': 0.09, 'scale': 0.002}, }
         sim_data = am.sim_test_measurements(alt_priors=sim_priors)
     else:
         # Use hard coded data
-        fails = [120_000, 98_000, 456_000, 400_000, 234_000]
+        sim_data = [120_000, 98_000, 456_000, 400_000, 234_000]
 
     print(f"Simulated failure times: {sim_data}")
 
@@ -232,15 +232,7 @@ def electromigration_qualification():
     Check whether we meet the long-term reliability target and with sufficient confidence.
     '''
     if run_posterior_analysis:
-        tm.compile_func('obs_sampler')
-        tm.override_func('life_sampler', tm._compiled_funcs['obs_sampler'])
-        tm.set_experiment_conditions({'t1': {'vdd': 0.8, 'temp': 330}})
-        estimate = tm.estimate_reliability(percent_bound, num_samples=30_000)
-        print(f"Estimated {percent_bound}% upper credible lifespan: {estimate} hours")
-        if estimate > 10 * 8760:
-            print('Yay! Computed metric meets spec.')
-        else:
-            print('Noooo! Computed metric fails to meet spec.')
+        am.evaluate_reliability('chip_fail')
         if SHOW_PLOTS:
             plt.show()
 

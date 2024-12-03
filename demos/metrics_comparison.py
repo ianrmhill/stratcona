@@ -1,11 +1,10 @@
 # Copyright (c) 2024 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import jax
+import numpyro.distributions as dists
+
 import jax.numpy as jnp
 import jax.random as rand
-import numpyro as npyro
-import numpyro.distributions as dists
 
 import seaborn as sb
 from matplotlib import pyplot as plt
@@ -18,25 +17,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import stratcona
 
 
-def check_dist():
-    dist = dists.Delta(v=0.7)
-
-    key = rand.key(2394723)
-    samples = dist.sample(key, (10_000,))
-
-    ### Plot the distribution ###
-    sb.set_context('notebook')
-    sb.set_theme(style='ticks', font='Times New Roman')
-    fig, p = plt.subplots(1, 1)
-
-    p.hist(samples, 100, density=True, histtype='stepfilled',
-           label=f'Mean: {round(dist.mean, 4)}, Var: {round(dist.variance, 4)}')
-    p.legend()
-
-    plt.show()
-
-
 def metrics_bimodal_comparison():
+    # Generate some bimodal failure data that could feasibly represent wear-out in some semiconductor product
     dist1 = dists.Weibull(scale=70.5, concentration=8.4)
     dist2 = dists.LogNormal(loc=3.5, scale=0.21)
     k1, k2 = rand.split(rand.key(2023590827))
@@ -52,7 +34,7 @@ def metrics_bimodal_comparison():
     lifespan = stratcona.engine.metrics.qx_lbci(samples, 99.9)
     mttf = stratcona.engine.metrics.mttf(samples)
 
-    ### Plot the distribution ###
+    ### Plot the distribution and metric values ###
     sb.set_context('notebook')
     sb.set_theme(style='ticks', font='Times New Roman')
     fig, p = plt.subplots(1, 1)

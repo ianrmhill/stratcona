@@ -1,16 +1,8 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2024 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
-
-# I think it makes the most sense to have two model-level classes within Stratcona. The first is the model builder which
-# needs to set everything up in order to spit out the needed PyMC model, but this requires a bunch of functionality and
-# data which is no longer needed as soon as the model is built. To simplify the user experience, a model manager class
-# here can be used to track the still-needed information and quickly call the various operations that can be performed
-# on a model to simplify the user's experience in actually manipulating or computing quantities using the model.
 
 from datetime import timedelta
 from functools import partial
-import pytensor as pt
-import pymc
 from matplotlib import pyplot as plt
 
 import jax.random as rand
@@ -18,12 +10,9 @@ import jax.random as rand
 from gerabaldi.models.reports import TestSimReport
 import gracefall
 
-from stratcona.assistants.probability import shorthand_compile # noqa: ImportNotAtTopOfFile
 from stratcona.engine.inference import inference_model
-from stratcona.engine.boed import *
 from stratcona.engine.bed import bed_run
 from stratcona.engine.metrics import *
-from stratcona.modelling.builder import SPMBuilder
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement
 
 
@@ -67,13 +56,9 @@ class AnalysisManager:
             report.add_measurements(as_dataframe)
             gracefall.static.gen_violinplot(report.measurements.loc[report.measurements['param'] == site])
 
-    def sim_test_measurements(self, alt_priors=None, rtrn_tr=False):
+    def sim_test_measurements(self, alt_priors=None, rtrn_tr=False, num=()):
         rng = self._derive_key()
-        if rtrn_tr:
-            measd = self.relmdl.sample(rng, self.test)
-        else:
-            measd = self.relmdl.sample_measurements(rng, self.test.config, self.test.conditions, priors=alt_priors)
-        return measd
+        return self.relmdl.sample(rng, self.test, num_samples=num, alt_priors=alt_priors, full_trace=rtrn_tr)
 
     def do_inference(self, observations, test: ReliabilityTest = None, auto_update_prior=True):
         rng = self._derive_key()
@@ -83,19 +68,28 @@ class AnalysisManager:
         if auto_update_prior:
             self.relmdl.hyl_beliefs = new_prior
 
-    def evaluate_reliability(self, predictor, num_samples=300_000):
+    def evaluate_reliability(self, predictor, num_samples=300_000, plot_results=False):
         rng = self._derive_key()
-        sampler = partial(self.relmdl.sample_predictor_from_beliefs, rng, predictor)
+        samples = self.relmdl.sample(rng, self.test, (num_samples,), keep_sites=predictor)
 
-        if self.relreq.type == 'lbci':
-            lifespan = worst_case_quantile_credible_region(sampler, self.relreq.quantile, num_samples)
-        else:
-            raise Exception('Invalid metric type')
+        lifespan = self.relreq.type(samples, self.relreq.quantile)
 
         if lifespan >= self.relreq.target_lifespan:
             print(f'Target lifespan of {self.relreq.target_lifespan} met! Predicted: {lifespan}.')
         else:
             print(f'Target lifespan of {self.relreq.target_lifespan} not met! Predicted: {lifespan}.')
+
+        if plot_results:
+            fig, p = plt.subplots(1, 1)
+            p.hist(samples, 300, density=True, color='grey', histtype='stepfilled')
+            p.axvline(lifespan, 0, 1, color='orange', linestyle='solid',
+                      label=f'Q{self.relreq.quantile}%-LBCI: {round(float(lifespan), 2)}')
+            p.axvline(self.relreq.target_lifespan, 0, 1, color='orange', linestyle='dashed',
+                      label=f'Target lifespan: {round(float(self.relreq.target_lifespan), 2)}')
+
+            p.legend()
+            p.set_xlabel('Failure Time (years)', fontsize='medium')
+            p.set_ylabel('Probability Density')
 
     def find_best_experiment(self, l, n, m, exp_sampler):
         rng = self._derive_key()

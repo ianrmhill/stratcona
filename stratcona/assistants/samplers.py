@@ -1,9 +1,9 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2024 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 from itertools import cycle
-
-__all__ = ['iter_sampler']
+import jax.numpy as jnp
+import jax.random as rand
 
 
 def iter_sampler(possible_vals, cycle_infinitely: bool = True):
@@ -27,4 +27,29 @@ def iter_sampler(possible_vals, cycle_infinitely: bool = True):
 
     def _():
         return next(iterator)
+    return _
+
+
+def experiment_sampler(design_dimension_vals: list[jnp.ndarray | dict], design_dimension_dists: list = None):
+    dist_args = design_dimension_vals
+    dim_samplers = design_dimension_dists
+
+    def _(rng_key):
+        k1 = rng_key
+        items = []
+        for i in range(len(dist_args)):
+            k1, k2 = rand.split(k1)
+            items.append(rand.choice(k2, dist_args[i]) if type(dist_args[i] == jnp.ndarray)\
+                else dim_samplers[i](**dist_args[i]))
+        return items
+    return _
+
+
+def static_parallel_experiments_sampler(exp_samplers: list):
+    """
+    Enables sampling of a joint of multiple experiments to allow for static optimization of multiple parallel
+    experiments.
+    """
+    def _():
+        return [exp_sampler() for exp_sampler in exp_samplers]
     return _

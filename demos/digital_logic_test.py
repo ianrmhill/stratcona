@@ -48,7 +48,6 @@ def logic_test_demo():
     mb.add_params(o_var=0.03)
     mb.add_measured('v_meas', dists.Normal, {'loc': 'o', 'scale': 'o_var'}, 1)
 
-
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48939837832)
 
     test = stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'inputs': jnp.array([0, 1, 1])}})
@@ -94,7 +93,7 @@ def logic_test_demo():
                     {'t1': {'inputs': tests[i]}, 't2': {'inputs': tests[j]}, 't3': {'inputs': tests[k]}})
                 test_list.append(test)
 
-    exp_sampler = stratcona.assistants.iterator.iter_sampler(test_list)
+    exp_sampler = stratcona.assistants.iter_sampler(test_list)
 
     eigs = am.find_best_experiment(512, 8, 243, exp_sampler)
     eigs_bits = [eigs[i] * 1.442695 for i in range(len(eigs))]
