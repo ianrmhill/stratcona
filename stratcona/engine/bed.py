@@ -485,20 +485,61 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def bed_run(rng_key, l, n, m, exp_sampler, spm, u_threshold=None):
+def u_ig(lp_i, p_i, lp_lkly, p_y):
+    lp_post = lp_lkly - jnp.expand_dims(jnp.where(p_y > 0, jnp.log(p_y), jnp.inf), 1)
+    p_post = jnp.exp(lp_post)
+
+    h_pri = -jnp.sum(lp_i * p_i, axis=1)
+    h_post = -jnp.sum(lp_post * p_post, axis=1)
+
+    return (h_pri - h_post) / jnp.sum(p_i, axis=1)
+
+
+def u_pp(lf_samples, p_lkly, p_y):
+    posterior = p_lkly / jnp.expand_dims(p_y, -1)
+    posterior = jnp.where(jnp.isnan(posterior), 0, posterior)
+    clean = jnp.where(lf_samples['faulty'], 0, posterior)
+    p_clean = jnp.sum(clean)
+    return p_clean
+
+
+def eig(lp_i, p_i, lp_lkly, p_y):
+    p_y_norm = jnp.sum(p_y)
+    ig = u_ig(lp_i, p_i, lp_lkly, p_y)
+    return jnp.sum(ig * p_y) / p_y_norm
+
+
+
+def mtrpp(lp_lkly, p_y, lifespan, metric_target, quantile):
+    lkly_weights = jnp.exp(lp_lkly)
+    lifespans = lifespan.copy()
+    if len(f_l_dims) > 0:
+        lkly_weights = jnp.repeat(lkly_weights, int(lifespan.size / lkly_weights.size))
+        lifespans = lifespans.flatten()
+
+    metric = wquantiles.quantile(lifespans, lkly_weights, 1 - (quantile / 100))
+    pass_inds = metric >= metric_target
+    pass_percent = jnp.sum(p_y[pass_inds]) / jnp.sum(p_y)
+    return pass_percent
+
+
+def bed_run(rng_key, l, n, m, exp_sampler, spm, u_funcs=None):
     eus = []
     keys = rand.split(rng_key, l)
     for i in range(l):
         # Get the next proposal experiment design
         d = exp_sampler()
-        eu = evaluate_design(keys[i], d, n, m, spm, u_threshold)
+        if u_funcs is None:
+            eu = evaluate_design(keys[i], d, n, m, spm)
+        else:
+            eu = evaluate_design(keys[i], d, n, m, spm, u_funcs)
         eus.append(eu)
         print(f'{d.conditions}: {eu * NATS_TO_BITS} bits')
         #print(f'{d.conditions}: {eu * 100}%')
     return eus
 
 
-def evaluate_design(rng_key, d, n, m, spm, u_threshold=None, entropy_in_bits=False):
+def evaluate_design(rng_key, d, n, m, spm, u_funcs=eig):
     k1, k2, k3, k4, k5 = rand.split(rng_key, 5)
     # TODO: Potentially determine the normalization factors here, though there's a question of whether it's reasonable
     #       to have different normalization factors per experiment design 'd'. It may need to be done in the outer loop to
@@ -536,21 +577,34 @@ def evaluate_design(rng_key, d, n, m, spm, u_threshold=None, entropy_in_bits=Fal
     p_lkly = jnp.where(p_lkly < LOW_PROB_CUTOFF, 0.0, p_lkly)
 
     p_y = jnp.sum(p_lkly, axis=1) / i_norm
+    p_y_norm = jnp.sum(p_y)
+    p_y_normed = p_y / p_y_norm
+
+    # Compute other necessary inputs for the utility functions
+    # All input names must be standardized names for quantities OR site names of an SPM
+    utility_ins = {lp_i.__name__: lp_i, p_i.__name__: p_i, lp_lkly.__name__: lp_lkly, p_y.__name__: p_y}
+
+    # Call the requested utility functions with their required inputs
+    u = {}
+    utilities = u_funcs if type(u_funcs) == list else [u_funcs]
+    for func in utilities:
+        u[func.__name__] = func(**utility_ins)
+
+    # Assemble a report or just return the final utility
+    return u
 
     # Compute utility measures for individual sample observations
     # TODO: Switching logic for different and multiple utility definitions
-    u = u_ig(lp_i, p_i, lp_lkly, p_y)
+    #u = u_ig(lp_i, p_i, lp_lkly, p_y)
 
     #lf_samples = spm.sample_new(k5, d, num_samples=(n, m), keep_sites=spm.life_predictors, conditionals=i_s)
     #u = u_pp(lf_samples, p_lkly, p_y)
     #return u
     # Zero out the utility of extremely low probability observation space samples, as these often end up with infinite
     # utility due to numerical instability of log and division operations
-    u = jnp.where(p_y < LOW_PROB_CUTOFF, 0.0, u)
+    #u = jnp.where(p_y < LOW_PROB_CUTOFF, 0.0, u)
 
     # Compute metrics across all sampled observations
-    p_y_norm = jnp.sum(p_y)
-    p_y_normed = p_y / p_y_norm
     e_u = jnp.sum(u * p_y) / p_y_norm
     v_u = jnp.sum((u - e_u) ** 2) / n
     m_ind = int(jnp.argmin(u))
@@ -571,21 +625,3 @@ def evaluate_design(rng_key, d, n, m, spm, u_threshold=None, entropy_in_bits=Fal
 
     # Support representing entropy in units of 'nats' or 'bits'
     return e_u if not entropy_in_bits else e_u * NATS_TO_BITS
-
-
-def u_ig(lp_i, p_i, lp_lkly, p_y):
-    lp_post = lp_lkly - jnp.expand_dims(jnp.where(p_y > 0, jnp.log(p_y), jnp.inf), 1)
-    p_post = jnp.exp(lp_post)
-
-    h_pri = -jnp.sum(lp_i * p_i, axis=1)
-    h_post = -jnp.sum(lp_post * p_post, axis=1)
-
-    return (h_pri - h_post) / jnp.sum(p_i, axis=1)
-
-
-def u_pp(lf_samples, p_lkly, p_y):
-    posterior = p_lkly / jnp.expand_dims(p_y, -1)
-    posterior = jnp.where(jnp.isnan(posterior), 0, posterior)
-    clean = jnp.where(lf_samples['faulty'], 0, posterior)
-    p_clean = jnp.sum(clean)
-    return p_clean

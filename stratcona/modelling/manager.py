@@ -7,8 +7,7 @@ from matplotlib import pyplot as plt
 
 import jax.random as rand
 
-from gerabaldi.models.reports import TestSimReport
-import gracefall
+from gerabaldi.models.reports import SimReport
 
 from stratcona.engine.inference import inference_model
 from stratcona.engine.bed import bed_run
@@ -30,31 +29,11 @@ class AnalysisManager:
     def set_test_definition(self, test_def: ReliabilityTest):
         self.test = test_def
 
+    def set_field_use_conditions(self, conds):
+        self.field_test = ReliabilityTest({'field': {'lot': 1, 'chp': 1}}, {'field': conds})
+
     def update_priors(self, new_priors):
         self.relmdl.hyl_beliefs = new_priors
-
-    def examine_model(self, model_components: list):
-        rng = self._derive_key()
-
-        meas_sites = []
-        for exp in self.test.config:
-            if 'meas' in model_components:
-                meas_sites.extend([f'{meas}_{exp}' for meas in self.relmdl.observes])
-            if 'ltnts' in model_components:
-                for meas in self.relmdl.observes:
-                    meas_sites.extend([f'{ltnt}_{meas}_{exp}' for ltnt in self.relmdl.ltnts])
-        if 'hyls' in model_components:
-            meas_sites.extend(self.relmdl.hyls)
-
-        measd = self.relmdl.sample(rng, self.test, num_samples=50_000, keep_sites=meas_sites)
-
-        for site in measd:
-            report = TestSimReport(name='Sampled Values')
-            exp_samples = measd[site].reshape((1, 1, -1))
-            print(f'Mean of {site}: {jnp.mean(exp_samples)}')
-            as_dataframe = TestSimReport.format_measurements(exp_samples, site, timedelta(), 0)
-            report.add_measurements(as_dataframe)
-            gracefall.static.gen_violinplot(report.measurements.loc[report.measurements['param'] == site])
 
     def sim_test_measurements(self, alt_priors=None, rtrn_tr=False, num=()):
         rng = self._derive_key()
@@ -70,9 +49,10 @@ class AnalysisManager:
 
     def evaluate_reliability(self, predictor, num_samples=300_000, plot_results=False):
         rng = self._derive_key()
-        samples = self.relmdl.sample(rng, self.test, (num_samples,), keep_sites=predictor)
+        pred_site = f'field_{predictor}'
+        samples = self.relmdl.sample(rng, self.field_test, (num_samples,), keep_sites=[pred_site])
 
-        lifespan = self.relreq.type(samples, self.relreq.quantile)
+        lifespan = self.relreq.type(samples[pred_site], self.relreq.quantile)
 
         if lifespan >= self.relreq.target_lifespan:
             print(f'Target lifespan of {self.relreq.target_lifespan} met! Predicted: {lifespan}.')
@@ -80,17 +60,18 @@ class AnalysisManager:
             print(f'Target lifespan of {self.relreq.target_lifespan} not met! Predicted: {lifespan}.')
 
         if plot_results:
+            # TODO: May be better to plot the CDF as opposed to the PDF for this visualization
             fig, p = plt.subplots(1, 1)
-            p.hist(samples, 300, density=True, color='grey', histtype='stepfilled')
-            p.axvline(lifespan, 0, 1, color='orange', linestyle='solid',
+            p.hist(samples[pred_site], 300, density=True, color='grey', histtype='stepfilled')
+            p.axvline(float(lifespan), 0, 1, color='orange', linestyle='solid',
                       label=f'Q{self.relreq.quantile}%-LBCI: {round(float(lifespan), 2)}')
-            p.axvline(self.relreq.target_lifespan, 0, 1, color='orange', linestyle='dashed',
+            p.axvline(float(self.relreq.target_lifespan), 0, 1, color='orange', linestyle='dashed',
                       label=f'Target lifespan: {round(float(self.relreq.target_lifespan), 2)}')
 
             p.legend()
             p.set_xlabel('Failure Time (years)', fontsize='medium')
             p.set_ylabel('Probability Density')
 
-    def find_best_experiment(self, l, n, m, exp_sampler):
+    def find_best_experiment(self, l, n, m, exp_sampler, utility_functions=None):
         rng = self._derive_key()
-        return bed_run(rng, l, n, m, exp_sampler, self.relmdl)
+        return bed_run(rng, l, n, m, exp_sampler, self.relmdl, utility_functions)

@@ -1,8 +1,6 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2024 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import pymc
-import arviz
 import numpy as np
 import jax.numpy as jnp
 import scipy
@@ -10,70 +8,7 @@ import scipy
 from numpyro.infer import NUTS, MCMC
 from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 
-from multiprocess import Pool
-from functools import partial
-
 from stratcona.assistants.dist_translate import npyro_to_scipy
-
-__all__ = ['inference_model', 'fit_latent_params_to_posterior_samples', 'importance_sampling_inference']
-
-
-def importance_sampling_chain(y, m, i_s, lp_i, lp_y):
-    test_i = i_s()
-    i_store = np.empty((m, len(test_i), len(test_i[0])))
-    lp_i_store = np.zeros((m,))
-    lp_w_store = np.zeros((m,))
-
-    ### Computation ###
-    for m_i in range(m):
-        i = i_s()
-        i_store[m_i] = i
-        lp_i_store[m_i] = lp_i(*i)
-        lp_w_store[m_i] = lp_y(*i, *y) + lp_i_store[m_i]
-
-    return i_store, lp_w_store
-
-
-def importance_sampling_inference(y, latents, prm_map, i_s, lp_i, lp_y, num_samples: int = 3000, num_chains: int = 4,
-                                  multicore: bool = False, resample_rng=None):
-    ### Setup Work ###
-    if multicore:
-        pool = Pool(processes=4)
-    # Provides the capability to test the routine through reproducible sampling
-    rng = np.random.default_rng() if resample_rng is None else resample_rng
-
-    to_run = partial(importance_sampling_chain, m=num_samples, y=list(y.values()), i_s=i_s, lp_i=lp_i, lp_y=lp_y)
-
-    if multicore:
-        with pool:
-            outs = pool.map(to_run)
-    else:
-        outs = []
-        for chain in range(num_chains):
-            outs.append(to_run())
-
-    i_list = [outs[i][0] for i in range(num_chains)]
-    samples = np.concatenate(i_list)
-    w_list = [outs[i][1] for i in range(num_chains)]
-    weights = np.exp(np.concatenate(w_list))
-    # Sum of all p_marg array elements must be 1 for resampling via numpy's choice
-    weights_normed = weights / np.sum(weights)
-    n = num_samples * num_chains
-    # Compute the effective sample size as a diagnostic
-    ess = 1 / np.sum(weights_normed ** 2)
-    print(f"ESS = {ess}")
-    # Resample according to the marginal likelihood of each sample
-    resampled_inds = rng.choice(n, (n,), p=weights_normed)
-    print(f"Resample diversity = {100 * (len(np.unique(resampled_inds)) / n)}, count = {len(np.unique(resampled_inds))}")
-    test_i = i_s()
-    resamples = np.empty((n, len(test_i), len(test_i[0])))
-    for s_i in range(n):
-        resamples[s_i] = samples[resampled_inds[s_i]]
-
-    fit_samples = {}
-    for i, ltnt in enumerate(latents):
-        fit_samples[ltnt.name] = resamples[:, i]
-    return fit_latent_params_to_posterior_samples(latents, prm_map, fit_samples)
 
 
 def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 2_000, num_chains: int = 4):
@@ -113,54 +48,6 @@ def fit_dist_to_samples(hyl_info, samples):
         for prm in hyl_info['fixed']:
             npyro_prms[prm] = hyl_info['fixed'][prm]
     return npyro_prms
-
-
-def fit_latent_params_to_posterior_samples(latents: list, prm_map: dict, idata: arviz.InferenceData | dict[np.ndarray],
-                                           run_fit_analysis=False):
-    """
-    After PyMC runs a sampling algorithm we end up with many samples from the posterior. What PyMC does not do, however,
-    is update the parameterized latent variables based on the posterior. Here we do this manually using the generated
-    samples.
-
-    Returns
-    -------
-
-    """
-    if type(idata) == arviz.InferenceData:
-        post_data = idata.posterior
-    else:
-        post_data = idata
-    posterior_params = {}
-    for ltnt in latents:
-        if type(idata) == arviz.InferenceData:
-            sampled = post_data[ltnt.name].values.flatten()
-        else:
-            sampled = post_data[ltnt.name]
-        dist_to_fit = pymc_to_scipy(ltnt.owner.op.name)
-        if dist_to_fit == 'categorical':
-            # For discrete variables we have to perform the updates manually. We transform everything into a
-            # categorical distribution to form a distribution that can fit any sampled dataset perfectly.
-            total_samples = sampled.size
-            # Count the number of occurrences of each value then normalize to get the posterior probabilities
-            updated = np.bincount(sampled) / total_samples
-            posterior_params[ltnt.name] = {'p': updated}
-        else:
-            scipy_dist = getattr(scipy.stats, dist_to_fit)
-            params = scipy_dist.fit(sampled)
-            new_prms = {}
-            if dist_to_fit == 'gamma':
-                new_prms['alpha'] = params[0]
-                new_prms['beta'] = 1 / params[2]
-            else:
-                for i, prm in enumerate(prm_map[ltnt.name]):
-                    new_prms[prm] = params[i]
-            posterior_params[ltnt.name] = new_prms
-            # Fit analysis only useful for continuous variables since the categorical distribution will fit every
-            # set of discrete samples perfectly
-            if run_fit_analysis:
-                check_fit_quality(ltnt.name, sampled, scipy_dist, posterior_params[ltnt])
-
-    return posterior_params
 
 
 def check_fit_quality(variable_name, data, dist_type, dist_params):

@@ -3,6 +3,7 @@
 
 import time as t
 from itertools import product
+from functools import partial
 
 import numpyro
 import numpyro.distributions as dists
@@ -29,10 +30,10 @@ SHOW_PLOTS = True
 
 
 def electromigration_qualification():
-    analyze_prior = False
-    run_bed_analysis = False
+    analyze_prior = True
+    run_bed_analysis = True
     run_inference = True
-    run_posterior_analysis = False
+    run_posterior_analysis = True
     simulated_data_mode = 'model'
 
     '''
@@ -55,7 +56,7 @@ def electromigration_qualification():
     the latent variable space to learn.
     '''
     mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
-    num_devices = 5
+    num_devices = 10
 
     # Express wire current density as a function of the number of transistors and the voltage applied
     def j_n(n_fins, vdd, vth_typ, i_base):
@@ -70,10 +71,10 @@ def electromigration_qualification():
         return jnp.abs(em_var_percent * em_blacks)
 
     # Now correspond the degradation mechanisms to the output values
-    mb.add_dependent('jn_wire', j_n)
-    mb.add_dependent('em_blacks', em_blacks_equation)
-    mb.add_dependent('em_variability', em_variability)
-    mb.add_measured('em_ttf', dists.Normal, {'loc': 'em_blacks', 'scale': 'em_variability'}, num_devices)
+    mb.add_intermediate('jn_wire', j_n)
+    mb.add_intermediate('em_blacks', em_blacks_equation)
+    mb.add_intermediate('em_variability', em_variability)
+    mb.add_observed('em_ttf', dists.Normal, {'loc': 'em_blacks', 'scale': 'em_variability'}, num_devices)
 
     mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 1.8, 'scale': 0.3})
     mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
@@ -85,17 +86,18 @@ def electromigration_qualification():
     def fail_time(em_ttf):
         return jnp.min(em_ttf)
 
-    mb.add_predictor('chip_fail', fail_time, pred_conds={'vdd': 0.85, 'temp': 330})
+    mb.add_fail_criterion('chip_fail', fail_time)
 
     # Wire area in nm^2
     mb.add_params(n_fins=24, vth_typ=0.32, i_base=0.8, wire_area=1.024 * 1000 * 1000, k=BOLTZ_EV,
                   em_var_percent=0.04, fail_var=12)
 
     am = stratcona.AnalysisManager(mb.build_model(), rel_req=objective, rng_seed=2338923)
+    am.set_field_use_conditions({'vdd': 0.85, 'temp': 330})
 
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
     if analyze_prior:
-        am.evaluate_reliability('chip_fail')
+        am.evaluate_reliability('chip_fail', plot_results=True)
         if SHOW_PLOTS:
             plt.show()
 
@@ -123,41 +125,22 @@ def electromigration_qualification():
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
     if run_bed_analysis:
-        tm.curr_rig = 3.2
+        qx_lbci_pp = partial(stratcona.engine.bed.mtrpp,
+                             metric_target=am.relreq.target_lifespan, quantile=am.relreq.quantile)
+        utility_options = [stratcona.engine.bed.eig, qx_lbci_pp]
 
-        # Compile the lifespan function
-        field_vdd, field_temp = 0.8, 345
-        #em_n, em_eaa = pt.dvector('em_n'), pt.dvector('em_eaa')
-        em_n, em_eaa = pt.dscalar('em_n'), pt.dscalar('em_eaa')
-        fail_time = em_blacks_equation(j_n(24, field_vdd), field_temp, em_n, em_eaa)
-        #fail_time = pt.min(em_blacks_equation(j_n(24, field_vdd), field_temp, em_n, em_eaa))
-        life_func = pytensor.function([em_n, em_eaa], fail_time)
-        tm.override_func('life_func', life_func)
-        tm.set_upper_credible_target(10 * 8760, 99.9)
-
-        tm_marg_sample.compile_func('obs_sampler')
-        #tm_marg_sample.examine('prior_predictive')
-        #plt.show()
-        #tm.override_func('obs_sampler', tm_marg_sample._compiled_funcs['obs_sampler'])
         # Run the experimental design analysis
-        results = tm.determine_best_test(exp_sampler, num_tests_to_eval=15,
-                                         num_obs_samples_per_test=3000, num_ltnt_samples_per_test=3000,
-                                         life_target=min_lifespan)
+        results = am.find_best_experiment(15, 3000, 3000, exp_sampler, utility_options)
 
-        ## TODO: Improve score-based selection criteria
-        def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
-            return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)
-        results['final_score'] = bed_score(results['rig_pass_prob'], results['rig_fails_only_eig_gap'])
+        #def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
+        #    return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)
+        #results['final_score'] = bed_score(results['rig_pass_prob'], results['rig_fails_only_eig_gap'])
+
         selected_test = results.iloc[results['final_score'].idxmax()]['design']
     else:
         selected_test = {'t1': {'vdd': 0.90, 'temp': 375}}
 
-    #cfg = {'e1': {'lot': 1, 'chp': 1}, 'e2': {'lot': 1, 'chp': 1}, 'e3': {'lot': 3, 'chp': 2}}
-    cfg = {'e1': {'lot': 2, 'chp': 2}, 'e2': {'lot': 2, 'chp': 2}}
-    #conds = {'e1': {'vdd': 0.95, 'temp': 420}, 'e2': {'vdd': 0.95, 'temp': 360}, 'e3': {'vdd': 0.9, 'temp': 360}}
-    conds = {'e1': {'vdd': 0.9, 'temp': 330}, 'e2': {'vdd': 0.95, 'temp': 370}}
-    test = stratcona.ReliabilityTest(cfg, conds)
-    am.set_test_definition(test)
+    am.set_test_definition(selected_test)
     print(am.test)
 
     '''
@@ -212,7 +195,8 @@ def electromigration_qualification():
     elif simulated_data_mode == 'model':
         sim_priors = {'n_nom': {'loc': 1.65, 'scale': 0.002}, 'n_var': {'loc': 0.12, 'scale': 0.002},
                       'eaa_nom': {'loc': 8.5, 'scale': 0.002}, 'eaa_var': {'loc': 0.09, 'scale': 0.002}, }
-        sim_data = am.sim_test_measurements(alt_priors=sim_priors)
+        sim_data_full = am.sim_test_measurements(alt_priors=sim_priors)
+        sim_data = {'e1': {'em_ttf': sim_data_full['e1_em_ttf']}, 'e2': {'em_ttf': sim_data_full['e2_em_ttf']}}
     else:
         # Use hard coded data
         sim_data = [120_000, 98_000, 456_000, 400_000, 234_000]
@@ -232,7 +216,7 @@ def electromigration_qualification():
     Check whether we meet the long-term reliability target and with sufficient confidence.
     '''
     if run_posterior_analysis:
-        am.evaluate_reliability('chip_fail')
+        am.evaluate_reliability('chip_fail', plot_results=True)
         if SHOW_PLOTS:
             plt.show()
 
