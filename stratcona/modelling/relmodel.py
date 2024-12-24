@@ -61,6 +61,11 @@ class ReliabilityModel():
         self.predictors = pred_sites
         self.fail_criteria = fail_sites
 
+        self.i_s_override = False
+        self.y_s_override = False
+        self.i_s_custom = None
+        self.y_s_custom = None
+
     def validate_model(self):
         # TODO
         pass
@@ -71,9 +76,13 @@ class ReliabilityModel():
         if keep_sites is not None:
             sites = []
             for i, site in enumerate(keep_sites):
-                if site in self.observes:
+                if site in self.observes or site in self.predictors:
                     for tst in test.config:
                         sites.append(f'{tst}_{site}')
+                elif site in self.ltnts or site in self._ltnt_subsamples:
+                    for tst in test.config:
+                        for obs in self.observes:
+                            sites.append(f'{tst}_{obs}_{site}')
                 else:
                     sites.append(site)
         else:

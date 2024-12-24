@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pprint import pprint
-import jax
-import jax.numpy as jnp
-import jax.random as rand
-import numpy as np
+
 import numpyro as npyro
 import numpyro.distributions as dists
+npyro.set_host_device_count(4)
+
+import jax.numpy as jnp
+import jax.random as rand
 
 from functools import partial
 from scipy.optimize import curve_fit
@@ -36,7 +37,6 @@ SHOW_PLOTS = True
 
 
 def tddb_inference():
-    npyro.set_host_device_count(4)
 
     # Data manipulation helper function
     def convert(vals):
@@ -71,19 +71,20 @@ def tddb_inference():
     mb_e.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_dev', chp='e_aa_chp', lot='e_aa_lot')
 
     mb_e.add_params(k=BOLTZ_EV, ttf_var=0.001)
-    mb_e.add_dependent('ttf_base', e_model_ttf)
-    mb_e.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'ttf_var'}, 10)
+    mb_e.add_intermediate('ttf_base', e_model_ttf)
+    mb_e.add_observed('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'ttf_var'}, 10)
 
     means['e'], vars['e'] = {}, {}
     am_e = stratcona.AnalysisManager(mb_e.build_model(), rng_seed=1295323)
     am_e.set_test_definition(test_s)
-    sim_tr = am_e.sim_test_measurements(rtrn_tr=True)
+    sim_tr = am_e.sim_test_measurements(rtrn_tr=False)
     ttfs['s']['e'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['e']['el_s'], means['e']['em_s'], means['e']['eh_s'] = ttfs['s']['e']['el']['ttf'].mean(), ttfs['s']['e']['em']['ttf'].mean(), ttfs['s']['e']['eh']['ttf'].mean()
     vars['e']['el_s'], vars['e']['em_s'], vars['e']['eh_s'] = ttfs['s']['e']['el']['ttf'].var(), ttfs['s']['e']['em']['ttf'].var(), ttfs['s']['e']['eh']['ttf'].var()
     fails_s['el']['e'], fails_s['em']['e'], fails_s['eh']['e'] = convert(ttfs['s']['e']['el']), convert(ttfs['s']['e']['em']), convert(ttfs['s']['e']['eh'])
     am_e.set_test_definition(test_l)
-    ttfs['l']['e'] = am_e.sim_test_measurements()
+    sim_tr = am_e.sim_test_measurements(rtrn_tr=False)
+    ttfs['l']['e'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['e']['el_l'], means['e']['em_l'], means['e']['eh_l'] = ttfs['l']['e']['el']['ttf'].mean(), ttfs['l']['e']['em']['ttf'].mean(), ttfs['l']['e']['eh']['ttf'].mean()
     vars['e']['el_l'], vars['e']['em_l'], vars['e']['eh_l'] = ttfs['l']['e']['el']['ttf'].var(), ttfs['l']['e']['em']['ttf'].var(), ttfs['l']['e']['eh']['ttf'].var()
     fails_l['el']['e'], fails_l['em']['e'], fails_l['eh']['e'] = convert(ttfs['l']['e']['el']), convert(ttfs['l']['e']['em']), convert(ttfs['l']['e']['eh'])
@@ -110,18 +111,20 @@ def tddb_inference():
     mb_inv_e.add_latent('e_ox', nom='e_ox_nom', dev='e_ox_dev', chp='e_ox_chp', lot='e_ox_lot')
 
     mb_inv_e.add_params(k=BOLTZ_EV, ttf_var=0.001)
-    mb_inv_e.add_dependent('inv_e_ttf', inv_e_model_ttf)
-    mb_inv_e.add_measured('ttf', dists.Normal, {'loc': 'inv_e_ttf', 'scale': 'ttf_var'}, 10)
+    mb_inv_e.add_intermediate('inv_e_ttf', inv_e_model_ttf)
+    mb_inv_e.add_observed('ttf', dists.Normal, {'loc': 'inv_e_ttf', 'scale': 'ttf_var'}, 10)
 
     means['ie'], vars['ie'] = {}, {}
     am_inv_e = stratcona.AnalysisManager(mb_inv_e.build_model(), rng_seed=3229823)
     am_inv_e.set_test_definition(test_s)
-    ttfs['s']['ie'] = am_inv_e.sim_test_measurements()
+    sim_tr = am_inv_e.sim_test_measurements(rtrn_tr=False)
+    ttfs['s']['ie'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['ie']['el_s'], means['ie']['em_s'], means['ie']['eh_s'] = ttfs['s']['ie']['el']['ttf'].mean(), ttfs['s']['ie']['em']['ttf'].mean(), ttfs['s']['ie']['eh']['ttf'].mean()
     vars['ie']['el_s'], vars['ie']['em_s'], vars['ie']['eh_s'] = ttfs['s']['ie']['el']['ttf'].var(), ttfs['s']['ie']['em']['ttf'].var(), ttfs['s']['ie']['eh']['ttf'].var()
     fails_s['el']['ie'], fails_s['em']['ie'], fails_s['eh']['ie'] = convert(ttfs['s']['ie']['el']), convert(ttfs['s']['ie']['em']), convert(ttfs['s']['ie']['eh'])
     am_inv_e.set_test_definition(test_l)
-    ttfs['l']['ie'] = am_inv_e.sim_test_measurements()
+    sim_tr = am_inv_e.sim_test_measurements(rtrn_tr=False)
+    ttfs['l']['ie'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['ie']['el_l'], means['ie']['em_l'], means['ie']['eh_l'] = ttfs['l']['ie']['el']['ttf'].mean(), ttfs['l']['ie']['em']['ttf'].mean(), ttfs['l']['ie']['eh']['ttf'].mean()
     vars['ie']['el_l'], vars['ie']['em_l'], vars['ie']['eh_l'] = ttfs['l']['ie']['el']['ttf'].var(), ttfs['l']['ie']['em']['ttf'].var(), ttfs['l']['ie']['eh']['ttf'].var()
     fails_l['el']['ie'], fails_l['em']['ie'], fails_l['eh']['ie'] = convert(ttfs['l']['ie']['el']), convert(ttfs['l']['ie']['em']), convert(ttfs['l']['ie']['eh'])
@@ -179,18 +182,20 @@ def tddb_inference():
     mb_p.add_latent('b', nom='b_nom', dev='b_dev', chp='b_chp', lot='b_lot')
 
     mb_p.add_params(k=BOLTZ_EV, ttf_var=0.001)
-    mb_p.add_dependent('ttf_base', p_model_ttf)
-    mb_p.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'ttf_var'}, 10)
+    mb_p.add_intermediate('ttf_base', p_model_ttf)
+    mb_p.add_observed('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'ttf_var'}, 10)
 
     means['p'], vars['p'] = {}, {}
     am_p = stratcona.AnalysisManager(mb_p.build_model(), rng_seed=1299323)
     am_p.set_test_definition(test_s)
-    ttfs['s']['p'] = am_p.sim_test_measurements()
+    sim_tr = am_p.sim_test_measurements(rtrn_tr=False)
+    ttfs['s']['p'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['p']['el_s'], means['p']['em_s'], means['p']['eh_s'] = ttfs['s']['p']['el']['ttf'].mean(), ttfs['s']['p']['em']['ttf'].mean(), ttfs['s']['p']['eh']['ttf'].mean()
     vars['p']['el_s'], vars['p']['em_s'], vars['p']['eh_s'] = ttfs['s']['p']['el']['ttf'].var(), ttfs['s']['p']['em']['ttf'].var(), ttfs['s']['p']['eh']['ttf'].var()
     fails_s['el']['p'], fails_s['em']['p'], fails_s['eh']['p'] = convert(ttfs['s']['p']['el']), convert(ttfs['s']['p']['em']), convert(ttfs['s']['p']['eh'])
     am_p.set_test_definition(test_l)
-    ttfs['l']['p'] = am_p.sim_test_measurements()
+    sim_tr = am_p.sim_test_measurements(rtrn_tr=False)
+    ttfs['l']['p'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['p']['el_l'], means['p']['em_l'], means['p']['eh_l'] = ttfs['l']['p']['el']['ttf'].mean(), ttfs['l']['p']['em']['ttf'].mean(), ttfs['l']['p']['eh']['ttf'].mean()
     vars['p']['el_l'], vars['p']['em_l'], vars['p']['eh_l'] = ttfs['l']['p']['el']['ttf'].var(), ttfs['l']['p']['em']['ttf'].var(), ttfs['l']['p']['eh']['ttf'].var()
     fails_l['el']['p'], fails_l['em']['p'], fails_l['eh']['p'] = convert(ttfs['l']['p']['el']), convert(ttfs['l']['p']['em']), convert(ttfs['l']['p']['eh'])
@@ -215,6 +220,8 @@ def tddb_inference():
         sample_sites.append(f'{temp}_ttf')
         val_map[f'{temp}_ttf'] = nom_ttfs[temp]
 
+    am_e.set_test_definition(test_s)
+    sim_tr = am_e.sim_test_measurements(rtrn_tr=False)
     k1, k2 = rand.split(rand.key(7932854))
     nom_vals = {key: jnp.full_like(sim_tr[key], val_map[key]) for key in sample_sites}
     mean_prob = jnp.exp(am_e.relmdl.logp(k1, test_s, nom_vals, sim_tr))
@@ -271,12 +278,13 @@ def tddb_inference():
 
     mb.add_params(k=BOLTZ_EV, fit_var=0.1)
 
-    mb.add_dependent('ttf_base', e_model_ttf)
-    mb.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'fit_var'}, 10)
+    mb.add_intermediate('ttf_base', e_model_ttf)
+    mb.add_observed('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'fit_var'}, 10)
 
-    mb.add_predictor('field_life', lambda ttf: ttf, {'temp': 55 + CELSIUS_TO_KELVIN})
+    mb.add_fail_criterion('field_life', lambda ttf: ttf)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=6289383)
+    am.set_field_use_conditions({'temp': 55 + CELSIUS_TO_KELVIN})
 
     # Sample some curves from the prior predictive
     test = stratcona.ReliabilityTest(
@@ -284,8 +292,8 @@ def tddb_inference():
         {'e': {'temp': 300, 'vg': 1.1}, 'em': {'temp': tm, 'vg': 1.1}, 'eh': {'temp': th, 'vg': 1.1}})
     rng = rand.key(48408)
     k1, k2 = rand.split(rng)
-    prm_samples = am.relmdl.sample(k1, test, 100, keep_sites=['a_o_nom', 'e_aa_nom'])
-    pri_sample_probs = jnp.exp(am.relmdl.hyl_logp(k2, test, prm_samples))
+    prm_samples = am.relmdl.sample(k1, test, (100,), keep_sites=['a_o_nom', 'e_aa_nom'])
+    pri_sample_probs = jnp.exp(am.relmdl.logp(k2, test, prm_samples, None, (100,)))
     pri_sample_probs = pri_sample_probs / (jnp.max(pri_sample_probs) * 2)
     spm_temps = jnp.full((100, 13,), jnp.linspace(300, 420, 13)).T
     pri_spm_vals = e_model_ttf(spm_temps, prm_samples['a_o_nom'], prm_samples['e_aa_nom'], BOLTZ_EV)
@@ -308,8 +316,8 @@ def tddb_inference():
 
     # Sample curves from the posterior predictive
     rng = rand.key(27498)
-    prm_samples = am.relmdl.sample(rng, test, 100, keep_sites=['a_o_nom', 'e_aa_nom'])
-    sample_probs = jnp.exp(am.relmdl.hyl_logp(k2, test, prm_samples))
+    prm_samples = am.relmdl.sample(rng, test, (100,), keep_sites=['a_o_nom', 'e_aa_nom'])
+    sample_probs = jnp.exp(am.relmdl.logp(k2, test, prm_samples, conditional=None, dims=(100,)))
     sample_probs = sample_probs / (jnp.max(sample_probs) * 2)
     spm_vals = e_model_ttf(spm_temps, prm_samples['a_o_nom'], prm_samples['e_aa_nom'], BOLTZ_EV)
     spm_vals, spm_temps = spm_vals.T, spm_temps.T

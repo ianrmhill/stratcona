@@ -7,6 +7,7 @@ import datetime
 import json
 import warnings
 import jax.numpy as jnp
+from jax.scipy.special import logsumexp
 import jax.random as rand
 import wquantiles
 import pandas as pd
@@ -14,6 +15,8 @@ import pandas as pd
 from multiprocessing import Pool
 from functools import partial
 from typing import Callable
+from inspect import signature
+from inspect import Parameter
 
 from matplotlib import pyplot as plt
 
@@ -485,16 +488,6 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def u_ig(lp_i, p_i, lp_lkly, p_y):
-    lp_post = lp_lkly - jnp.expand_dims(jnp.where(p_y > 0, jnp.log(p_y), jnp.inf), 1)
-    p_post = jnp.exp(lp_post)
-
-    h_pri = -jnp.sum(lp_i * p_i, axis=1)
-    h_post = -jnp.sum(lp_post * p_post, axis=1)
-
-    return (h_pri - h_post) / jnp.sum(p_i, axis=1)
-
-
 def u_pp(lf_samples, p_lkly, p_y):
     posterior = p_lkly / jnp.expand_dims(p_y, -1)
     posterior = jnp.where(jnp.isnan(posterior), 0, posterior)
@@ -503,19 +496,44 @@ def u_pp(lf_samples, p_lkly, p_y):
     return p_clean
 
 
-def eig(lp_i, p_i, lp_lkly, p_y):
-    p_y_norm = jnp.sum(p_y)
-    ig = u_ig(lp_i, p_i, lp_lkly, p_y)
-    return jnp.sum(ig * p_y) / p_y_norm
+def ig(lp_i, lp_lkly, lp_y):
+    """
+    Information I(i) = -log(p(i)), entropy H(i) = E_i[I(i)] = -SUM_i[p(i)log(p(i))], however since the samples of i are
+    distributed according to the prior, H(i) = -SUM_i
+
+    Using importance sampling drawing samples from the prior:
+    E_i[I(i)] ~= (1/n)SUM_i[(p(i)/p(i))I(i)] = (1/n)SUM_i[-log(p(i))]
+
+    Parameters
+    ----------
+    lp_i: log probabilities of latent space samples from the prior
+    lp_lkly
+    lp_y
+
+    Returns
+    -------
+
+    """
+    # Elements in lp_i must be based on samples from the prior
+    h_pri = -jnp.sum(lp_i, axis=1) / lp_i.shape[1]
+
+    h_pst = -jnp.sum()
+
+    lp_pst = lp_lkly - jnp.expand_dims(lp_y, 1)
+    p_pst = jnp.exp(lp_pst)
+    lp_pst_norm = logsumexp(lp_pst, axis=1)
+    h_pst = -jnp.sum(lp_pst * p_pst, axis=1) / jnp.exp(lp_pst_norm)
+    return h_pri - h_pst
 
 
+def eig(lp_hyl, lp_lkly, lp_y, lp_y_n):
+    infgain = ig(lp_hyl, lp_lkly, lp_y)
+    return jnp.sum(infgain * jnp.exp(lp_y_n))
 
-def mtrpp(lp_lkly, p_y, lifespan, metric_target, quantile):
-    lkly_weights = jnp.exp(lp_lkly)
-    lifespans = lifespan.copy()
-    if len(f_l_dims) > 0:
-        lkly_weights = jnp.repeat(lkly_weights, int(lifespan.size / lkly_weights.size))
-        lifespans = lifespans.flatten()
+
+def mtrpp(lp_lkly, p_y, field_lifespan, metric_target, quantile):
+    lkly_weights = jnp.exp(lp_lkly).flatten()
+    lifespans = field_lifespan.copy().flatten()
 
     metric = wquantiles.quantile(lifespans, lkly_weights, 1 - (quantile / 100))
     pass_inds = metric >= metric_target
@@ -523,105 +541,127 @@ def mtrpp(lp_lkly, p_y, lifespan, metric_target, quantile):
     return pass_percent
 
 
-def bed_run(rng_key, l, n, m, exp_sampler, spm, u_funcs=None):
+def bed_run(rng_key, l, n, m, exp_sampler, spm, u_funcs=None, field_test=None):
     eus = []
     keys = rand.split(rng_key, l)
     for i in range(l):
         # Get the next proposal experiment design
         d = exp_sampler()
         if u_funcs is None:
-            eu = evaluate_design(keys[i], d, n, m, spm)
+            eu = evaluate_design(keys[i], d, n, m, spm, pred_test=field_test)
         else:
-            eu = evaluate_design(keys[i], d, n, m, spm, u_funcs)
+            eu = evaluate_design(keys[i], d, n, m, spm, u_funcs, pred_test=field_test)
         eus.append(eu)
-        print(f'{d.conditions}: {eu * NATS_TO_BITS} bits')
-        #print(f'{d.conditions}: {eu * 100}%')
     return eus
 
 
-def evaluate_design(rng_key, d, n, m, spm, u_funcs=eig):
+def evaluate_design(rng_key, d, n, m, spm, u_funcs=eig, pred_test=None):
+    """This function evaluates an experimental design utility by sampling from the latent space and prior observation
+    space."""
     k1, k2, k3, k4, k5 = rand.split(rng_key, 5)
+
+
+    # All input names must be standardized names for quantities OR site names of an SPM
+    # Note: utility functions can not use other utility function quantities as inputs, instead create wrappers
+    utilities = u_funcs if type(u_funcs) == list else [u_funcs]
+    ins = []
+    for ut in utilities:
+        sig = signature(ut)
+        for prm in sig.parameters:
+            if sig.parameters[prm].default is Parameter.empty:
+                ins.append(prm)
+    # Remove all duplicates from the list by casting to dictionary then back
+    ins = list(dict.fromkeys(ins))
+
     # TODO: Potentially determine the normalization factors here, though there's a question of whether it's reasonable
     #       to have different normalization factors per experiment design 'd'. It may need to be done in the outer loop to
     #       avoid biasing results
     lp_i_avg, lp_hyl_avg, lp_y_avg = 0.0, 0.0, 0.0
+    probs = {}
 
     # First generate 'n' samples of possible experiment outcomes
     if not spm.y_s_override:
-        y_s = spm.sample(k1, d, num_samples=(n,), keep_sites=spm.test_measurements)
+        y_s = spm.sample(k1, d, num_samples=(n,), keep_sites=spm.observes)
     else:
         y_s = spm.y_s_custom(d, num_samples=(n,))
     # Now generate 'm' samples of possible latent space values for each of the 'n' outcomes
     if not spm.i_s_override:
-        i_s = spm.sample(k2, d, num_samples=(n, m), keep_sites=spm.ltnts + spm.hyls)
+        i_s = spm.sample(k2, d, num_samples=(n, m), keep_sites=spm._ltnt_subsamples + spm.hyls)
     else:
         i_s = spm.i_s_custom(d, num_samples=(n, m))
+        probs['lp_s'] = spm.lp_s_custom(d, num_samples=(n, m))
     # The latent space consists of latents and hyper-latents, experiment value only depends on how much is learned about
     # the hyper-latents, so extract them here
     hyl_s = {k: i_s[k] for k in i_s if k in spm.hyls}
 
     # Now compute log probabilities, subtracting normalization factors to try and bias everything towards probability 1
     # for numerical stability
-    lp_i = spm.logp(k3, d, i_s, i_s, (n, m)) - lp_i_avg # TODO: Check exactly how log_prob of a variable works in relation to conditioning
-    lp_hyl = spm.logp(k4, d, hyl_s, None, (n, m)) - lp_hyl_avg
+    probs['lp_i'] = spm.logp(k3, d, i_s, i_s, (n, m)) - lp_i_avg
+    probs['lp_hyl'] = spm.logp(k4, d, hyl_s, hyl_s, (n, m)) - lp_hyl_avg
     y_tiled = {y: jnp.repeat(jnp.expand_dims(y_s[y], 1), m, axis=1) for y in y_s}
-    lp_ygi = spm.logp(k5, d, y_tiled, i_s, (n, m)) - lp_y_avg
+    probs['lp_ygi'] = spm.logp(k5, d, y_tiled, i_s, (n, m)) - lp_y_avg
+    probs['lp_joint'] =spm.logp(k5, d, y_tiled | hyl_s, i_s | y_tiled)
 
-    # Compute likelihood weightings and the marginal probability of each sampled observation
-    p_i = jnp.exp(lp_i)
-    i_norm = jnp.sum(p_i, axis=1)
+    # Compute probabilities of latent space samples
+    lp_i_norm = logsumexp(probs['lp_i'], axis=1, keepdims=True)
+    probs['lp_i_n'] = probs['lp_i'] - lp_i_norm
+    probs['p_i'] = jnp.exp(probs['lp_i'])
+    probs['p_i_n'] = jnp.exp(probs['lp_i_n'])
 
-    lp_lkly = lp_ygi + lp_i
-    p_lkly = jnp.exp(lp_lkly)
-    p_lkly = jnp.where(p_lkly == jnp.nan, 0.0, p_lkly)
-    p_lkly = jnp.where(p_lkly < LOW_PROB_CUTOFF, 0.0, p_lkly)
+    # Compute probabilities of hyper-latents
+    lp_hyl_norm = logsumexp(probs['lp_hyl'], axis=1, keepdims=True)
+    probs['lp_hyl_n'] = probs['lp_hyl'] - lp_hyl_norm
+    probs['p_hyl'] = jnp.exp(probs['lp_hyl'])
+    probs['p_hyl_n'] = jnp.exp(probs['lp_hyl_n'])
 
-    p_y = jnp.sum(p_lkly, axis=1) / i_norm
-    p_y_norm = jnp.sum(p_y)
-    p_y_normed = p_y / p_y_norm
+    # Compute likelihoods
+    probs['lp_lkly'] = probs['lp_ygi'] + probs['lp_i']
+    probs['lp_lkly_ni'] = probs['lp_ygi'] + probs['lp_i'] - lp_i_norm
+    lp_lkly_norm = logsumexp(probs['lp_lkly_ni'], axis=1, keepdims=True)
+    probs['lp_lkly_n'] = probs['lp_lkly_ni'] - lp_lkly_norm
+    probs['p_lkly'] = jnp.exp(probs['lp_lkly'])
+    probs['p_lkly_ni'] = jnp.exp(probs['lp_lkly_ni'])
+    probs['p_lkly_n'] = jnp.exp(probs['lp_lkly_n'])
 
-    # Compute other necessary inputs for the utility functions
-    # All input names must be standardized names for quantities OR site names of an SPM
-    utility_ins = {lp_i.__name__: lp_i, p_i.__name__: p_i, lp_lkly.__name__: lp_lkly, p_y.__name__: p_y}
+    #p_lkly = jnp.where(p_lkly == jnp.nan, 0.0, p_lkly)
+    #p_lkly = jnp.where(p_lkly < LOW_PROB_CUTOFF, 0.0, p_lkly)
+
+    # Compute marginal probabilities of observations
+    probs['lp_y'] = logsumexp(probs['lp_ygi'], axis=1) - probs['lp_ygi'].shape[1]
+    lp_y_norm = logsumexp(probs['lp_y'])
+    probs['lp_y_n'] = probs['lp_y'] - lp_y_norm
+    probs['p_y'] = jnp.exp(probs['lp_y'])
+    probs['p_y_n'] = jnp.exp(probs['lp_y_n'])
+
+    probs['lp_lkly_ny'] = probs['lp_lkly_ni'] - lp_y_norm
+
+    # Generate the predictor variables
+    pred_trace = None
+    if pred_test:
+        # None of the latent space sample sites depends on test conditions, so their values are fixed for the trace
+        pred_trace = spm.sample(k5, pred_test, num_samples=(n, m), conditionals=i_s)
+
+    # Compute all the quantities required by the set of utility functions
+    utility_ins = {}
+    for quantity in ins:
+        if quantity in probs:
+            utility_ins[quantity] = probs[quantity]
+        else:
+            if pred_trace is None:
+                raise Exception('No predictor test defined, cannot sample predictor values')
+            utility_ins[quantity] = pred_trace[quantity]
 
     # Call the requested utility functions with their required inputs
     u = {}
-    utilities = u_funcs if type(u_funcs) == list else [u_funcs]
-    for func in utilities:
-        u[func.__name__] = func(**utility_ins)
+    for ut in utilities:
+        ut_args = {arg: val for arg, val in utility_ins.items() if arg in signature(ut).parameters}
+        ut_name = ut.func.__name__ if isinstance(ut, partial) else ut.__name__
+        u[ut_name] = ut(**ut_args)
 
-    # Assemble a report or just return the final utility
+    # Return the computed utility values
     return u
 
-    # Compute utility measures for individual sample observations
-    # TODO: Switching logic for different and multiple utility definitions
-    #u = u_ig(lp_i, p_i, lp_lkly, p_y)
 
-    #lf_samples = spm.sample_new(k5, d, num_samples=(n, m), keep_sites=spm.life_predictors, conditionals=i_s)
-    #u = u_pp(lf_samples, p_lkly, p_y)
-    #return u
-    # Zero out the utility of extremely low probability observation space samples, as these often end up with infinite
-    # utility due to numerical instability of log and division operations
-    #u = jnp.where(p_y < LOW_PROB_CUTOFF, 0.0, u)
 
-    # Compute metrics across all sampled observations
-    e_u = jnp.sum(u * p_y) / p_y_norm
-    v_u = jnp.sum((u - e_u) ** 2) / n
-    m_ind = int(jnp.argmin(u))
-    m_u = u[m_ind]
-    m_y = {obs: y_s[obs][m_ind] for obs in y_s}
-    # Some metrics require a reference threshold value to compute
-    if u_threshold is not None:
-        pass_inds = u >= u_threshold
-        pp_u = jnp.sum(p_y[pass_inds]) / p_y_norm
-        mg_u = u_threshold - u[m_ind]
-        eg_u = u_threshold - e_u
-        fail_inds = u < u_threshold
-        # Some metrics only make sense if at least one sampled observation failed to meet the reference threshold
-        if jnp.any(fail_inds == True):
-            ef_u = jnp.sum(u[fail_inds] * p_y[fail_inds]) / jnp.sum(p_y[fail_inds])
-            efg_u = u_threshold - ef_u
-            efv_u = jnp.sum((u[fail_inds] - ef_u) ** 2) / len(fail_inds)
-
-    # Support representing entropy in units of 'nats' or 'bits'
-    return e_u if not entropy_in_bits else e_u * NATS_TO_BITS
+    def run_bed_newest():
+        pass

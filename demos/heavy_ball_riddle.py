@@ -37,17 +37,19 @@ def riddle_demo():
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=92764927)
 
     ### Determine Best Experiment Step ###
-    am.relmdl.y_s_override = True
-    def y_s_scale(d, num_samples):
-        return {'t1_outcome': jnp.array([[[[-1]]], [[[0]]], [[[1]]]], dtype=jnp.float32)}
-    am.relmdl.y_s_custom = y_s_scale
+    compute_exact = False
+    if compute_exact:
+        am.relmdl.y_s_override = True
+        def y_s_scale(d, num_samples):
+            return {'t1_outcome': jnp.array([[[[-1]]], [[[0]]], [[[1]]]], dtype=jnp.float32)}
+        am.relmdl.y_s_custom = y_s_scale
 
-    am.relmdl.i_s_override = True
-    def i_s_ball_pos(d, num_samples):
-        all_positions = jnp.array([0, 1, 2, 3, 4, 5, 6, 7])
-        tiled = jnp.repeat(jnp.expand_dims(all_positions, 0), 3, axis=0)
-        return {'i_heavy_ball': tiled}
-    am.relmdl.i_s_custom = i_s_ball_pos
+        am.relmdl.i_s_override = True
+        def i_s_ball_pos(d, num_samples):
+            all_positions = jnp.array([0, 1, 2, 3, 4, 5, 6, 7])
+            tiled = jnp.repeat(jnp.expand_dims(all_positions, 0), 3, axis=0)
+            return {'i_heavy_ball': tiled}
+        am.relmdl.i_s_custom = i_s_ball_pos
 
     exp_sampler = stratcona.assistants.iter_sampler([
         stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 2, 2, 2, 2, 2, 2])}}),
@@ -59,8 +61,11 @@ def riddle_demo():
         stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 0, 0, 1, 1, 1, 2, 2])}}),
         stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 0, 1, 0, 1])}}),
     ])
-    eigs = am.find_best_experiment(7, 3, 8, exp_sampler)
-    eigs_bits = [eigs[i] * 1.442695 for i in range(len(eigs))]
+    if compute_exact:
+        eigs = am.find_best_experiment(7, 3, 8, exp_sampler)
+    else:
+        eigs = am.find_best_experiment(7, 10, 10000, exp_sampler)
+    eigs_bits = [eigs[i]['eig'] * 1.442695 for i in range(len(eigs))]
     print(eigs_bits)
 
     # EIG of one per side: 1.061278, two: 1.5, three: 1.561278, four: 1.0 (bits)

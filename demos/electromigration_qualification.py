@@ -26,11 +26,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import stratcona
 
 BOLTZ_EV = 8.617e-5
-SHOW_PLOTS = True
+SHOW_PLOTS = False
 
 
 def electromigration_qualification():
-    analyze_prior = True
+    analyze_prior = False
     run_bed_analysis = True
     run_inference = True
     run_posterior_analysis = True
@@ -56,7 +56,7 @@ def electromigration_qualification():
     the latent variable space to learn.
     '''
     mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
-    num_devices = 10
+    num_devices = 5
 
     # Express wire current density as a function of the number of transistors and the voltage applied
     def j_n(n_fins, vdd, vth_typ, i_base):
@@ -86,18 +86,18 @@ def electromigration_qualification():
     def fail_time(em_ttf):
         return jnp.min(em_ttf)
 
-    mb.add_fail_criterion('chip_fail', fail_time)
+    mb.add_fail_criterion('lifespan', fail_time)
 
     # Wire area in nm^2
     mb.add_params(n_fins=24, vth_typ=0.32, i_base=0.8, wire_area=1.024 * 1000 * 1000, k=BOLTZ_EV,
-                  em_var_percent=0.04, fail_var=12)
+                  em_var_percent=0.07, fail_var=12)
 
     am = stratcona.AnalysisManager(mb.build_model(), rel_req=objective, rng_seed=2338923)
     am.set_field_use_conditions({'vdd': 0.85, 'temp': 330})
 
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
     if analyze_prior:
-        am.evaluate_reliability('chip_fail', plot_results=True)
+        am.evaluate_reliability('lifespan', plot_results=True)
         if SHOW_PLOTS:
             plt.show()
 
@@ -113,7 +113,7 @@ def electromigration_qualification():
     temps = [300, 325, 350, 375, 400]
     volts = [0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
     permute_conds = product(temps, volts)
-    possible_tests = [{'t1': {'vdd': v, 'temp': t}} for t, v in permute_conds]
+    possible_tests = [stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'vdd': v, 'temp': t}}) for t, v in permute_conds]
     exp_sampler = stratcona.assistants.iter_sampler(possible_tests)
 
     '''
@@ -130,7 +130,7 @@ def electromigration_qualification():
         utility_options = [stratcona.engine.bed.eig, qx_lbci_pp]
 
         # Run the experimental design analysis
-        results = am.find_best_experiment(15, 3000, 3000, exp_sampler, utility_options)
+        results = am.find_best_experiment(15, 100, 100, exp_sampler, utility_options)
 
         #def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
         #    return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)
@@ -160,12 +160,12 @@ def electromigration_qualification():
         test_env = PhysTestEnv(env_vrtns={'temp': EnvVrtnMdl(dev_vrtn_mdl=Normal(0, 0.6))})
 
         def em_voiding(time, vdd, temp, a, i_scale, t_scale):
-            j = np.where(np.greater(vdd, vth_typ), 24 * i_base * ((vdd - vth_typ) ** 2), 0.0)
+            j = jnp.where(jnp.greater(vdd, vth_typ), 24 * i_base * ((vdd - vth_typ) ** 2), 0.0)
             voided_percent = a * (j ** i_scale) * ((temp - 200) ** t_scale) * 1e-7 * time
             return voided_percent
 
         def em_line_fail(init, cond, breaking_point, em_voiding):
-            failed = np.where(np.greater(em_voiding, breaking_point), 1, init)
+            failed = jnp.where(jnp.greater(em_voiding, breaking_point), 1, init)
             return failed
 
         voiding_mdl = DegMechMdl(em_voiding,

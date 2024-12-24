@@ -7,8 +7,6 @@ from matplotlib import pyplot as plt
 
 import jax.random as rand
 
-from gerabaldi.models.reports import SimReport
-
 from stratcona.engine.inference import inference_model
 from stratcona.engine.bed import bed_run
 from stratcona.engine.metrics import *
@@ -20,6 +18,7 @@ class AnalysisManager:
         self.relmdl = model
         self.relreq = rel_req
         self.test = None
+        self.field_test = None
         self.rng_key = rand.key(rng_seed)
 
     def _derive_key(self):
@@ -74,4 +73,4 @@ class AnalysisManager:
 
     def find_best_experiment(self, l, n, m, exp_sampler, utility_functions=None):
         rng = self._derive_key()
-        return bed_run(rng, l, n, m, exp_sampler, self.relmdl, utility_functions)
+        return bed_run(rng, l, n, m, exp_sampler, self.relmdl, utility_functions, self.field_test)
