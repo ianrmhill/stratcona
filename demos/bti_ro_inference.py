@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pprint import pprint
+
+import numpyro as npyro
+import numpyro.distributions as dists
+npyro.set_host_device_count(4)
+
 import jax
 import jax.numpy as jnp
 import jax.random as rand
-import numpy as np
-import numpyro as npyro
-import numpyro.distributions as dists
 
 from functools import partial
 from scipy.optimize import curve_fit
@@ -34,7 +36,6 @@ CELSIUS_TO_KELVIN = 273.15
 
 
 def vth_sensor_inference():
-    npyro.set_host_device_count(4)
 
     # This example must show the benefits of Bayesian inference in reasoning about physical wear-out models, demo how
     # historical knowledge incorporation, explicit uncertainty reasoning, stochastic variability modelling, and
@@ -149,11 +150,11 @@ def vth_sensor_inference():
     mb.add_hyperlatent('meas_error_var', dists.Normal, {'loc': 30, 'scale': 10}, transform=dists.transforms.SoftplusTransform())
     mb.add_latent('meas_error', nom='zero', dev='meas_error_var', chp=None, lot=None)
 
-    mb.add_dependent('vth_shift_t1', bti_vth_shift_empirical)
+    mb.add_intermediate('vth_shift_t1', bti_vth_shift_empirical)
 
     # FIXME: Currently using a fixed measurement variability of 30mV since the latent version is causing NUTS to fail,
     #        determine the cause and evaluate the best path forward
-    mb.add_measured('nbti_std_ro', dists.Normal, {'loc': 'vth_shift_t1', 'scale': 'meas_var'}, 5)
+    mb.add_observed('nbti_std_ro', dists.Normal, {'loc': 'vth_shift_t1', 'scale': 'meas_var'}, 5)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
 
@@ -169,10 +170,10 @@ def vth_sensor_inference():
     sample_deg = am.sim_test_measurements()
 
     k1, k2 = rand.split(rand.key(292873410), 2)
-    prm_samples = am.relmdl.sample(k1, htol_end_test, 400)
+    prm_samples = am.relmdl.sample(k1, htol_end_test, (400,))
     ltnt_sites = ['a0_nom', 'e_aa_nom', 'alpha_nom', 'n_nom']
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in ltnt_sites}
-    pri_probs = jnp.exp(am.relmdl.logp(k2, htol_end_test, ltnt_vals, prm_samples))
+    pri_probs = jnp.exp(am.relmdl.logp(k2, htol_end_test, ltnt_vals, prm_samples, (400,)))
     pri_probs = likelihood_to_alpha(pri_probs, 0.4).flatten()
 
     times = jnp.tile(jnp.linspace(0, 2000, 100), (400, 1)).T
@@ -182,18 +183,18 @@ def vth_sensor_inference():
         alpha=prm_samples['alpha_nom'], n=prm_samples['n_nom'])
 
     # Generate hyperlatent prior data for plotting and compute entropy
-    def lp_f(vals, site, key, test, trace):
-        return am.relmdl.logp(rng_key=key, test=test, site_vals={site: vals}, conditional=trace)
+    def lp_f(vals, site, key, test):
+        return am.relmdl.logp(rng_key=key, test=test, site_vals={site: vals}, conditional=None, dims=(len(vals),))
 
     k1, k2 = rand.split(rand.key(9273036857), 2)
-    hyl_samples = am.relmdl.sample(k1, htol_end_test, 100_000)
+    hyl_samples = am.relmdl.sample(k1, htol_end_test, (100_000,))
     hyls = ['a0', 'e_aa', 'alpha', 'n']
-    tr = am.relmdl.sample(k2, htol_end_test, 1)
+    tr = am.relmdl.sample(k2, htol_end_test, (1,))
     pri_samples, pri_entropy = {}, {}
     for hyl in hyls:
         pri_samples[hyl] = hyl_samples[f'{hyl}_nom']
-        pri_entropy[hyl] = stratcona.engine.boed.entropy_new(
-            pri_samples[hyl], partial(lp_f, site=f'{hyl}_nom', test=htol_end_test, trace=tr, key=k1), limiting_density_range=(0, 10))
+        pri_entropy[hyl] = stratcona.engine.bed.entropy(
+            pri_samples[hyl], partial(lp_f, site=f'{hyl}_nom', test=htol_end_test, key=k1), limiting_density_range=(0, 10))
 
     ####################################################
     # Inference on the collected test data
@@ -202,14 +203,14 @@ def vth_sensor_inference():
 
     # Calculate posterior entropy
     k1, k2 = rand.split(rand.key(9296245908724), 2)
-    hyl_samples = am.relmdl.sample(k1, htol_end_test, 100_000)
+    hyl_samples = am.relmdl.sample(k1, htol_end_test, (100_000,))
     hyls = ['a0', 'e_aa', 'alpha', 'n']
-    tr = am.relmdl.sample(k2, htol_end_test, 1)
+    tr = am.relmdl.sample(k2, htol_end_test, (1,))
     pst_samples, pst_entropy = {}, {}
     for hyl in hyls:
         pst_samples[hyl] = hyl_samples[f'{hyl}_nom']
-        pst_entropy[hyl] = stratcona.engine.boed.entropy_new(
-            pst_samples[hyl], partial(lp_f, site=f'{hyl}_nom', test=htol_end_test, trace=tr, key=k1), limiting_density_range=(0, 10))
+        pst_entropy[hyl] = stratcona.engine.bed.entropy(
+            pst_samples[hyl], partial(lp_f, site=f'{hyl}_nom', test=htol_end_test, key=k1), limiting_density_range=(0, 10))
 
     hyl_ig = {}
     for hyl in hyls:
@@ -217,9 +218,9 @@ def vth_sensor_inference():
 
     sample_pst_deg = am.sim_test_measurements()
 
-    prm_samples = am.relmdl.sample(k1, htol_end_test, 400)
+    prm_samples = am.relmdl.sample(k1, htol_end_test, (400,))
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in ltnt_sites}
-    pst_probs = jnp.exp(am.relmdl.logp(k2, htol_end_test, ltnt_vals, prm_samples))
+    pst_probs = jnp.exp(am.relmdl.logp(k2, htol_end_test, ltnt_vals, prm_samples, (400,)))
     pst_probs = likelihood_to_alpha(pst_probs, 0.4).flatten()
     pst_fits = bti_vth_shift_empirical(
         time=times, k=BOLTZ_EV, temp=125 + CELSIUS_TO_KELVIN, vdd=0.88,
@@ -305,10 +306,6 @@ def vth_sensor_inference():
     p.set_ylabel("$\Delta V_{th}$ (A.U.)", fontsize='medium')
 
     plt.show()
-
-
-
-
 
 
 if __name__ == '__main__':

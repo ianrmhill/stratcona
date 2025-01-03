@@ -26,6 +26,7 @@ __all__ = ['eig_smc_refined', 'bed_runner']
 NATS_TO_BITS = jnp.log2(jnp.e)
 # Machine precision is defaulted to 32 bits since most instruments don't have 64 bit precision and/or noise floors. Less
 # precise but smaller entropy values makes things nicer to deal with.
+CARDINALITY_MANTISSA_32BIT = float(2 ** 23)
 CARDINALITY_MANTISSA_64BIT = float(2 ** 53)
 # Marginal probability below which a sample observed 'y' will be excluded from EIG computation
 LOW_PROB_CUTOFF = 1e-20
@@ -33,48 +34,58 @@ LOW_PROB_CUTOFF = 1e-20
 TR_GAP = 20
 
 
-def p_mx(x: jnp.ndarray, a: float, b: float):
-    """The probability distribution function of a continuous uniform distribution on the interval [a, b]."""
-    return jnp.average(jnp.where(jnp.less_equal(a, x) & jnp.less_equal(x, b), 1 / (b - a), 0))
+def lp_mx(x: jnp.ndarray, a: float, b: float):
+    """The log-probability distribution function of a continuous uniform distribution on the interval [a, b]."""
+    lp = jnp.log(1 / (b - a))
+    return jnp.where(jnp.less_equal(a, x) & jnp.less_equal(x, b), lp, -jnp.inf)
 
 
 def entropy(samples, lp_func, p_args=None, in_bits=False,
-            limiting_density_range: tuple = None, precision=CARDINALITY_MANTISSA_64BIT):
+            limiting_density_range: tuple = None, precision=CARDINALITY_MANTISSA_32BIT):
+    """
+    This procedure assumes the samples are randomly drawn from the prior, thus distributed according to the prior.
+
+    Parameters
+    ----------
+    samples
+    lp_func
+    p_args
+    in_bits
+    limiting_density_range
+    precision
+
+    Returns
+    -------
+
+    """
+
     # Entropy is predicated on iterating over all possible values that theta can take, thus the overall probability
     # summed across all samples of theta is 1. In the continuous case or to compute via sampling, we need to normalize
     # with respect to the probability sum across all the samples of theta.
-    lps = lp_func(samples, *p_args) if p_args else lp_func(samples)
-    p_s = jnp.exp(lps)
-    p_s_theory = jnp.sum(p_s)
+    lp_f = lp_func(samples, *p_args) if p_args else lp_func(samples)
+    n = samples.size
 
     if limiting_density_range is not None:
         a, b = limiting_density_range[0], limiting_density_range[1]
-        p_u = p_mx(samples, a, b)
-        p_u_tot = jnp.sum(p_u)
-        prob = p_s / p_u
-        lps = jnp.log(prob)
+        lp_u = lp_mx(samples, a, b)
+        # The integral to compute the LDDP is bounded by the m(x) uniform distribution, thus all samples outside the
+        # range of integration are discarded for the purposes of computing the LDDP
+        oob_samples = jnp.isinf(lp_u)
+        oob_count = jnp.count_nonzero(oob_samples)
+        lp_f = jnp.where(oob_samples, 0, lp_f - lp_u)
+        pos_count = jnp.count_nonzero(jnp.where(lp_f > 0, lp_f, 0))
+        print(pos_count / n)
+        n -= oob_count
 
-    h = jnp.sum(-p_s * lps)
-    h_norm = jnp.sum(p_s)
-    h = h / h_norm
+    h = -jnp.sum(lp_f) / n
 
     # Try to inform the user on how well the samples captured the probability distribution
     # Metric for detecting whether the full high probability region of the distribution was sampled well
     if limiting_density_range is not None:
-        s_to_u_ratio = h_norm / p_u_tot
-        if s_to_u_ratio > 1:
-            print(f"Sampling successfully found high probability regions.")
-            if s_to_u_ratio > 10:
-                print(f"Bounded region of possibility may be unnecessarily large. Ratio: {s_to_u_ratio}.")
-        elif s_to_u_ratio < 0.1:
-            print(f"Sampling did not find high probability regions. Rework likely required. Ratio: {s_to_u_ratio}.")
-        else:
-            print(f"Sampling went acceptably well.")
-
         # Inform the user if the bounded region u may be too small
-        oob_percent = (p_s_theory - h_norm) / p_s_theory
-        if oob_percent > 0.01:
-            print(f"{round(oob_percent * 100, 2)}% of the sampled PDF fell outside of u bounds. You may want to extend u.")
+        oob_p = oob_count / samples.size
+        if oob_p > 0.01:
+            print(f"{round(oob_p * 100, 2)}% of the sampled PDF outside LDDP bounds. You may want to extend bounds.")
 
         # For limiting density, the entropy is log(N) + h, where N is the number of discrete points in the interval
         # [a, b]. For our floating point representations, we assume that the exponent bits determine a and b, then
