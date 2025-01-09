@@ -11,7 +11,7 @@ from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 from stratcona.assistants.dist_translate import npyro_to_scipy
 
 
-def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 2_000, num_chains: int = 4):
+def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 5_000, num_chains: int = 4):
     kernel = NUTS(model)
     sampler = MCMC(kernel, num_warmup=1_000, num_samples=num_samples, num_chains=num_chains)
     sampler.run(rng_key, measured=observed_data, extra_fields=('potential_energy',))
@@ -24,7 +24,7 @@ def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 
     diverging = extra_info['diverging'] if 'diverging' in extra_info else 0
     diverging = jnp.sum(diverging)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
-    #print(convergence_stats)
+    print(convergence_stats)
     print(f'Divergences: {diverging}')
 
     new_prior = {}
