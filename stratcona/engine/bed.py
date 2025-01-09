@@ -41,7 +41,7 @@ def lp_mx(x: jnp.ndarray, a: float, b: float):
 
 
 def entropy(samples, lp_func, p_args=None, in_bits=False,
-            limiting_density_range: tuple = None, precision=CARDINALITY_MANTISSA_32BIT):
+            limiting_density_range: tuple = None, precision=CARDINALITY_MANTISSA_32BIT, d=1):
     """
     This procedure assumes the samples are randomly drawn from the prior, thus distributed according to the prior.
 
@@ -63,11 +63,17 @@ def entropy(samples, lp_func, p_args=None, in_bits=False,
     # summed across all samples of theta is 1. In the continuous case or to compute via sampling, we need to normalize
     # with respect to the probability sum across all the samples of theta.
     lp_f = lp_func(samples, *p_args) if p_args else lp_func(samples)
-    n = samples.size
+    # Samples can either be an array or dictionary of equal sized arrays
+    n = samples.size if type(samples) != dict else samples[next(iter(samples))].size
 
     if limiting_density_range is not None:
         a, b = limiting_density_range[0], limiting_density_range[1]
-        lp_u = lp_mx(samples, a, b)
+        if type(samples) != dict:
+            lp_u = lp_mx(samples, a, b)
+        else:
+            lp_u = jnp.zeros_like(samples[next(iter(samples))])
+            for site in samples:
+                lp_u += lp_mx(samples[site], a, b)
         # The integral to compute the LDDP is bounded by the m(x) uniform distribution, thus all samples outside the
         # range of integration are discarded for the purposes of computing the LDDP
         oob_samples = jnp.isinf(lp_u)
@@ -83,7 +89,7 @@ def entropy(samples, lp_func, p_args=None, in_bits=False,
     # Metric for detecting whether the full high probability region of the distribution was sampled well
     if limiting_density_range is not None:
         # Inform the user if the bounded region u may be too small
-        oob_p = oob_count / samples.size
+        oob_p = oob_count / n
         if oob_p > 0.01:
             print(f"{round(oob_p * 100, 2)}% of the sampled PDF outside LDDP bounds. You may want to extend bounds.")
 
@@ -93,7 +99,7 @@ def entropy(samples, lp_func, p_args=None, in_bits=False,
         # regardless of if our random variable support is [0, 1] or [-1e10, 1e10] and represents a physical property
         # of our measurements in terms of their precision once converted to floating point representations.
         # Note that 'h' will always be negative until the precision has been added in the limiting density formulation.
-        h += jnp.log(precision)
+        h += d * jnp.log(precision)
 
     # Support representing entropy in units of 'nats' or 'bits'
     return h if not in_bits else h * NATS_TO_BITS

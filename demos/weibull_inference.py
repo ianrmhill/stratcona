@@ -218,7 +218,7 @@ def weibull_inference():
     p.add_collection(col, autolim=False)
 
 
-
+    # TODO: Change label text to 'likelihood percentile'
     p.plot(x, sim_fits[0], color='darkorange', linestyle='--', linewidth=2, label=f'Lot 1 - normalized sim. prob.: {round(float(normd_probs[0] * 100), 1)}%')
     p.plot(x, sim_fits[1], color='sienna', linestyle='--', linewidth=2, label=f'Lot 2 - normalized sim. prob.: {round(float(normd_probs[1] * 100), 1)}%')
     p.plot(x, sim_fits[2], color='gold', linestyle='--', linewidth=2, label=f'Lot 3 - normalized sim. prob.: {round(float(normd_probs[2] * 100), 1)}%')
