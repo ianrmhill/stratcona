@@ -1,4 +1,4 @@
-# Copyright (c) 2024 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 from pprint import pprint
@@ -19,7 +19,6 @@ import pandas as pd
 import seaborn as sb
 from matplotlib import pyplot as plt
 
-import gracefall
 import gerabaldi
 from gerabaldi.models import *
 

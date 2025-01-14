@@ -79,8 +79,6 @@ def entropy(samples, lp_func, p_args=None, in_bits=False,
         oob_samples = jnp.isinf(lp_u)
         oob_count = jnp.count_nonzero(oob_samples)
         lp_f = jnp.where(oob_samples, 0, lp_f - lp_u)
-        pos_count = jnp.count_nonzero(jnp.where(lp_f > 0, lp_f, 0))
-        print(pos_count / n)
         n -= oob_count
 
     h = -jnp.sum(lp_f) / n

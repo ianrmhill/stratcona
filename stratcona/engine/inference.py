@@ -5,15 +5,15 @@ import numpy as np
 import jax.numpy as jnp
 import scipy
 
-from numpyro.infer import NUTS, MCMC
+from numpyro.infer import SA, BarkerMH, NUTS, MCMC
 from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 
 from stratcona.assistants.dist_translate import npyro_to_scipy
 
 
-def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 5_000, num_chains: int = 4):
+def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 10_000, num_chains: int = 4):
     kernel = NUTS(model)
-    sampler = MCMC(kernel, num_warmup=1_000, num_samples=num_samples, num_chains=num_chains)
+    sampler = MCMC(kernel, num_warmup=2_000, num_samples=num_samples, num_chains=num_chains, progress_bar=True)
     sampler.run(rng_key, measured=observed_data, extra_fields=('potential_energy',))
     samples = sampler.get_samples(group_by_chain=True)
 
