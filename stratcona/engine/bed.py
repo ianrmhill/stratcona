@@ -103,6 +103,61 @@ def entropy(samples, lp_func, p_args=None, in_bits=False,
     return h if not in_bits else h * NATS_TO_BITS
 
 
+def weighted_quantile(s, w, q):
+    """
+    This procedure is based on the 'wquantiles' library but adapted for JAX numpy.
+
+    Parameters
+    ----------
+    s - sampled values
+    w - weights for the sampled values, shape should match 's'
+    q - the requested quantile to compute
+
+    Returns
+    -------
+    The quantile computed from the weighted samples
+
+    """
+    order = jnp.argsort(s)
+    s_srt = s[order]
+    w_srt = w[order]
+
+    w_cumulative = jnp.cumsum(w_srt)
+    # Subtract half the probability of the value to get the CDF midpoint for each sample, normalize CDF to [0, 1]
+    # Normalization term, the sum of all weights, was already computed by cumsum as last element of array
+    bins = (w_cumulative - (0.5 * w_srt)) / w_cumulative[-1]
+    result = jnp.interp(q, bins, s_srt)
+    return result
+
+# TODO: Not yet working, need it to be performant for usefulness, regular weighted likely okay for most scenarios
+def lw_q(s, lw, q):
+    """
+    This procedure is based on the 'wquantiles' library but adapted for JAX numpy and cast to log-weight domain.
+
+    Parameters
+    ----------
+    s - sampled values
+    lw - log weights for the sampled values, shape should match 's'
+    q - the requested quantile to compute
+
+    Returns
+    -------
+    The quantile computed from the weighted samples
+
+    """
+    order = jnp.argsort(s)
+    s_srt = s[order]
+    lw_srt = lw[order]
+
+    #lw_cum = jnp.apply_along_axis(jnp.logaddexp, 0, lw_srt)
+    lw_cum = jnp.array([jnp.logaddexp(lw_srt[i-1], lw_srt[i]) for i in range(1, lw_srt.size)])
+    # Subtract half the probability of the value to get the CDF midpoint for each sample, normalize CDF to [0, 1]
+    # Normalization term, the sum of all weights, was already computed by cumsum as last element of array
+    bins = (lw_cum - (0.5 * lw_srt)) / lw_cum[-1]
+    result = jnp.interp(jnp.log(q), bins, s_srt)
+    return result
+
+
 def information_gain(theta_sampler, p_pri, p_post, m=1e5, in_bits=False, limiting_density=False):
     """
     Placeholder for now, may be nice to have in the future for comparing the actual information gain to the expected
@@ -181,7 +236,7 @@ def one_obs_process(n_i, obs_n, y_i, m, i_s: Callable, y_s: Callable, lp_i: Call
             # Compute the un-normalized prior entropy (but with flipped sign)
             h_pri = jnp.sum(p_pri * lp_pri_store[:end])
             # Compute the un-normalized posterior entropy (but with flipped sign)
-            lp_post = lp_lkly_store[:end] - np.log(marg)
+            lp_post = lp_lkly_store[:end] - jnp.log(marg)
             p_post = p_lkly / marg
             h_post = jnp.sum(p_post * lp_post)
             # Finally, compute the normalized information gain for the sampled 'y'
@@ -677,6 +732,46 @@ def evaluate_design(rng_key, d, n, m, spm, u_funcs=eig, pred_test=None):
     return u
 
 
+def run_bed_newest(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=None, d_field=None):
+    k, kx = rand.split(rng_key)
+    # We can sample all x~p(x) here since x is independent of the test d, the observations y, and the predictors z
+    x_s = spm.sample(kx, d_sampler(), num_samples=(n_x,), keep_sites=spm.hyls)
 
-    def run_bed_newest():
-        pass
+    us = []
+    for _ in range(n_d):
+        # Get the next proposal experiment design
+        d = d_sampler()
+        k, kv, ky, ku = rand.split(k, 4)
+        # We can sample all v~p(v|x,d) here since v is independent of the observations y and predictors z
+        x_s_tiled = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_v, axis=1) for x in x_s}
+        v_s = spm.sample(kv, d, num_samples=(n_x, n_v), keep_sites=spm._ltnt_subsamples, conditionals=x_s_tiled)
+        # Sample observations from joint prior y~p(x,v,y|d), keeping y independent of the already sampled x and v values
+        y_s = spm.sample(ky, d, num_samples=(n_y,), keep_sites=spm.observes)
+
+        # Now evaluate the utility of each design
+        u = eval_u_of_d(d, y_s, v_s, x_s, spm, utility, d_field)
+        us.append(u)
+    return us
+
+
+def eval_u_of_d(d, y_s, v_s, x_s, spm, f_u, d_field):
+    n_x, n_v, n_y = x_s.shape[0], v_s.shape[1], y_s.shape[2]
+    # Dummy key for executing traces, all values will be fixed to compute log probabilities
+    kd = rand.key(0)
+    # Re-normalization factors to keep all the log probs closer to 0
+    lp_y_avg = 0.0
+
+    # Compute log probabilities from the structured probabilistic model
+    y_tiled = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], 2), n_v, axis=1), n_x, axis=2) for y in y_s}
+    lp_y_g_xv = spm.logp(kd, d, site_vals=y_s, conditional=x_s | v_s, dims=(n_x, n_v, n_y)) - lp_y_avg
+
+    # Compute marginal probabilities
+    lp_y_g_x = logsumexp(lp_y_g_xv, axis=1, keepdims=True) - jnp.log(n_v)
+    lp_y = logsumexp(lp_y_g_x, axis=1, keepdims=True) - jnp.log(n_x)
+
+    # Compute weights
+    w_z = 0.0
+
+    # Compute utility
+    u = 0.0
+    return u

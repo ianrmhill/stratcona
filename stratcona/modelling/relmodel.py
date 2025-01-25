@@ -81,8 +81,11 @@ class ReliabilityModel():
                         sites.append(f'{tst}_{site}')
                 elif site in self.ltnts or site in self._ltnt_subsamples:
                     for tst in test.config:
-                        for obs in self.observes:
-                            sites.append(f'{tst}_{obs}_{site}')
+                        if '_dev' in site:
+                            for obs in self.observes:
+                                sites.append(f'{tst}_{obs}_{site}')
+                        else:
+                            sites.append(f'{tst}_{site}')
                 else:
                     sites.append(site)
         else:
