@@ -9,10 +9,8 @@ npyro.set_host_device_count(4)
 import jax
 import jax.numpy as jnp
 import jax.random as rand
+from jax.scipy.stats import norm
 
-from functools import partial
-from scipy.optimize import curve_fit
-from scipy.stats import norm
 import reliability
 import time
 
@@ -24,7 +22,7 @@ import matplotlib.lines as pltlines
 import os
 import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import stratcona
 
@@ -289,7 +287,7 @@ def weibull_inference():
     priors = am_w.relmdl.hyl_beliefs
     params = am_w.relmdl.param_vals
     npyro.render_model(am_w.relmdl.spm, model_args=(dims, conds, priors, params),
-                       filename='renders/weibull_model.png')
+                       filename='../renders/weibull_model.png')
 
     ######################################################
     # Generate the second plot that shows the Bayesian inference approach

@@ -109,15 +109,18 @@ class ReliabilityModel():
 
         return wrapped(keys, conditionals)
 
-    def logp(self, rng_key: rand.key, test: ReliabilityTest, site_vals: dict, conditional: dict | None, dims: tuple = ()):
+    def logp(self, rng_key: rand.key, test: ReliabilityTest, site_vals: dict, conditional: dict | None, dims: tuple = (), sum_lps=True):
 
         def get_log_prob(rng, vals, cond):
             mdl = self.spm if cond is None else condition(self.spm, data=cond)
             seeded = seed(mdl, rng)
             tr = trace(seeded).get_trace(test.config, test.conditions, self.hyl_beliefs, self.param_vals)
-            lp = 0
+            lp = 0 if sum_lps else {}
             for site in vals:
-                lp += jnp.sum(tr[site]['fn'].log_prob(vals[site]))
+                if sum_lps:
+                    lp += jnp.sum(tr[site]['fn'].log_prob(vals[site]))
+                else:
+                    lp[site] = tr[site]['fn'].log_prob(vals[site])
             return lp
 
         wrapped = get_log_prob
