@@ -6,6 +6,7 @@ import time as t
 import datetime
 import json
 import warnings
+import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
 import jax.random as rand
@@ -103,59 +104,39 @@ def entropy(samples, lp_func, p_args=None, in_bits=False,
     return h if not in_bits else h * NATS_TO_BITS
 
 
-def weighted_quantile(s, w, q):
+def w_quantile(s, w, q, y_dim=2):
     """
-    This procedure is based on the 'wquantiles' library but adapted for JAX numpy.
+    This procedure is based on the 'wquantiles' library but adapted for JAX numpy and vectorized.
 
     Parameters
     ----------
     s - sampled values
     w - weights for the sampled values, shape should match 's'
     q - the requested quantile to compute
+    y_dim - vectorization dimension, computing a different QX%-LBCI for each y value along that dimension
 
     Returns
     -------
     The quantile computed from the weighted samples
-
     """
-    order = jnp.argsort(s)
-    s_srt = s[order]
-    w_srt = w[order]
+    s1 = jnp.moveaxis(s, y_dim, -1)
+    w1 = jnp.moveaxis(w, y_dim, -1)
+    s2 = jnp.reshape(s1, (-1, s.shape[y_dim]))
+    w2 = jnp.reshape(w1, (-1, w.shape[y_dim]))
 
-    w_cumulative = jnp.cumsum(w_srt)
+    # Samples are shared across values of y, so only need to sort for one y, all others will match
+    order = jnp.argsort(s2[:, 0], axis=0)
+    s_srt = s2[order]
+    w_srt = w2[order]
+
+    w_cumulative = jnp.cumsum(w_srt, axis=0)
     # Subtract half the probability of the value to get the CDF midpoint for each sample, normalize CDF to [0, 1]
     # Normalization term, the sum of all weights, was already computed by cumsum as last element of array
     bins = (w_cumulative - (0.5 * w_srt)) / w_cumulative[-1]
-    result = jnp.interp(q, bins, s_srt)
-    return result
-
-# TODO: Not yet working, need it to be performant for usefulness, regular weighted likely okay for most scenarios
-def lw_q(s, lw, q):
-    """
-    This procedure is based on the 'wquantiles' library but adapted for JAX numpy and cast to log-weight domain.
-
-    Parameters
-    ----------
-    s - sampled values
-    lw - log weights for the sampled values, shape should match 's'
-    q - the requested quantile to compute
-
-    Returns
-    -------
-    The quantile computed from the weighted samples
-
-    """
-    order = jnp.argsort(s)
-    s_srt = s[order]
-    lw_srt = lw[order]
-
-    #lw_cum = jnp.apply_along_axis(jnp.logaddexp, 0, lw_srt)
-    lw_cum = jnp.array([jnp.logaddexp(lw_srt[i-1], lw_srt[i]) for i in range(1, lw_srt.size)])
-    # Subtract half the probability of the value to get the CDF midpoint for each sample, normalize CDF to [0, 1]
-    # Normalization term, the sum of all weights, was already computed by cumsum as last element of array
-    bins = (lw_cum - (0.5 * lw_srt)) / lw_cum[-1]
-    result = jnp.interp(jnp.log(q), bins, s_srt)
-    return result
+    # Don't map over x=q, but axis 1 of bins and s_srt correspond to different y observations. Out axis is 0 as interp
+    # with a single float x=q will only produce a 1D output array, collapsing axis 0 in bins and s_srt
+    q_func_vect = jax.vmap(jnp.interp, (None, 1, 1), 0)
+    return q_func_vect(q, bins, s_srt)
 
 
 def information_gain(theta_sampler, p_pri, p_post, m=1e5, in_bits=False, limiting_density=False):
@@ -732,46 +713,91 @@ def evaluate_design(rng_key, d, n, m, spm, u_funcs=eig, pred_test=None):
     return u
 
 
-def run_bed_newest(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=None, d_field=None):
-    k, kx = rand.split(rng_key)
-    # We can sample all x~p(x) here since x is independent of the test d, the observations y, and the predictors z
-    x_s = spm.sample(kx, d_sampler(), num_samples=(n_x,), keep_sites=spm.hyls)
+def ig_new(w, w_norm, lp_x, lp_y, lp_y_g_x, e_x):
+    lp_x_expanded = jnp.expand_dims(lp_x, axis=(1, 2))
+    info = lp_y - lp_x_expanded - lp_y_g_x
+    e_x_g_y = jnp.sum(w * info, axis=0) / w_norm
+    return e_x - e_x_g_y
 
+
+def qx_lbci(w, z, q):
+    z_ty = jnp.repeat(jnp.expand_dims(z, axis=2), w.shape[2], axis=2)
+    w_t = jnp.repeat(w, z.shape[1], axis=1)
+    return w_quantile(z_ty, w_t, q)
+
+
+def eig_new(ig):
+    return {'eig': jnp.sum(ig) / ig.size}
+
+
+def sample_hybrid_utility(ig, qx_lbci, trgt, p_y):
+    mtrpp = jnp.sum(jnp.where(qx_lbci > trgt, p_y, 0)) / jnp.sum(p_y)
+    return {'eig': jnp.sum(ig) / ig.size, 'qx_lbci': mtrpp}
+
+
+def run_bed_newest(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig_new, d_field=None, trgt_lifespan=None):
+    k, kd, kx = rand.split(rng_key, 3)
+    # Get the first proposal experiment design, need to sample here for dummy input to x_s sample and lp_x logp
+    d = d_sampler(kd)
+    # We can sample all x~p(x) here since x is independent of the test d, the observations y, and the predictors z
+    x_s = spm.sample(kx, d, num_samples=(n_x,), keep_sites=spm.hyls)
+    # Compute the prior entropy once, but only if it's needed for EIG estimation
+    if 'ig' in signature(utility).parameters:
+        lp_x = spm.logp(kx, d, site_vals=x_s, conditional=None, dims=(n_x,))
+        e_x = jnp.sum(-lp_x) / n_x
+
+    # We loop over sample test designs instead of vectorizing since test designs can have differing dimensionality
     us = []
     for _ in range(n_d):
-        # Get the next proposal experiment design
-        d = d_sampler()
-        k, kv, ky, ku = rand.split(k, 4)
+        k, kv, ky, ku, kz, kd = rand.split(k, 6)
         # We can sample all v~p(v|x,d) here since v is independent of the observations y and predictors z
-        x_s_tiled = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_v, axis=1) for x in x_s}
-        v_s = spm.sample(kv, d, num_samples=(n_x, n_v), keep_sites=spm._ltnt_subsamples, conditionals=x_s_tiled)
+        x_s_tv = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_v, axis=1) for x in x_s}
+        v_s = spm.sample(kv, d, num_samples=(n_x, n_v), keep_sites=spm._ltnt_subsamples, conditionals=x_s_tv)
         # Sample observations from joint prior y~p(x,v,y|d), keeping y independent of the already sampled x and v values
         y_s = spm.sample(ky, d, num_samples=(n_y,), keep_sites=spm.observes)
 
-        # Now evaluate the utility of each design
-        u = eval_u_of_d(d, y_s, v_s, x_s, spm, utility, d_field)
-        us.append(u)
+        # SMC resampling of 'v' samples should occur here
+
+        # Compute posterior importance weights
+        # Tile x, v, and y to match in size along their 3 dimensions
+        y_s_txv = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_x, axis=0), n_v, axis=1) for y in y_s}
+        x_s_tvy = {x: jnp.repeat(jnp.expand_dims(x_s_tv[x], axis=2), n_y, axis=2) for x in x_s_tv}
+        v_s_ty = {v: jnp.repeat(jnp.expand_dims(v_s[v], axis=2), n_y, axis=2) for v in v_s}
+        lp_y_g_xv = spm.logp(ky, d, site_vals=y_s_txv, conditional=x_s_tvy | v_s_ty, dims=(n_x, n_v, n_y))
+        # Marginalize across aleatoric uncertainty axis 'v'
+        lp_y_g_x = logsumexp(lp_y_g_xv, axis=1, keepdims=True) - jnp.log(n_v)
+        # Marginalize across epistemic uncertainty axis 'x'
+        lp_y = logsumexp(lp_y_g_x, axis=0, keepdims=True) - jnp.log(n_x)
+        # Now can compute the importance weights
+        lw_z = lp_y_g_x - lp_y
+        lw_z_norm = logsumexp(lw_z, axis=0)
+        # TODO: w_z_norm should always come out to a value of n_x just by the properties of algebra used to compute w_z
+        w_z, w_z_norm = jnp.exp(lw_z), jnp.exp(lw_z_norm)
+
+        # Sample predictors if needed
+        if 'qx_lbci' in signature(utility).parameters:
+            z_s = spm.sample(kz, d_field, (n_x, n_v), keep_sites=spm.predictors, conditionals=x_s_tv)
+
+        # Now compute summary statistics for each sample 'y'
+        metrics = {}
+        for m in signature(utility).parameters:
+            # Start by supporting IG and QX%-LBCI metrics, ideally QX%-HDCR too
+            match m:
+                case 'ig':
+                    metrics[m] = ig_new(w_z, w_z_norm, lp_x, lp_y, lp_y_g_x, e_x)
+                case 'qx_lbci':
+                    metrics[m] = qx_lbci(w_z, z_s['field_z'], 0.01)
+                case 'p_y':
+                    metrics[m] = jnp.exp(lp_y)
+                case 'trgt':
+                    metrics[m] = trgt_lifespan
+                case _:
+                    raise Exception('Unsupported metric requested')
+
+        # Now compute the utility summary statistic for 'd' based on the metrics for each 'y' sample
+        u = utility(**metrics)
+        us.append({'design': d, 'utility': u})
+
+        # Now update the test design for the next iteration, the final design (index n_d) is not used
+        d = d_sampler(kd)
     return us
-
-
-def eval_u_of_d(d, y_s, v_s, x_s, spm, f_u, d_field):
-    n_x, n_v, n_y = x_s.shape[0], v_s.shape[1], y_s.shape[2]
-    # Dummy key for executing traces, all values will be fixed to compute log probabilities
-    kd = rand.key(0)
-    # Re-normalization factors to keep all the log probs closer to 0
-    lp_y_avg = 0.0
-
-    # Compute log probabilities from the structured probabilistic model
-    y_tiled = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], 2), n_v, axis=1), n_x, axis=2) for y in y_s}
-    lp_y_g_xv = spm.logp(kd, d, site_vals=y_s, conditional=x_s | v_s, dims=(n_x, n_v, n_y)) - lp_y_avg
-
-    # Compute marginal probabilities
-    lp_y_g_x = logsumexp(lp_y_g_xv, axis=1, keepdims=True) - jnp.log(n_v)
-    lp_y = logsumexp(lp_y_g_x, axis=1, keepdims=True) - jnp.log(n_x)
-
-    # Compute weights
-    w_z = 0.0
-
-    # Compute utility
-    u = 0.0
-    return u

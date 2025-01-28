@@ -1,4 +1,4 @@
-# Copyright (c) 2024 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 from datetime import timedelta
@@ -7,8 +7,9 @@ from matplotlib import pyplot as plt
 
 import jax.random as rand
 
+import engine.bed
 from stratcona.engine.inference import inference_model
-from stratcona.engine.bed import bed_run
+from stratcona.engine.bed import bed_run, run_bed_newest
 from stratcona.engine.metrics import *
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement
 
@@ -74,3 +75,8 @@ class AnalysisManager:
     def find_best_experiment(self, l, n, m, exp_sampler, utility_functions=None):
         rng = self._derive_key()
         return bed_run(rng, l, n, m, exp_sampler, self.relmdl, utility_functions, self.field_test)
+
+    def do_bed(self, n_d, n_y, n_v, n_x, exp_sampler, utility_func=engine.bed.eig_new, trgt_lfspn=None):
+        rng = self._derive_key()
+        return run_bed_newest(rng, n_d, n_y, n_v, n_x, exp_sampler, self.relmdl,
+                              utility=utility_func, d_field=self.field_test, trgt_lifespan=trgt_lfspn)

@@ -102,9 +102,12 @@ def test_info_gain_computation():
     u, v = 2.3, 1.0
     d = dists.Normal(u, v)
     k = rand.key(74843)
-    k1, k2, k3 = rand.split(k, 3)
+    k1, k2, k3, k4 = rand.split(k, 4)
+
     n_dev = 5
-    measd = d.sample(k1, (1, n_dev, 1, 1))
+    n_x, n_v, n_y = 30, 40, 3
+
+    measd = d.sample(k1, (n_y, n_dev, 1, 1))
 
     var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
     # Define a simple probabilistic model
@@ -114,12 +117,12 @@ def test_info_gain_computation():
     mb.add_latent('y', nom='u', dev='v')
     mb.add_params(obs_var=0.2)
     mb.add_observed('y_obs', dists.Normal, {'loc': 'y', 'scale': 'obs_var'}, n_dev)
+    mb.add_predictor('y_pred', lambda y: y**2)
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=843764)
     tst = stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {}})
     am.set_test_definition(tst)
 
     # Sampling of x and v values
-    n_x, n_v, n_y = 30, 40, 1
     x_s = am.relmdl.sample(k2, am.test, (n_x,), keep_sites=['u', 'v'])
     x_s_tiled = {x: jnp.repeat(jnp.expand_dims(x_s[x], 1), n_v, axis=1) for x in x_s}
     v_s = am.relmdl.sample(k3, am.test, num_samples=(n_x, n_v), keep_sites=am.relmdl._ltnt_subsamples, conditionals=x_s_tiled)
@@ -141,9 +144,56 @@ def test_info_gain_computation():
     w_z = jnp.exp(lw_z)
 
     # Now compute metrics (summary statistics) based on the importance weights
+
+    # First is information gain
     lp_x_tiled = jnp.expand_dims(lp_x, axis=(1, 2))
     info = lp_y - lp_x_tiled - lp_y_g_x
-    entropy_x_g_y = jnp.sum(w_z * info) / w_z_norm
-    entropy_x = jnp.sum(-lp_x) / n_x
+    entropy_x_g_y = jnp.sum(w_z * info, axis=0) / w_z_norm
+    # Prior entropy with samples from the prior - importance weights are all uniformly 1
+    entropy_x = jnp.sum(-lp_x, axis=0) / n_x
     info_gain = entropy_x - entropy_x_g_y
     print(info_gain)
+
+    # Now predicted QX%-LBCI
+    # These samples of v through z must be independent, as existing v samples will be correlated to align with y
+    z = am.relmdl.sample(k4, am.test, (n_x, n_v), keep_sites=['y_pred'], conditionals=x_s_tiled)
+    z_tiled = jnp.repeat(jnp.expand_dims(z['t1_y_pred'], axis=2), n_y, axis=2)
+    w_z_tiled = jnp.repeat(w_z, n_v, axis=1)
+    lbci = stratcona.engine.bed.w_quantile(z_tiled, w_z_tiled, 0.01)
+
+    # Metrics need to be summarized across observations and can be put together
+    eig = jnp.sum(info_gain) / n_y
+    mtrpp = 0.0
+    u = eig + mtrpp
+
+
+def test_basic_eig_bed_new():
+    # Generate some observed data
+    n_dev = 3
+    n_x, n_v, n_y = 30, 40, 3
+
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    # Define a simple probabilistic model
+    mb = stratcona.SPMBuilder(mdl_name='hierarchical_test')
+    mb.add_hyperlatent('u', dists.Normal, {'loc': 2.2, 'scale': 0.2})
+    mb.add_hyperlatent('v', dists.Normal, {'loc': 12, 'scale': 2}, transform=var_tf)
+    mb.add_latent('y', nom='u', dev='v')
+    mb.add_params(obs_var=0.2)
+    mb.add_intermediate('y_cond', lambda y, strs: y * strs)
+    mb.add_observed('y_obs', dists.Normal, {'loc': 'y_cond', 'scale': 'obs_var'}, n_dev)
+    mb.add_predictor('z', lambda y_cond: y_cond**2)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=843764)
+    tst = stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'strs': 1.0}})
+    am.set_test_definition(tst)
+    am.set_field_use_conditions({'strs': 0.5})
+
+    # Define the experiment sampler
+    strs_dist = dists.Uniform(0.0, 3.0)
+    def tst_sampler(rng_key):
+        dims = {'t1': {'lot': 1, 'chp': 1}}
+        strs = {'t1': {'strs': strs_dist.sample(rng_key)}}
+        return stratcona.ReliabilityTest(dims, strs)
+
+    results = am.do_bed(5, 25, 30, 40, tst_sampler,
+                        utility_func=stratcona.engine.bed.sample_hybrid_utility, trgt_lfspn=0.014)
+    assert results == 0
