@@ -59,13 +59,13 @@ def test_resampling_v():
     lp_y_g_xv_lot_tot = sum(lp_y_g_xv_lot.values())
 
     # Sum of all p_marg array elements must be 1 for resampling via random choice
-    resample_probs = lp_y_g_xv_lot_tot / logsumexp(lp_y_g_xv_lot_tot, axis=1, keepdims=True)
+    resample_probs = lp_y_g_xv_lot_tot - logsumexp(lp_y_g_xv_lot_tot, axis=1, keepdims=True)
     # Resample according to relative likelihood, need to resample indices so that resamples are the same for each lot-level latent variable
     inds_array = jnp.repeat(jnp.repeat(jnp.repeat(jnp.expand_dims(jnp.arange(n_v), (0, 2, 3)), n_x, axis=0), n_y, axis=2), n_lot, axis=3)
     # Spectacular triple vmap for n_x, n_y, and n_lot dimensions
     choice_vect = jax.vmap(jax.vmap(jax.vmap(rand.choice, (0, 0, None, None, 0), 0), (1, 2, None, None, 2), 2), (2, 3, None, None, 3), 3)
     krs = jnp.reshape(rand.split(k6, n_x * n_y * n_lot), (n_x, n_y, n_lot))
-    resample_inds = choice_vect(krs, inds_array, (n_v,), True, resample_probs)
+    resample_inds = choice_vect(krs, inds_array, (n_v,), True, jnp.exp(resample_probs))
 
     def reindex(a, i):
         return a[i]
@@ -75,13 +75,32 @@ def test_resampling_v():
 
     # Next up are chip-level variables
     chp_ltnts = [ltnt for ltnt in v_init if '_chp' in ltnt]
+    v_s_chp_init = {ltnt: v_init[ltnt] for ltnt in chp_ltnts}
+    # Get the log probabilities without summing so each lot can be considered individually
+    lp_y_g_xv = am.relmdl.logp(k1, am.test, site_vals={'t1_y_obs': y_tiled}, conditional=x_s_tiled | v_rs_lot | v_dev_zeros | v_s_chp_init, dims=(n_x, n_v, n_y), sum_lps=False)
+    # Number of devices might be different for each observed variable, so have to sum across devices
+    lp_y_g_xv_chp = {y: jnp.sum(lp_y_g_xv[y], axis=3) for y in lp_y_g_xv}
+    # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
+    lp_y_g_xv_chp_tot = sum(lp_y_g_xv_chp.values())
+
+    # Sum of all p_marg array elements must be 1 for resampling via random choice
+    resample_probs = lp_y_g_xv_chp_tot - logsumexp(lp_y_g_xv_chp_tot, axis=1, keepdims=True)
+    # Resample according to relative likelihood, need to resample indices so that resamples are the same for each chip-level latent variable
+    inds_array = jnp.repeat(jnp.repeat(jnp.repeat(jnp.repeat(jnp.expand_dims(jnp.arange(n_v), (0, 2, 3, 4)), n_x, axis=0), n_y, axis=2), n_chp, axis=3), n_lot, axis=4)
+    # Spectacular quadruple vmap for n_x, n_y, n_chp, and n_lot dimensions
+    choice_vect = jax.vmap(jax.vmap(jax.vmap(jax.vmap(rand.choice, (0, 0, None, None, 0), 0), (1, 2, None, None, 2), 2), (2, 3, None, None, 3), 3), (3, 4, None, None, 4), 4)
+    krs = jnp.reshape(rand.split(k6, n_x * n_y * n_chp * n_lot), (n_x, n_y, n_chp, n_lot))
+    resample_inds = choice_vect(krs, inds_array, (n_v,), True, jnp.exp(resample_probs))
+
+    vec_reindex = jax.vmap(jax.vmap(jax.vmap(jax.vmap(reindex, (0, 0), 0), (2, 2), 2), (3, 3), 3), (4, 4), 4)
+    v_rs_chp = {v: vec_reindex(v_s_chp_init[v], resample_inds) for v in chp_ltnts}
+    resample_diversity_percent = jnp.unique(v_rs_chp['t1_y_chp']).size / (n_x * n_v * n_y * n_chp * n_lot)
+
+    # Finally are device-level variables
+
 
 
     v_s_lot_init = am.relmdl.sample(k5, am.test, num_samples=(n_x, n_v, n_y), keep_sites=lot_ltnts, conditionals=x_s_tiled | v_dev_zeros | v_chp_zeros)
-
-
-    # Generate lot-level probabilities
-    lp_y_g_xv = am.relmdl.logp(k1, am.test, site_vals={'t1_y_obs': y_tiled}, conditional=x_s_tiled_2 | v_s_lot_init | v_dev_zeros | v_chp_zeros, dims=(n_x, n_v, n_y))
 
     # Final logp
     lp_y_g_xv = am.relmdl.logp(k1, am.test, site_vals={'t1_y_obs': y_tiled}, conditional=x_s_tiled_2 | v_s_tiled, dims=(n_x, n_v, n_y))
