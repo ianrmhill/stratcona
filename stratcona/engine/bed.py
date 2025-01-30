@@ -735,6 +735,120 @@ def sample_hybrid_utility(ig, qx_lbci, trgt, p_y):
     return {'eig': jnp.sum(ig) / ig.size, 'qx_lbci': mtrpp}
 
 
+def reindex(a, i):
+    return a[i]
+
+
+def est_lp_y_g_x(rng_key, spm, d, x_s, y_s, n_v):
+    # Figure out the dimensions of the problem and derive random keys from the seed key
+    n_x, n_y = next(iter(x_s.values())).shape[0], next(iter(y_s.values())).shape[0]
+    n_lot, n_chp = next(iter(y_s.values())).shape[3], next(iter(y_s.values())).shape[2]
+    k_init, kdum, kl, kc, kd = rand.split(rng_key, 5)
+    perf_stats = {}
+
+    # Tile the x and y sample arrays to match the problem dimensions for full vectorization
+    x_s_t = {x: jnp.repeat(jnp.repeat(jnp.expand_dims(x_s[x], (1, 2)), n_v, axis=1), n_y, axis=2) for x in x_s}
+    y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s}
+
+    v_init = spm.sample(k_init, d, num_samples=(n_x, n_v, n_y), keep_sites=spm._ltnt_subsamples, conditionals=x_s_t)
+    v_dev_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_dev' in v}
+    v_chp_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_chp' in v}
+    lot_ltnts = [ltnt for ltnt in v_init if '_lot' in ltnt]
+
+    ##################################
+    # First perform lot-level resampling
+    ##################################
+    if len(lot_ltnts) > 0:
+        v_s_lot_init = {ltnt: v_init[ltnt] for ltnt in lot_ltnts}
+        # Get the log probabilities without summing so each lot can be considered individually
+        lp_y_g_xv = spm.logp(kdum, d, site_vals=y_s_t, conditional=x_s_t | v_s_lot_init | v_dev_zeros | v_chp_zeros, dims=(n_x, n_v, n_y), sum_lps=False)
+        # Number of devices might be different for each observed variable, so have to sum across devices and chips
+        lp_y_g_xv_lot = {y: jnp.sum(lp_y_g_xv[y], axis=(3, 4)) for y in lp_y_g_xv}
+        # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
+        lp_y_g_xv_lot_tot = sum(lp_y_g_xv_lot.values())
+        # Sum of all p_marg array elements must be 1 for resampling via random choice
+        resample_probs = lp_y_g_xv_lot_tot - logsumexp(lp_y_g_xv_lot_tot, axis=1, keepdims=True)
+        # Resample according to relative likelihood, need to resample indices so that resamples are the same for each lot-level latent variable
+        inds_array = jnp.repeat(jnp.repeat(jnp.repeat(jnp.expand_dims(jnp.arange(n_v), (0, 2, 3)), n_x, axis=0), n_y, axis=2), n_lot, axis=3)
+        # Spectacular triple vmap for n_x, n_y, and n_lot dimensions
+        choice_vect = jax.vmap(jax.vmap(jax.vmap(rand.choice, (0, 0, None, None, 0), 0), (1, 2, None, None, 2), 2), (2, 3, None, None, 3), 3)
+        krs = jnp.reshape(rand.split(kl, n_x * n_y * n_lot), (n_x, n_y, n_lot))
+        resample_inds = choice_vect(krs, inds_array, (n_v,), True, jnp.exp(resample_probs))
+        vec_lot_reindex = jax.vmap(jax.vmap(jax.vmap(reindex, (0, 0), 0), (2, 2), 2), (3, 3), 3)
+
+        v_rs_lot = {v: vec_lot_reindex(v_s_lot_init[v], resample_inds) for v in lot_ltnts}
+        perf_stats['lot_rs_diversity'] = sum([jnp.unique(v_rs_lot[v]).size / (n_x * n_v * n_y * n_lot) for v in lot_ltnts]) / len(lot_ltnts)
+    else:
+        v_rs_lot = {}
+
+    ##################################
+    # Next up are chip-level variables
+    ##################################
+    chp_ltnts = [ltnt for ltnt in v_init if '_chp' in ltnt]
+    if len(chp_ltnts) > 0:
+        v_s_chp_init = {ltnt: v_init[ltnt] for ltnt in chp_ltnts}
+        # Get the log probabilities without summing so each lot can be considered individually
+        lp_y_g_xv = spm.logp(kdum, d, site_vals=y_s_t, conditional=x_s_t | v_rs_lot | v_dev_zeros | v_s_chp_init, dims=(n_x, n_v, n_y), sum_lps=False)
+        # Number of devices might be different for each observed variable, so have to sum across devices
+        lp_y_g_xv_chp = {y: jnp.sum(lp_y_g_xv[y], axis=3) for y in lp_y_g_xv}
+        # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
+        lp_y_g_xv_chp_tot = sum(lp_y_g_xv_chp.values())
+
+        # Sum of all p_marg array elements must be 1 for resampling via random choice
+        resample_probs = lp_y_g_xv_chp_tot - logsumexp(lp_y_g_xv_chp_tot, axis=1, keepdims=True)
+        # Resample according to relative likelihood, need to resample indices so that resamples are the same for each chip-level latent variable
+        inds_array = jnp.repeat(jnp.repeat(jnp.repeat(jnp.repeat(jnp.expand_dims(jnp.arange(n_v), (0, 2, 3, 4)), n_x, axis=0), n_y, axis=2), n_chp, axis=3), n_lot, axis=4)
+        # Spectacular quadruple vmap for n_x, n_y, n_chp, and n_lot dimensions
+        choice_vect = jax.vmap(jax.vmap(jax.vmap(jax.vmap(rand.choice, (0, 0, None, None, 0), 0), (1, 2, None, None, 2), 2), (2, 3, None, None, 3), 3), (3, 4, None, None, 4), 4)
+        krs = jnp.reshape(rand.split(kc, n_x * n_y * n_chp * n_lot), (n_x, n_y, n_chp, n_lot))
+        resample_inds = choice_vect(krs, inds_array, (n_v,), True, jnp.exp(resample_probs))
+        vec_chp_reindex = jax.vmap(jax.vmap(jax.vmap(jax.vmap(reindex, (0, 0), 0), (2, 2), 2), (3, 3), 3), (4, 4), 4)
+
+        v_rs_chp = {v: vec_chp_reindex(v_s_chp_init[v], resample_inds) for v in chp_ltnts}
+        perf_stats['chp_rs_diversity'] = sum([jnp.unique(v_rs_chp[v]).size / (n_x * n_v * n_y * n_chp * n_lot) for v in chp_ltnts]) / len(chp_ltnts)
+    else:
+        v_rs_chp = {}
+
+    ##################################
+    # Finally are device-level variables
+    ##################################
+    dev_ltnts = [ltnt for ltnt in v_init if '_dev' in ltnt]
+    if len(dev_ltnts) > 0:
+        v_s_dev_init = {ltnt: v_init[ltnt] for ltnt in dev_ltnts}
+        # Get the log probabilities without summing so each lot can be considered individually
+        lp_y_g_xv = spm.logp(kdum, d, site_vals=y_s_t, conditional=x_s_t | v_rs_lot | v_s_dev_init | v_rs_chp, dims=(n_x, n_v, n_y), sum_lps=False)
+
+        resample_inds = {}
+        v_rs_dev = {}
+        n_dev_tot = 0
+        # Spectacular quintuple vmap for n_x, n_y, n_dev, n_chp, and n_lot dimensions
+        choice_vect = jax.vmap(jax.vmap(jax.vmap(jax.vmap(jax.vmap(rand.choice, (0, 0, None, None, 0), 0), (1, 2, None, None, 2), 2), (2, 3, None, None, 3), 3), (3, 4, None, None, 4), 4), (4, 5, None, None, 5), 5)
+        vec_dev_reindex = jax.vmap(jax.vmap(jax.vmap(jax.vmap(jax.vmap(reindex, (0, 0), 0), (2, 2), 2), (3, 3), 3), (4, 4), 4), (5, 5), 5)
+
+        for y in lp_y_g_xv:
+            n_dev = lp_y_g_xv[y].shape[3]
+            n_dev_tot += n_dev
+            # Sum of all p_marg array elements must be 1 for resampling via random choice
+            resample_probs = lp_y_g_xv[y] - logsumexp(lp_y_g_xv[y], axis=1, keepdims=True)
+            # Resample according to relative likelihood, need to resample indices so that resamples are the same for each chip-level latent variable
+            inds_array = jnp.repeat(jnp.repeat(jnp.repeat(jnp.repeat(jnp.repeat(jnp.expand_dims(jnp.arange(n_v), (0, 2, 3, 4, 5)), n_x, axis=0), n_y, axis=2), n_dev, axis=3), n_chp, axis=4), n_lot, axis=5)
+            kd, ky = rand.split(kd)
+            krs = jnp.reshape(rand.split(ky, n_x * n_y * n_dev * n_chp * n_lot), (n_x, n_y, n_dev, n_chp, n_lot))
+            resample_inds[y] = choice_vect(krs, inds_array, (n_v,), True, jnp.exp(resample_probs))
+            v_rs_dev |= {v: vec_dev_reindex(v_s_dev_init[v], resample_inds[y]) for v in dev_ltnts if y in v}
+        perf_stats['dev_rs_diversity'] = sum([jnp.unique(v_rs_dev[v]).size / (n_x * n_v * n_y * v_rs_dev[v].shape[3] * n_chp * n_lot) for v in dev_ltnts]) / len(dev_ltnts)
+    else:
+        v_rs_dev = {}
+
+    # Final logp
+    lp_v_g_x = spm.logp(kdum, d, site_vals=v_rs_dev | v_rs_chp | v_rs_lot, conditional=x_s_t, dims=(n_x, n_v, n_y))
+    lp_y_g_xv = spm.logp(kdum, d, site_vals=y_s_t, conditional=x_s_t | v_rs_lot | v_rs_chp | v_rs_dev, dims=(n_x, n_v, n_y))
+    lp_y_g_x = logsumexp(lp_y_g_xv + lp_v_g_x, axis=1) - logsumexp(lp_y_g_xv, axis=1)
+    # Compute how similar the log prob of each lp_y_g_xv is, want to reduce the spread so that each sample is comparable
+    perf_stats['lp_ygvx_balance'] = jnp.std(lp_y_g_xv)
+    return lp_y_g_x, perf_stats
+
+
 def run_bed_newest(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig_new, d_field=None, trgt_lifespan=None):
     k, kd, kx = rand.split(rng_key, 3)
     # Get the first proposal experiment design, need to sample here for dummy input to x_s sample and lp_x logp
@@ -750,13 +864,12 @@ def run_bed_newest(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig_new,
     us = []
     for _ in range(n_d):
         k, kv, ky, ku, kz, kd = rand.split(k, 6)
-        # We can sample all v~p(v|x,d) here since v is independent of the observations y and predictors z
-        x_s_tv = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_v, axis=1) for x in x_s}
-        v_s = spm.sample(kv, d, num_samples=(n_x, n_v), keep_sites=spm._ltnt_subsamples, conditionals=x_s_tv)
         # Sample observations from joint prior y~p(x,v,y|d), keeping y independent of the already sampled x and v values
         y_s = spm.sample(ky, d, num_samples=(n_y,), keep_sites=spm.observes)
 
         # SMC resampling of 'v' samples should occur here
+        x_s_tv = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_v, axis=1) for x in x_s}
+        v_s = spm.sample(kv, d, num_samples=(n_x, n_v), keep_sites=spm._ltnt_subsamples, conditionals=x_s_tv)
 
         # Compute posterior importance weights
         # Tile x, v, and y to match in size along their 3 dimensions
@@ -766,6 +879,7 @@ def run_bed_newest(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig_new,
         lp_y_g_xv = spm.logp(ky, d, site_vals=y_s_txv, conditional=x_s_tvy | v_s_ty, dims=(n_x, n_v, n_y))
         # Marginalize across aleatoric uncertainty axis 'v'
         lp_y_g_x = logsumexp(lp_y_g_xv, axis=1, keepdims=True) - jnp.log(n_v)
+
         # Marginalize across epistemic uncertainty axis 'x'
         lp_y = logsumexp(lp_y_g_x, axis=0, keepdims=True) - jnp.log(n_x)
         # Now can compute the importance weights
