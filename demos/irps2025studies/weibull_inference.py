@@ -82,7 +82,7 @@ def weibull_inference():
     # Simulate some Weibull distributed failure data
     am_w.set_test_definition(test_130)
     ttfs = am_w.sim_test_measurements()
-    lot_vals = (ttfs['e_k_lot'], ttfs['e_sc_lot'])
+    lot_vals = (ttfs['e_k_lot_ls'], ttfs['e_sc_lot_ls'])
     sim_ks, sim_scs = ttfs['e_ttf_k_pos'], ttfs['e_ttf_sc_pos']
 
     # Extract and order the simulated failure times for plotting
@@ -256,7 +256,7 @@ def weibull_inference():
     pri_fits = weibull_cdf(x, prm_samples['e_ttf_k_pos'], prm_samples['e_ttf_sc_pos'])
 
     start_time = time.time()
-    am_w.do_inference(ttfs, test_130)
+    am_w.do_inference_custom(ttfs, test_130)
     print(f'Inference time taken: {time.time() - start_time}')
     print(am_w.relmdl.hyl_beliefs)
     post_cond = {'e': {'k_nom': am_w.relmdl.hyl_beliefs['k_nom']['loc'], 'sc_nom': am_w.relmdl.hyl_beliefs['sc_nom']['loc'],
@@ -271,11 +271,11 @@ def weibull_inference():
 
     # Determine the probability of the simulation traces under the posterior inference model
     k1, k2 = rand.split(rand.key(7932854))
-    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot': jnp.array([0.0]),
-                                                             'e_sc_lot': jnp.array([0.0])}, post_cond))
-    p1 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot': lot_vals[0][0], 'e_sc_lot': lot_vals[1][0]}, post_cond))
-    p2 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot': lot_vals[0][1], 'e_sc_lot': lot_vals[1][1]}, post_cond))
-    p3 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot': lot_vals[0][2], 'e_sc_lot': lot_vals[1][2]}, post_cond))
+    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': jnp.array([0.0]),
+                                                             'e_sc_lot_ls': jnp.array([0.0])}, post_cond))
+    p1 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': lot_vals[0][0], 'e_sc_lot_ls': lot_vals[1][0]}, post_cond))
+    p2 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': lot_vals[0][1], 'e_sc_lot_ls': lot_vals[1][1]}, post_cond))
+    p3 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': lot_vals[0][2], 'e_sc_lot_ls': lot_vals[1][2]}, post_cond))
     pst_sim_probs = jnp.array([p1, p2, p3]) / mean_prob
     print(f'Posterior normalized likelihood of simulation lot variability: {pst_sim_probs}')
 

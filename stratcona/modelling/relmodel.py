@@ -53,7 +53,7 @@ class ReliabilityModel():
         self.hyl_info = hyl_info
 
         self.ltnts = ltnt_sites
-        self._ltnt_subsamples = ltnt_subsample_sites
+        self.ltnt_subsamples = ltnt_subsample_sites
 
         self.observes = obs_sites
         self.obs_per_chp = meas_counts
@@ -79,7 +79,7 @@ class ReliabilityModel():
                 if site in self.observes or site in self.predictors:
                     for tst in test.config:
                         sites.append(f'{tst}_{site}')
-                elif site in self.ltnts or site in self._ltnt_subsamples:
+                elif site in self.ltnts or site in self.ltnt_subsamples:
                     for tst in test.config:
                         if '_dev' in site:
                             for obs in self.observes:

@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 import jax.random as rand
 
 import engine.bed
-from stratcona.engine.inference import inference_model
+from stratcona.engine.inference import inference_model, custom_inference
 from stratcona.engine.bed import bed_run, run_bed_newest
 from stratcona.engine.metrics import *
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement
@@ -46,6 +46,12 @@ class AnalysisManager:
         new_prior = inference_model(inf_mdl, self.relmdl.hyl_info, observations, rng)
         if auto_update_prior:
             self.relmdl.hyl_beliefs = new_prior
+
+    def do_inference_custom(self, observations, test: ReliabilityTest = None, n_x=1000, n_v=1000):
+        rng = self._derive_key()
+        test_info = test if test is not None else self.test
+        new_prior = custom_inference(rng, self.relmdl, test_info, observations, n_x, n_v)
+        self.relmdl.hyl_beliefs = new_prior
 
     def evaluate_reliability(self, predictor, num_samples=300_000, plot_results=False):
         rng = self._derive_key()

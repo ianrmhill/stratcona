@@ -637,7 +637,7 @@ def evaluate_design(rng_key, d, n, m, spm, u_funcs=eig, pred_test=None):
         y_s = spm.y_s_custom(d, num_samples=(n,))
     # Now generate 'm' samples of possible latent space values for each of the 'n' outcomes
     if not spm.i_s_override:
-        i_s = spm.sample(k2, d, num_samples=(n, m), keep_sites=spm._ltnt_subsamples + spm.hyls)
+        i_s = spm.sample(k2, d, num_samples=(n, m), keep_sites=spm.ltnt_subsamples + spm.hyls)
     else:
         i_s = spm.i_s_custom(d, num_samples=(n, m))
         probs['lp_s'] = spm.lp_s_custom(d, num_samples=(n, m))
@@ -715,6 +715,7 @@ def evaluate_design(rng_key, d, n, m, spm, u_funcs=eig, pred_test=None):
 
 def ig_new(w, w_norm, lp_x, lp_y, lp_y_g_x, e_x):
     lp_x_expanded = jnp.expand_dims(lp_x, axis=(1, 2))
+    # NOTE: This is the same as info = -lp_x_expanded - lw
     info = lp_y - lp_x_expanded - lp_y_g_x
     e_x_g_y = jnp.sum(w * info, axis=0) / w_norm
     return e_x - e_x_g_y
@@ -750,10 +751,14 @@ def est_lp_y_g_x(rng_key, spm, d, x_s, y_s, n_v):
     x_s_t = {x: jnp.repeat(jnp.repeat(jnp.expand_dims(x_s[x], (1, 2)), n_v, axis=1), n_y, axis=2) for x in x_s}
     y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s}
 
-    v_init = spm.sample(k_init, d, num_samples=(n_x, n_v, n_y), keep_sites=spm._ltnt_subsamples, conditionals=x_s_t)
+    v_init = spm.sample(k_init, d, num_samples=(n_x, n_v, n_y), keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
     v_dev_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_dev' in v}
     v_chp_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_chp' in v}
+    v_lot_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_lot' in v}
     lot_ltnts = [ltnt for ltnt in v_init if '_lot' in ltnt]
+
+    # Evaluate similarity of v to y
+    y_approx_zeros = spm.sample(kdum, d, num_samples=(n_x, n_v, n_y), keep_sites=spm.observes, conditionals=x_s_t | v_dev_zeros | v_chp_zeros | v_lot_zeros)
 
     ##################################
     # First perform lot-level resampling
@@ -780,6 +785,8 @@ def est_lp_y_g_x(rng_key, spm, d, x_s, y_s, n_v):
         perf_stats['lot_rs_diversity'] = sum([jnp.unique(v_rs_lot[v]).size / (n_x * n_v * n_y * n_lot) for v in lot_ltnts]) / len(lot_ltnts)
     else:
         v_rs_lot = {}
+
+    y_approx_lot = spm.sample(kdum, d, num_samples=(n_x, n_v, n_y), keep_sites=spm.observes, conditionals=x_s_t | v_dev_zeros | v_chp_zeros | v_rs_lot)
 
     ##################################
     # Next up are chip-level variables
@@ -809,12 +816,15 @@ def est_lp_y_g_x(rng_key, spm, d, x_s, y_s, n_v):
     else:
         v_rs_chp = {}
 
+    y_approx_chp = spm.sample(kdum, d, num_samples=(n_x, n_v, n_y), keep_sites=spm.observes, conditionals=x_s_t | v_dev_zeros | v_rs_chp | v_rs_lot)
+
     ##################################
     # Finally are device-level variables
     ##################################
     dev_ltnts = [ltnt for ltnt in v_init if '_dev' in ltnt]
     if len(dev_ltnts) > 0:
         v_s_dev_init = {ltnt: v_init[ltnt] for ltnt in dev_ltnts}
+
         # Get the log probabilities without summing so each lot can be considered individually
         lp_y_g_xv = spm.logp(kdum, d, site_vals=y_s_t, conditional=x_s_t | v_rs_lot | v_s_dev_init | v_rs_chp, dims=(n_x, n_v, n_y), sum_lps=False)
 
@@ -840,12 +850,13 @@ def est_lp_y_g_x(rng_key, spm, d, x_s, y_s, n_v):
     else:
         v_rs_dev = {}
 
+    # Evaluate similarity of v to y
+    y_approx = spm.sample(kdum, d, num_samples=(n_x, n_v, n_y), keep_sites=spm.observes, conditionals=x_s_t | v_rs_lot | v_rs_chp | v_rs_dev)
+
     # Final logp
     lp_v_g_x = spm.logp(kdum, d, site_vals=v_rs_dev | v_rs_chp | v_rs_lot, conditional=x_s_t, dims=(n_x, n_v, n_y))
     lp_y_g_xv = spm.logp(kdum, d, site_vals=y_s_t, conditional=x_s_t | v_rs_lot | v_rs_chp | v_rs_dev, dims=(n_x, n_v, n_y))
-    lp_y_g_x = logsumexp(lp_y_g_xv + lp_v_g_x, axis=1) - logsumexp(lp_y_g_xv, axis=1)
-    # Compute how similar the log prob of each lp_y_g_xv is, want to reduce the spread so that each sample is comparable
-    perf_stats['lp_ygvx_balance'] = jnp.std(lp_y_g_xv)
+    lp_y_g_x = logsumexp(lp_v_g_x + lp_y_g_xv, axis=1)
     return lp_y_g_x, perf_stats
 
 
@@ -869,7 +880,7 @@ def run_bed_newest(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig_new,
 
         # SMC resampling of 'v' samples should occur here
         x_s_tv = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_v, axis=1) for x in x_s}
-        v_s = spm.sample(kv, d, num_samples=(n_x, n_v), keep_sites=spm._ltnt_subsamples, conditionals=x_s_tv)
+        v_s = spm.sample(kv, d, num_samples=(n_x, n_v), keep_sites=spm.ltnt_subsamples, conditionals=x_s_tv)
 
         # Compute posterior importance weights
         # Tile x, v, and y to match in size along their 3 dimensions

@@ -3,12 +3,39 @@
 
 import numpy as np
 import jax.numpy as jnp
+import jax.random as rand
+from jax.scipy.special import logsumexp
 import scipy
 
 from numpyro.infer import SA, BarkerMH, NUTS, MCMC
 from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 
 from stratcona.assistants.dist_translate import npyro_to_scipy
+from stratcona.engine.bed import est_lp_y_g_x
+
+
+def custom_inference(rng_key, spm, d, y, n_x, n_v):
+    k, kx, kv, kc = rand.split(rng_key, 4)
+    y_t = {}
+    for exp in y:
+        y_t |= {f'{exp}_{y_e}': jnp.expand_dims(y[exp][y_e], 0) for y_e in y[exp]}
+    x_s = spm.sample(kx, d, num_samples=(n_x,), keep_sites=spm.hyls)
+    lp_x = spm.logp(kx, d, site_vals=x_s, conditional=None, dims=(n_x,))
+
+    lp_y_g_x, stats = est_lp_y_g_x(kv, spm, d, x_s, y_t, n_v)
+    lp_y = logsumexp(lp_y_g_x.flatten(), axis=0) - jnp.log(n_x)
+
+    lp_x_g_y = (lp_x + lp_y_g_x.flatten()) - lp_y
+    xgy_norm = logsumexp(lp_x_g_y)
+    p_x_g_y = jnp.exp(lp_x_g_y - xgy_norm)
+    # Resample to get a distribution of samples according to p(x|y,d)
+    resample_inds = rand.choice(kc, jnp.arange(n_x), (n_x,), True, p_x_g_y)
+    # Fit the posterior distributions
+    new_prior = {}
+    for hyl in spm.hyl_info:
+        resamples = x_s[hyl][resample_inds]
+        new_prior[hyl] = fit_dist_to_samples(spm.hyl_info[hyl], resamples)
+    return new_prior
 
 
 def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 10_000, num_chains: int = 4):
@@ -24,7 +51,7 @@ def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 
     diverging = extra_info['diverging'] if 'diverging' in extra_info else 0
     diverging = jnp.sum(diverging)
     # TODO: Interpret the MCMC convergence statistics to give the user recommendations to improve the model
-    print(convergence_stats)
+    #print(convergence_stats)
     print(f'Divergences: {diverging}')
 
     new_prior = {}

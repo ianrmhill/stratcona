@@ -177,13 +177,13 @@ def vth_sensor_inference():
     mb.add_hyperlatent('meas_error_var', dists.Normal, {'loc': 30, 'scale': 10}, transform=dists.transforms.SoftplusTransform())
     mb.add_latent('meas_error', nom='zero', dev='meas_error_var', chp=None, lot=None)
 
-    mb.add_dependent('vth_shift_t1', bti_vth_shift_empirical)
+    mb.add_intermediate('vth_shift_t1', bti_vth_shift_empirical)
     #mb.add_dependent('vth_shift_t2', bti_vth_shift_empirical_t2)
     #mb.add_dependent('vth_shift_t3', bti_vth_shift_empirical_t3)
 
     # FIXME: Currently using a fixed measurement variability of 30mV since the latent version is causing NUTS to fail,
     #        determine the cause and evaluate the best path forward
-    mb.add_measured('nbti_vth', dists.Normal, {'loc': 'vth_shift_t1', 'scale': 'meas_var'}, 5)
+    mb.add_observed('nbti_vth', dists.Normal, {'loc': 'vth_shift_t1', 'scale': 'meas_var'}, 5)
     #mb.add_measured('nbti_vth_t2', dists.Normal, {'loc': 'vth_shift_t2', 'scale': 'meas_var'}, 5)
     #mb.add_measured('nbti_vth_t3', dists.Normal, {'loc': 'vth_shift_t3', 'scale': 'meas_var'}, 5)
 

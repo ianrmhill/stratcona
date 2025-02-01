@@ -49,7 +49,7 @@ def test_resampling_v():
     # V resampling procedure
     ##################################
     # TODO: Can I share the n_v samples across n_y samples, resampling done individually for each y?
-    v_init = am.relmdl.sample(k5, am.test, num_samples=(n_x, n_v, n_y), keep_sites=am.relmdl._ltnt_subsamples, conditionals=x_s_tiled)
+    v_init = am.relmdl.sample(k5, am.test, num_samples=(n_x, n_v, n_y), keep_sites=am.relmdl.ltnt_subsamples, conditionals=x_s_tiled)
     v_dev_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_dev' in v}
     v_chp_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_chp' in v}
     lot_ltnts = [ltnt for ltnt in v_init if '_lot' in ltnt]

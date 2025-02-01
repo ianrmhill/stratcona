@@ -24,7 +24,7 @@ from gerabaldi.models import *
 import os
 import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import stratcona
 
@@ -137,8 +137,8 @@ def vth_sensor_inference():
         deg_data[f't{hours}'] = {}
         for sensor in sensor_types:
             vth = h_data.loc[(h_data['param'] == sensor) & (h_data['time'] == t)].drop(columns=['param', 'lot #', 'time'])
-            vth = vth.sort_values(['chip #', 'device #'], ascending=[True, True])
-            vth_array = jnp.array(vth['measured'].values).reshape((vth['chip #'].nunique(), vth['device #'].nunique()))
+            vth = vth.sort_values(['device #', 'chip #'], ascending=[True, True])
+            vth_array = jnp.array(vth['measured'].values).reshape((vth['device #'].nunique(), vth['chip #'].nunique(), 1))
             deg_data[f't{hours}'][sensor] = vth_array * -0.001
 
     ####################################################
@@ -149,7 +149,7 @@ def vth_sensor_inference():
         return 1000 * (a0 * 0.001) * jnp.exp((e_aa * 0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
 
     mb = stratcona.SPMBuilder(mdl_name='bti-empirical')
-    mb.add_params(k=BOLTZ_EV, zero=0.0, meas_var=40)
+    mb.add_params(k=BOLTZ_EV, zero=0.0, meas_var=5)
 
     mb.add_hyperlatent('a0_nom', dists.Normal, {'loc': 5, 'scale': 2})
     mb.add_hyperlatent('e_aa_nom', dists.Normal, {'loc': 6, 'scale': 2})
@@ -158,7 +158,7 @@ def vth_sensor_inference():
 
     var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
     mb.add_hyperlatent('a0_dev', dists.Normal, {'loc': 6, 'scale': 4}, transform=var_tf)
-    mb.add_hyperlatent('e_aa_dev', dists.Normal, {'loc': 4, 'scale': 3}, transform=var_tf)
+    mb.add_hyperlatent('e_aa_dev', dists.Normal, {'loc': 6, 'scale': 3}, transform=var_tf)
     mb.add_hyperlatent('a0_chp', dists.Normal, {'loc': 6, 'scale': 4}, transform=var_tf)
 
     mb.add_latent('a0', nom='a0_nom', dev='a0_dev', chp='a0_chp', lot=None)
@@ -168,7 +168,7 @@ def vth_sensor_inference():
 
     mb.add_intermediate('vth_shift_t1', bti_vth_shift_empirical)
 
-    mb.add_observed('nbti_std_ro', dists.Normal, {'loc': 'vth_shift_t1', 'scale': 'meas_var'}, 5)
+    mb.add_observed('nbti_std_ro', dists.Normal, {'loc': 'vth_shift_t1', 'scale': 'meas_var'}, 4)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
 
@@ -225,7 +225,8 @@ def vth_sensor_inference():
     # Inference the model using the experimental test data
     ####################################################
     start_time = time.time()
-    am.do_inference(deg_data)
+    inf_data = {'t1000': {'nbti_std_ro': deg_data['t1000']['nbti_std_ro']}}
+    am.do_inference(inf_data)
     print(f'Inference time taken: {time.time() - start_time}')
     print(am.relmdl.hyl_beliefs)
 

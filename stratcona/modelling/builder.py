@@ -183,12 +183,12 @@ class SPMBuilder():
 
                 with npyro.plate(f'{exp}_lot', dims[exp]['lot']):
                     for ltnt in [l for l in self.latents if self.latents[l].lot is not None]:
-                        samples[exp]['lot'][ltnt] = npyro.sample(f'{exp}_{ltnt}_lot', TrDist(
+                        samples[exp]['lot'][ltnt] = npyro.sample(f'{exp}_{ltnt}_lot_ls', TrDist(
                             dists.Normal(), AffineTr(0, hyls_and_prms[self.latents[ltnt].lot])))
 
                     with npyro.plate(f'{exp}_chp', dims[exp]['chp']):
                         for ltnt in [l for l in self.latents if self.latents[l].chp is not None]:
-                            samples[exp]['chp'][ltnt] = npyro.sample(f'{exp}_{ltnt}_chp', TrDist(
+                            samples[exp]['chp'][ltnt] = npyro.sample(f'{exp}_{ltnt}_chp_ls', TrDist(
                                 dists.Normal(), AffineTr(0, hyls_and_prms[self.latents[ltnt].chp])))
 
                         # Device level behaves differently since each chip may have multiple types of observed circuits,
@@ -203,7 +203,7 @@ class SPMBuilder():
 
                             with npyro.plate(f'{exp}_{obs}_dev', obs_dev_count):
                                 for ltnt in [l for l in self.latents if self.latents[l].dev is not None]:
-                                    samples[exp]['dev'][obs][ltnt] = npyro.sample(f'{exp}_{obs}_{ltnt}_dev', TrDist(
+                                    samples[exp]['dev'][obs][ltnt] = npyro.sample(f'{exp}_{obs}_{ltnt}_dev_ls', TrDist(
                                         dists.Normal(), AffineTr(0, hyls_and_prms[self.latents[ltnt].dev])))
 
                                 for ltnt in self.latents:
@@ -250,9 +250,9 @@ class SPMBuilder():
         hyl_priors = {hyl: self.hyls[hyl].prms for hyl in self.hyls}
         hyl_info = {hyl: {'dist': self.hyls[hyl].dist, 'fixed': self.hyls[hyl].fixed_prms,
                           'scale': self.hyls[hyl].scale_factor} for hyl in self.hyls}
-        ltnt_subsample_site_names = [f'{ltnt}_dev' for ltnt in self.latents if self.latents[ltnt].dev is not None]
-        ltnt_subsample_site_names.extend([f'{ltnt}_chp' for ltnt in self.latents if self.latents[ltnt].chp is not None])
-        ltnt_subsample_site_names.extend([f'{ltnt}_lot' for ltnt in self.latents if self.latents[ltnt].lot is not None])
+        ltnt_subsample_site_names = [f'{ltnt}_dev_ls' for ltnt in self.latents if self.latents[ltnt].dev is not None]
+        ltnt_subsample_site_names.extend([f'{ltnt}_chp_ls' for ltnt in self.latents if self.latents[ltnt].chp is not None])
+        ltnt_subsample_site_names.extend([f'{ltnt}_lot_ls' for ltnt in self.latents if self.latents[ltnt].lot is not None])
 
         return ReliabilityModel(self.model_name, spm, self.params,
                                 list(self.hyls.keys()), hyl_priors, hyl_info,

@@ -33,7 +33,7 @@ def test_bed_algo_log_weight_computation():
     n_x, n_v, n_y = 3, 4, 1
     x_s = am.relmdl.sample(k2, am.test, (n_x,), keep_sites=['u', 'v'])
     x_s_tiled = {x: jnp.repeat(jnp.expand_dims(x_s[x], 1), n_v, axis=1) for x in x_s}
-    v_s = am.relmdl.sample(k3, am.test, num_samples=(n_x, n_v), keep_sites=am.relmdl._ltnt_subsamples, conditionals=x_s_tiled)
+    v_s = am.relmdl.sample(k3, am.test, num_samples=(n_x, n_v), keep_sites=am.relmdl.ltnt_subsamples, conditionals=x_s_tiled)
 
     # All the dimensions need to be correctly arranged for each element to be handled correctly
     x_s_tiled_2 = {x: jnp.repeat(jnp.expand_dims(x_s_tiled[x], axis=2), n_y, axis=2) for x in x_s_tiled}
@@ -78,7 +78,7 @@ def test_marginalization_over_v_result():
     n_x, n_v, n_y = 3, 4, 1
     x_s = am.relmdl.sample(k4, am.test, (n_x,), keep_sites=['u', 'v1', 'v2', 'v3'])
     x_s_tiled = {x: jnp.repeat(jnp.expand_dims(x_s[x], 1), n_v, axis=1) for x in x_s}
-    v_s = am.relmdl.sample(k5, am.test, num_samples=(n_x, n_v), keep_sites=am.relmdl._ltnt_subsamples, conditionals=x_s_tiled)
+    v_s = am.relmdl.sample(k5, am.test, num_samples=(n_x, n_v), keep_sites=am.relmdl.ltnt_subsamples, conditionals=x_s_tiled)
 
     # All the dimensions need to be correctly arranged for each element to be handled correctly
     x_s_tiled_2 = {x: jnp.repeat(jnp.expand_dims(x_s_tiled[x], axis=2), n_y, axis=2) for x in x_s_tiled}
@@ -90,7 +90,7 @@ def test_marginalization_over_v_result():
     lp_y_g_x = logsumexp(lp_y_g_xv, axis=1, keepdims=True) - jnp.log(n_v)
 
     x_s_tiled_no_v = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_y, axis=1) for x in x_s}
-    v_shape = am.relmdl.sample(k5, am.test, num_samples=(n_x, 1), keep_sites=am.relmdl._ltnt_subsamples)
+    v_shape = am.relmdl.sample(k5, am.test, num_samples=(n_x, 1), keep_sites=am.relmdl.ltnt_subsamples)
     tiled_zeros = {v: jnp.zeros_like(v_shape[v]) for v in v_shape}
     y_s_tiled_no_v = jnp.repeat(jnp.expand_dims(measd, axis=0), n_x, axis=0)
     lp_y_g_x_shortcut = am.relmdl.logp(k1, am.test, site_vals={'t1_y_obs': y_s_tiled_no_v},
@@ -125,7 +125,7 @@ def test_info_gain_computation():
     # Sampling of x and v values
     x_s = am.relmdl.sample(k2, am.test, (n_x,), keep_sites=['u', 'v'])
     x_s_tiled = {x: jnp.repeat(jnp.expand_dims(x_s[x], 1), n_v, axis=1) for x in x_s}
-    v_s = am.relmdl.sample(k3, am.test, num_samples=(n_x, n_v), keep_sites=am.relmdl._ltnt_subsamples, conditionals=x_s_tiled)
+    v_s = am.relmdl.sample(k3, am.test, num_samples=(n_x, n_v), keep_sites=am.relmdl.ltnt_subsamples, conditionals=x_s_tiled)
 
     # All the dimensions need to be correctly arranged for each element to be handled correctly
     x_s_tiled_2 = {x: jnp.repeat(jnp.expand_dims(x_s_tiled[x], axis=2), n_y, axis=2) for x in x_s_tiled}
