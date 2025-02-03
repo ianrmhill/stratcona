@@ -12,7 +12,6 @@ from numpyro.distributions import TransformedDistribution as TrDist
 from numpyro.distributions.transforms import AffineTransform as AffineTr
 
 from stratcona.modelling.relmodel import ReliabilityModel
-from stratcona.assistants.dist_translate import convert_to_categorical
 from stratcona.engine.minimization import minimize
 
 

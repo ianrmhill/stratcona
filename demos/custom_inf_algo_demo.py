@@ -30,7 +30,6 @@ import stratcona
 
 BOLTZ_EV = 8.617e-5
 CELSIUS_TO_KELVIN = 273.15
-ENTROPY_SAMPLES = 100_000
 
 
 def demo_custom_inference():
@@ -50,7 +49,7 @@ def demo_custom_inference():
 
     # Initial parameters are simulating some data to then learn
     mb.add_hyperlatent('a0_nom', dists.Normal, {'loc': 5, 'scale': 0.01})
-    #mb.add_hyperlatent('e_aa_nom', dists.Normal, {'loc': 6, 'scale': 2})
+    mb.add_hyperlatent('e_aa_nom', dists.Normal, {'loc': 6, 'scale': 0.01})
     #mb.add_hyperlatent('alpha_nom', dists.Normal, {'loc': 3.5, 'scale': 0.3})
     #mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 2, 'scale': 0.01})
 
@@ -58,51 +57,59 @@ def demo_custom_inference():
     mb.add_hyperlatent('a0_dev', dists.Normal, {'loc': 6, 'scale': 0.01}, transform=var_tf)
     #mb.add_hyperlatent('n_dev', dists.Normal, {'loc': 2, 'scale': 0.01}, transform=var_tf)
     #mb.add_hyperlatent('e_aa_dev', dists.Normal, {'loc': 4, 'scale': 3}, transform=var_tf)
-    mb.add_hyperlatent('a0_chp', dists.Normal, {'loc': 3, 'scale': 0.01}, transform=var_tf)
+    mb.add_hyperlatent('a0_chp', dists.Normal, {'loc': 2, 'scale': 0.01}, transform=var_tf)
+    mb.add_hyperlatent('a0_lot', dists.Normal, {'loc': 3, 'scale': 0.01}, transform=var_tf)
 
-    mb.add_latent('a0', nom='a0_nom', dev='a0_dev', chp='a0_chp', lot=None)
-    #mb.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_dev', chp=None, lot=None)
+    mb.add_latent('a0', nom='a0_nom', dev='a0_dev', chp='a0_chp', lot='a0_lot')
+    mb.add_latent('e_aa', nom='e_aa_nom', dev=None, chp=None, lot=None)
     #mb.add_latent('alpha', nom='alpha_nom', dev=None, chp=None, lot=None)
     #mb.add_latent('n', nom='n_nom', dev='n_dev', chp=None, lot=None)
 
     mb.add_intermediate('dvth', bti_vth_shift_empirical)
 
-    mb.add_observed('dvth_meas', dists.Normal, {'loc': 'dvth', 'scale': 'meas_var'}, 10)
+    mb.add_observed('dvth_meas', dists.Normal, {'loc': 'dvth', 'scale': 'meas_var'}, 4)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
 
     ####################################################
     # Define the HTOL test that the experimental data was collected from
     ####################################################
-    htol_end_test = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 10}},
-                                              {'e': {'temp': 125 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000}})
+    htol_end_test = stratcona.ReliabilityTest({'e': {'lot': 5, 'chp': 5}, 'f': {'lot': 5, 'chp': 5}},
+                                              {'e': {'temp': 125 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000},
+                                               'f': {'temp': 55 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000}})
     am.set_test_definition(htol_end_test)
 
     ####################################################
     # Generate the simulated wear-out measurement data
     ####################################################
     k, ks = rand.split(rand.key(19272347))
-    y = {'e': {'dvth_meas': am.relmdl.sample(ks, am.test, keep_sites=['e_dvth_meas'])['e_dvth_meas']}}
-    print(f"Sim - mean: {jnp.mean(y['e']['dvth_meas'])}, dev: {jnp.std(y['e']['dvth_meas'])}")
-    print(f"Model truth - a0_nom: 5, a0_dev: 6, a0_chp: 3")
+    sim = am.relmdl.sample(ks, am.test, keep_sites=['e_dvth_meas', 'f_dvth_meas'])
+    y = {'e': {'dvth_meas': sim['e_dvth_meas']}, 'f': {'dvth_meas': sim['f_dvth_meas']}}
+    print(f"Sim e - mean: {jnp.mean(y['e']['dvth_meas'])}, dev: {jnp.std(y['e']['dvth_meas'])}")
+    print(f"Sim f - mean: {jnp.mean(y['f']['dvth_meas'])}, dev: {jnp.std(y['f']['dvth_meas'])}")
+    print(f"Model truth - a0_nom: 5, a0_dev: 6, a0_chp: 2, a0_lot: 3, e_aa: 6")
 
     ####################################################
     # Inference the model using the experimental test data
     ####################################################
     # Set prior beliefs for the model
-    am.relmdl.hyl_beliefs = {'a0_nom': {'loc': 4.0, 'scale': 1.0},
-                             'a0_dev': {'loc': 7, 'scale': 2},
-                             'a0_chp': {'loc': 5, 'scale': 2}}
+    #am.relmdl.hyl_beliefs = {'a0_nom': {'loc': 4.0, 'scale': 1.0},
+    #                         'a0_dev': {'loc': 7, 'scale': 2},
+    #                         'a0_chp': {'loc': 5, 'scale': 2},
+    #                         'a0_lot': {'loc': 5, 'scale': 2},
+    #                         'e_aa_nom': {'loc': 5, 'scale': 2}}
 
-    start_time = time.time()
-    am.do_inference(y)
-    print(f'NUTS inference time: {time.time() - start_time}')
-    print(am.relmdl.hyl_beliefs)
+    #start_time = time.time()
+    #am.do_inference(y)
+    #print(f'NUTS inference time: {time.time() - start_time}')
+    #print(am.relmdl.hyl_beliefs)
 
     # Reset prior beliefs for the model
     am.relmdl.hyl_beliefs = {'a0_nom': {'loc': 4.0, 'scale': 1.0},
                              'a0_dev': {'loc': 7, 'scale': 2},
-                             'a0_chp': {'loc': 5, 'scale': 2}}
+                             'a0_chp': {'loc': 5, 'scale': 2},
+                             'a0_lot': {'loc': 5, 'scale': 2},
+                             'e_aa_nom': {'loc': 5, 'scale': 2}}
 
     start_time = time.time()
     am.do_inference_custom(y)
