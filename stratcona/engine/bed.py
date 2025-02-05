@@ -761,6 +761,8 @@ def est_lp_y_g_x(rng_key, spm, d: ReliabilityTest, x_s, y_s, n_v):
     # Evaluate similarity of v to y
     y_approx_zeros = spm.sample(kdum, d, num_samples=(n_x, n_v, n_y), keep_sites=spm.observes, conditionals=x_s_t | v_dev_zeros | v_chp_zeros | v_lot_zeros)
 
+    lp_v_init = spm.logp(kdum, d, site_vals=v_init, conditional=x_s_t, dims=(n_x, n_v, n_y), sum_lps=False)
+
     ##################################
     # First perform lot-level resampling
     ##################################
@@ -777,12 +779,14 @@ def est_lp_y_g_x(rng_key, spm, d: ReliabilityTest, x_s, y_s, n_v):
             exp_y_s_t = {y: y_s_t[y] for y in y_s_t if f'{exp}_' in y}
 
             v_s_lot_init = {ltnt: v_init[ltnt] for ltnt in exp_lot_ltnts}
+            lp_v_lot = sum([lp_v_init[ltnt] for ltnt in exp_lot_ltnts])
             # Get the log probabilities without summing so each lot can be considered individually
             lp_y_g_xv = spm.logp(kdum, d_exp, site_vals=exp_y_s_t, conditional=x_s_t | v_s_lot_init | v_dev_zeros | v_chp_zeros, dims=(n_x, n_v, n_y), sum_lps=False)
             # Number of devices might be different for each observed variable, so have to sum across devices and chips
             lp_y_g_xv_lot = {y: jnp.sum(lp_y_g_xv[y], axis=(3, 4)) for y in lp_y_g_xv}
             # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
-            lp_y_g_xv_lot_tot = sum(lp_y_g_xv_lot.values())
+            # Subtract the sample probability p(v|x) for each to avoid biasing resamples towards the prior values
+            lp_y_g_xv_lot_tot = sum(lp_y_g_xv_lot.values()) - lp_v_lot
             # Sum of all p_marg array elements must be 1 for resampling via random choice
             resample_probs = lp_y_g_xv_lot_tot - logsumexp(lp_y_g_xv_lot_tot, axis=1, keepdims=True)
             # Resample according to relative likelihood, need to resample indices so that resamples are the same for each lot-level latent variable
@@ -810,12 +814,13 @@ def est_lp_y_g_x(rng_key, spm, d: ReliabilityTest, x_s, y_s, n_v):
             exp_y_s_t = {y: y_s_t[y] for y in y_s_t if f'{exp}_' in y}
 
             v_s_chp_init = {ltnt: v_init[ltnt] for ltnt in exp_chp_ltnts}
+            lp_v_chp = sum([lp_v_init[ltnt] for ltnt in exp_chp_ltnts])
             # Get the log probabilities without summing so each lot can be considered individually
             lp_y_g_xv = spm.logp(kdum, d_exp, site_vals=exp_y_s_t, conditional=x_s_t | v_rs_lot | v_dev_zeros | v_s_chp_init, dims=(n_x, n_v, n_y), sum_lps=False)
             # Number of devices might be different for each observed variable, so have to sum across devices
             lp_y_g_xv_chp = {y: jnp.sum(lp_y_g_xv[y], axis=3) for y in lp_y_g_xv}
             # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
-            lp_y_g_xv_chp_tot = sum(lp_y_g_xv_chp.values())
+            lp_y_g_xv_chp_tot = sum(lp_y_g_xv_chp.values()) - lp_v_chp
             # Sum of all p_marg array elements must be 1 for resampling via random choice
             resample_probs = lp_y_g_xv_chp_tot - logsumexp(lp_y_g_xv_chp_tot, axis=1, keepdims=True)
             # Resample according to relative likelihood, need to resample indices so that resamples are the same for each chip-level latent variable
@@ -850,8 +855,10 @@ def est_lp_y_g_x(rng_key, spm, d: ReliabilityTest, x_s, y_s, n_v):
             resample_inds = {}
             for y in lp_y_g_xv:
                 n_dev = lp_y_g_xv[y].shape[3]
+                lp_v_dev_y = sum([lp_v_init[ltnt] for ltnt in exp_dev_ltnts if y in ltnt])
+                lp_y_g_xv_y = lp_y_g_xv[y] - lp_v_dev_y
                 # Sum of all p_marg array elements must be 1 for resampling via random choice
-                resample_probs = lp_y_g_xv[y] - logsumexp(lp_y_g_xv[y], axis=1, keepdims=True)
+                resample_probs = lp_y_g_xv_y - logsumexp(lp_y_g_xv_y, axis=1, keepdims=True)
                 # Resample according to relative likelihood, need to resample indices so that resamples are the same for each chip-level latent variable
                 inds_array = jnp.repeat(jnp.repeat(jnp.repeat(jnp.repeat(jnp.repeat(jnp.expand_dims(jnp.arange(n_v), (0, 2, 3, 4, 5)), n_x, axis=0), n_y, axis=2), n_dev, axis=3), n_chp, axis=4), n_lot, axis=5)
                 kd, ky = rand.split(kd)

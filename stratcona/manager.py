@@ -8,9 +8,8 @@ from matplotlib import pyplot as plt
 import jax.random as rand
 
 import engine.bed
-from stratcona.engine.inference import inference_model, custom_inference
+from stratcona.engine.inference import inference_model, custom_inference, custom_mhgibbs_resampled_v
 from stratcona.engine.bed import bed_run, run_bed_newest
-from stratcona.engine.metrics import *
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement
 
 
@@ -52,6 +51,13 @@ class AnalysisManager:
         test_info = test if test is not None else self.test
         new_prior = custom_inference(rng, self.relmdl, test_info, observations, n_x, n_v)
         self.relmdl.hyl_beliefs = new_prior
+
+    def do_inference_mhgibbs(self, observations, test: ReliabilityTest = None, num_chains=10, n_v=100, beta=0.5):
+        rng = self._derive_key()
+        test_info = test if test is not None else self.test
+        new_prior, perf_stats = custom_mhgibbs_resampled_v(rng, self.relmdl, test_info, observations, num_chains, n_v, beta)
+        self.relmdl.hyl_beliefs = new_prior
+        print(perf_stats)
 
     def evaluate_reliability(self, predictor, num_samples=300_000, plot_results=False):
         rng = self._derive_key()

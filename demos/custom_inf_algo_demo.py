@@ -45,7 +45,7 @@ def demo_custom_inference():
         return 1000 * (a0 * 0.001) * jnp.exp((e_aa * 0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
 
     mb = stratcona.SPMBuilder(mdl_name='bti-empirical')
-    mb.add_params(k=BOLTZ_EV, zero=0.0, meas_var=2, n_nom=2, e_aa=5, alpha=3.5, n=2)
+    mb.add_params(k=BOLTZ_EV, zero=0.0, meas_var=2, n_nom=2, alpha=3.5, n=2)
 
     # Initial parameters are simulating some data to then learn
     mb.add_hyperlatent('a0_nom', dists.Normal, {'loc': 5, 'scale': 0.01})
@@ -67,7 +67,7 @@ def demo_custom_inference():
 
     mb.add_intermediate('dvth', bti_vth_shift_empirical)
 
-    mb.add_observed('dvth_meas', dists.Normal, {'loc': 'dvth', 'scale': 'meas_var'}, 4)
+    mb.add_observed('dvth_meas', dists.Normal, {'loc': 'dvth', 'scale': 'meas_var'}, 3)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
 
@@ -112,7 +112,82 @@ def demo_custom_inference():
                              'e_aa_nom': {'loc': 5, 'scale': 2}}
 
     start_time = time.time()
-    am.do_inference_custom(y)
+    am.do_inference_mhgibbs(y)
+    print(f'Custom inference time: {time.time() - start_time}')
+    print(am.relmdl.hyl_beliefs)
+
+
+def demo_custom_nom_only():
+    """
+    This demo demos the effectiveness of the custom inference algorithm.
+    """
+
+    ####################################################
+    # Define an NBTI empirical model within the SPM framework for inference
+    ####################################################
+    # Model provided in JEDEC's JEP122H as generally used NBTI degradation model, equation 5.3.1
+    def bti_vth_shift_empirical(a0, e_aa, temp, vdd, alpha, time, k, n):
+        return 1000 * (a0 * 0.001) * jnp.exp((e_aa * 0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
+
+    mb = stratcona.SPMBuilder(mdl_name='bti-empirical')
+    mb.add_params(k=BOLTZ_EV, zero=0.0, meas_var=1, n_nom=2, alpha=3.5, n=2)
+
+    # Initial parameters are simulating some data to then learn
+    mb.add_hyperlatent('a0_nom', dists.Normal, {'loc': 5, 'scale': 0.01})
+    mb.add_hyperlatent('e_aa_nom', dists.Normal, {'loc': 6, 'scale': 0.01})
+    # mb.add_hyperlatent('alpha_nom', dists.Normal, {'loc': 3.5, 'scale': 0.3})
+    # mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 2, 'scale': 0.01})
+
+    mb.add_latent('a0', nom='a0_nom', dev=None, chp=None, lot=None)
+    mb.add_latent('e_aa', nom='e_aa_nom', dev=None, chp=None, lot=None)
+    # mb.add_latent('alpha', nom='alpha_nom', dev=None, chp=None, lot=None)
+    # mb.add_latent('n', nom='n_nom', dev='n_dev', chp=None, lot=None)
+
+    mb.add_intermediate('dvth', bti_vth_shift_empirical)
+
+    mb.add_observed('dvth_meas', dists.Normal, {'loc': 'dvth', 'scale': 'meas_var'}, 5)
+
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
+
+    ####################################################
+    # Define the HTOL test that the experimental data was collected from
+    ####################################################
+    htol_end_test = stratcona.ReliabilityTest({'g': {'lot': 1, 'chp': 1}, 'f': {'lot': 1, 'chp': 1}, 'h': {'lot': 1, 'chp': 1}},
+                                              {'g': {'temp': 125 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000},
+                                               'f': {'temp': 55 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000},
+                                               'h': {'temp': 165 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000}})
+    am.set_test_definition(htol_end_test)
+
+    ####################################################
+    # Generate the simulated wear-out measurement data
+    ####################################################
+    k, ks = rand.split(rand.key(19272347))
+    sim = am.relmdl.sample(ks, am.test, keep_sites=['g_dvth_meas', 'f_dvth_meas', 'h_dvth_meas'])
+    y = {'g': {'dvth_meas': sim['g_dvth_meas']}, 'f': {'dvth_meas': sim['f_dvth_meas']}, 'h': {'dvth_meas': sim['h_dvth_meas']}}
+    print(f"Sim g - mean: {jnp.mean(y['g']['dvth_meas'])}, dev: {jnp.std(y['g']['dvth_meas'])}")
+    print(f"Sim f - mean: {jnp.mean(y['f']['dvth_meas'])}, dev: {jnp.std(y['f']['dvth_meas'])}")
+    print(f"Sim h - mean: {jnp.mean(y['h']['dvth_meas'])}, dev: {jnp.std(y['h']['dvth_meas'])}")
+    print(f"Model truth - a0_nom: 5, e_aa: 6")
+
+    ####################################################
+    # Inference the model using the experimental test data
+    ####################################################
+    # Set prior beliefs for the model
+    #am.relmdl.hyl_beliefs = {'a0_nom': {'loc': 4.0, 'scale': 1.0},
+    #                         'e_aa_nom': {'loc': 5, 'scale': 2}}
+
+    #start_time = time.time()
+    #am.do_inference(y)
+    #print(f'NUTS inference time: {time.time() - start_time}')
+    #print(am.relmdl.hyl_beliefs)
+
+    # Reset prior beliefs for the model
+    am.relmdl.hyl_beliefs = {'a0_nom': {'loc': 4.0, 'scale': 1.0},
+                             'e_aa_nom': {'loc': 5, 'scale': 2}}
+
+    start_time = time.time()
+    #am.do_inference_mhgibbs(y, num_chains=4, beta=0.1)
+    am.do_inference_custom(y, n_x=10_000)
     print(f'Custom inference time: {time.time() - start_time}')
     print(am.relmdl.hyl_beliefs)
 
