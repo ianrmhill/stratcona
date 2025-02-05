@@ -17,97 +17,68 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import stratcona
-
-
-@dataclass(frozen=True)
-class ExpDims:
-    name: str
-    lot: int
-    chp: int
-
-    def __init__(self, name, lot, chp):
-        object.__setattr__(self, 'name', name)
-        object.__setattr__(self, 'lot', lot)
-        object.__setattr__(self, 'chp', chp)
-
-    def __members(self):
-        return self.name, self.lot, self.chp
-
-    def __hash__(self):
-        return hash(self.__members())
-
-    def __eq__(self, other):
-        return type(self) == type(other) and self.__members() == other.__members()
-
-
-@dataclass(frozen=True)
-class TestDims():
-    name: str
-    exps: tuple[ExpDims, ...]
-
-    def __init__(self, name, config):
-        object.__setattr__(self, 'name', name)
-        object.__setattr__(self, 'exps', tuple([ExpDims(name=exp, **config[exp]) for exp in config]))
-
-    def __members(self):
-        return self.name, *self.exps
-
-    def __hash__(self):
-        return hash(self.__members)
-
-    def __eq__(self, other):
-        return type(self) == type(other) and self.__members() == other.__members()
-
-
-def classes():
-    e1 = ExpDims('f', 2, 2)
-    e2 = ExpDims('g', 3, 2)
-    e3 = ExpDims('g', 3, 2)
-    print(e1 == e2)
-    print(e2 == e3)
-    t1 = TestDims('mytest', {'f': {'lot': 2, 'chp': 2}, 'g': {'lot': 3, 'chp': 2}})
-    t3 = TestDims('mytest', {'g': {'lot': 3, 'chp': 2}, 'f': {'lot': 2, 'chp': 2}})
-    t2 = TestDims('2test', {'f': {'lot': 2, 'chp': 2}})
-    print(hash(t1))
-    print(hash(t3))
-    print(t1 == t2)
-    print(t1 == t1)
+from stratcona.modelling.relmodel import TestDef, ExpDims
 
 
 def main():
     key = rand.key(363)
     k1, k2 = rand.split(key)
 
-    tf = dists.transforms.SoftplusTransform()
+    ####################################################
+    # Define an NBTI empirical model within the SPM framework for inference
+    ####################################################
+    # Model provided in JEDEC's JEP122H as generally used NBTI degradation model, equation 5.3.1
+    def bti_vth_shift_empirical(a0, e_aa, temp, vdd, alpha, time, k, n):
+        return 1000 * (a0 * 0.001) * jnp.exp((e_aa * 0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
 
-    def basic_model(dims, priors, conds):
-        a = npyro.sample('a', dists.Normal(**priors['a']))
-        b = npyro.sample('b', dists.TransformedDistribution(dists.Normal(**priors['b']), tf))
-        for exp in dims.exps:
-            with npyro.plate('chp', exp.chp):
-                pre_y = npyro.deterministic('pre_y', a * conds[exp.name]['temp'])
-                npyro.sample('y', dists.Normal(pre_y, b))
+    mb = stratcona.SPMBuilder(mdl_name='bti-empirical')
+    mb.add_params(k=8.617e-5, zero=0.0, meas_var=2, n_nom=2, alpha=3.5, n=2)
 
-    def basic_sample(k, dims, priors, conds):
-        return trace(seed(basic_model, k)).get_trace(dims, priors, conds)['y']['value']
+    # Initial parameters are simulating some data to then learn
+    mb.add_hyperlatent('a0_nom', dists.Normal, {'loc': 5, 'scale': 0.01})
+    mb.add_hyperlatent('e_aa_nom', dists.Normal, {'loc': 6, 'scale': 0.01})
 
-    dims = TestDims('t1', {'e': {'lot': 1, 'chp': 50}})
-    pri = {'a': {'loc': 1, 'scale': 0.5}, 'b': {'loc': 0.5, 'scale': 0.2}}
-    c = {'e': {'temp': 3}}
-    to_time = partial(basic_sample, k1, dims, pri, c)
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('a0_dev', dists.Normal, {'loc': 6, 'scale': 0.01}, transform=var_tf)
+    mb.add_hyperlatent('a0_chp', dists.Normal, {'loc': 2, 'scale': 0.01}, transform=var_tf)
+    mb.add_hyperlatent('a0_lot', dists.Normal, {'loc': 3, 'scale': 0.01}, transform=var_tf)
+
+    mb.add_latent('a0', nom='a0_nom', dev='a0_dev', chp='a0_chp', lot='a0_lot')
+    mb.add_latent('e_aa', nom='e_aa_nom', dev=None, chp=None, lot=None)
+
+    mb.add_intermediate('dvth', bti_vth_shift_empirical)
+
+    mb.add_observed('dvth_meas', dists.Normal, {'loc': 'dvth', 'scale': 'meas_var'}, 3)
+
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
+    basic_model = am.relmdl.spm
+
+    def basic_sample(k, dims, priors, conds, prms):
+        return trace(seed(basic_model, k)).get_trace(dims, conds, priors, prms)['e_dvth_meas']['value']
+
+    pri = {'a0_nom': {'loc': 4.0, 'scale': 1.0},
+           'a0_dev': {'loc': 7, 'scale': 2},
+           'a0_chp': {'loc': 5, 'scale': 2},
+           'a0_lot': {'loc': 5, 'scale': 2},
+           'e_aa_nom': {'loc': 5, 'scale': 2}}
+
+    d = TestDef('t1', {'e': {'lot': 4, 'chp': 2}}, {'e': {'temp': 55 + 273.15, 'vdd': 0.88, 'time': 1000}})
+    prms = am.relmdl.param_vals
+
+    to_time = partial(basic_sample, k1, d.dims, pri, d.conds, prms)
     best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
     print(f'Best unjitted: {best_perf}')
 
     # Now jit compile it
     j_sample = jax.jit(basic_sample, static_argnames='dims')
     # Run it once with the correct static args to compile before timing
-    j_sample(k1, dims, pri, c)
-    d2 = TestDims('t2', {'e': {'lot': 1, 'chp': 5}})
-    print(j_sample(k1, d2, pri, c))
+    print(j_sample(k1, d.dims, pri, d.conds, prms))
 
-    to_time = partial(j_sample, k1, dims, pri, c)
+    to_time = partial(j_sample, k1, d.dims, pri, d.conds, prms)
     best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
     print(f'Best jitted: {best_perf}')
+
+
 
 
 if __name__ == '__main__':

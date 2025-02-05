@@ -1,13 +1,15 @@
-# Copyright (c) 2024 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
-
-from typing import Callable
 
 import jax
 import jax.numpy as jnp
 import jax.random as rand
 
 from numpyro.handlers import seed, trace, condition
+
+from typing import Callable
+from dataclasses import dataclass
+from frozendict import frozendict
 
 
 class ReliabilityRequirement():
@@ -19,6 +21,46 @@ class ReliabilityRequirement():
         self.type = metric
         self.quantile = quantile
         self.target_lifespan = target_lifespan
+
+
+@dataclass(frozen=True)
+class ExpDims:
+    name: str
+    lot: int
+    chp: int
+    dev: frozendict[str: int]
+
+    def __init__(self, name, lot, chp, **dev):
+        object.__setattr__(self, 'name', name)
+        object.__setattr__(self, 'lot', lot)
+        object.__setattr__(self, 'chp', chp)
+        object.__setattr__(self, 'dev', frozendict({y: dev[y] for y in dev}))
+
+    def __members(self):
+        return self.name, self.lot, self.chp, self.dev
+
+    def __hash__(self):
+        return hash(self.__members())
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.__members() == other.__members()
+
+
+class TestDef:
+    name: str
+    dims: frozenset[ExpDims]
+    conditions: dict[str: dict[str: float | int]]
+
+    def __init__(self, name: str, dims: dict[str: dict[str: int]], conditions: dict[str: dict[str: float | int]]):
+        self.name = name
+        self.dims = frozenset({ExpDims(e, **dims[e]) for e in dims})
+        self.conds = conditions
+
+    def __members(self):
+        return self.name, self.dims, self.conds
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.__members() == other.__members()
 
 
 class ReliabilityTest():
