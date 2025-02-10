@@ -253,7 +253,7 @@ class SPMBuilder():
                                 args = {arg: val for arg, val in {**observes[e], **conds[e], **hyls_and_prms}.items() if arg in self.fail_criteria[criterion].requires}
                                 fail_criteria[e][criterion] = npyro.deterministic(f'{e}_{criterion}', self.fail_criteria[criterion].compute(**args))
 
-        # Assemble the contextual information for the model needed to work with the defined SPMs
+        # Assemble the contextual information for the model needed to work with the defined SPM
         hyl_priors = {hyl: self.hyls[hyl].prms for hyl in self.hyls}
         hyl_info = {hyl: {'dist': self.hyls[hyl].dist, 'fixed': self.hyls[hyl].fixed_prms,
                           'transform': self.hyls[hyl].tf, 'transform_inv': self.hyls[hyl].tf_inv} for hyl in self.hyls}

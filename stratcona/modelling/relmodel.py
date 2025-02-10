@@ -10,6 +10,7 @@ from numpyro.handlers import seed, trace, condition
 from typing import Callable
 from dataclasses import dataclass
 from frozendict import frozendict
+from functools import partial
 
 
 class ReliabilityRequirement():
@@ -119,10 +120,10 @@ class ReliabilityModel():
             sites = []
             for i, site in enumerate(keep_sites):
                 if site in self.observes or site in self.predictors:
-                    for tst in test.config:
+                    for tst in test.dims:
                         sites.append(f'{tst}_{site}')
                 elif site in self.ltnts or site in self.ltnt_subsamples:
-                    for tst in test.config:
+                    for tst in test.dims:
                         if '_dev' in site:
                             for obs in self.observes:
                                 sites.append(f'{tst}_{obs}_{site}')
@@ -138,7 +139,7 @@ class ReliabilityModel():
         def sampler(rng, set_vals):
             mdl = self.spm if set_vals is None else condition(self.spm, data=set_vals)
             seeded = seed(mdl, rng)
-            tr = trace(seeded).get_trace(test.config, test.conditions, priors, self.param_vals)
+            tr = trace(seeded).get_trace(test.dims, test.conds, priors, self.param_vals)
             samples = {site: tr[site] if full_trace else tr[site]['value'] for site in tr}
             return dict((k, samples[k]) for k in sites) if sites is not None else samples
 
@@ -172,4 +173,71 @@ class ReliabilityModel():
             wrapped = jax.vmap(wrapped, 0, 0)
 
         keys = jnp.reshape(rand.split(rng_key, size), dims)
+        return wrapped(keys, site_vals, conditional)
+
+    @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'keep_sites'])
+    def sample_new(self, rng_key: rand.key, test_dims: frozenset[ExpDims], test_conds: dict, batch_dims: tuple = (),
+                   keep_sites: tuple = None, conditionals: dict = None, full_trace=False):
+        # Convert any keep_sites that need more complex node names
+        if keep_sites is not None:
+            sites = []
+            for i, site in enumerate(keep_sites):
+                if site in self.observes or site in self.predictors:
+                    for tst in test_dims:
+                        sites.append(f'{tst}_{site}')
+                elif site in self.ltnts or site in self.ltnt_subsamples:
+                    for tst in test_dims:
+                        if '_dev' in site:
+                            for obs in self.observes:
+                                sites.append(f'{tst}_{obs}_{site}')
+                        else:
+                            sites.append(f'{tst}_{site}')
+                else:
+                    sites.append(site)
+        else:
+            sites = None
+
+        priors = self.hyl_beliefs
+
+        def sampler(rng, set_vals):
+            mdl = self.spm if set_vals is None else condition(self.spm, data=set_vals)
+            seeded = seed(mdl, rng)
+            tr = trace(seeded).get_trace(test_dims, test_conds, priors, self.param_vals)
+            samples = {site: tr[site] if full_trace else tr[site]['value'] for site in tr}
+            return dict((k, samples[k]) for k in sites) if sites is not None else samples
+
+        wrapped = sampler
+        size = 1
+        for i, dim in enumerate(batch_dims):
+            size *= dim
+            wrapped = jax.vmap(wrapped, 0, 0)
+        keys = jnp.reshape(rand.split(rng_key, size), batch_dims)
+
+        return wrapped(keys, conditionals)
+
+    # Note that jax jit implicitly handles the dict arguments, each unique set of keys for a dict arg leads to a
+    # recompilation, so in reality almost all args are at least partially static
+    @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'sum_lps'])
+    def logp_new(self, rng_key: rand.key, test_dims: frozenset[ExpDims], test_conds: dict, site_vals: dict,
+                 conditional: dict | None, batch_dims: tuple = (), sum_lps=True):
+
+        def get_log_prob(rng, vals, cond):
+            mdl = self.spm if cond is None else condition(self.spm, data=cond)
+            seeded = seed(mdl, rng)
+            tr = trace(seeded).get_trace(test_dims, test_conds, self.hyl_beliefs, self.param_vals)
+            lp = 0 if sum_lps else {}
+            for site in vals:
+                if sum_lps:
+                    lp += jnp.sum(tr[site]['fn'].log_prob(vals[site]))
+                else:
+                    lp[site] = tr[site]['fn'].log_prob(vals[site])
+            return lp
+
+        wrapped = get_log_prob
+        size = 1
+        for dim in batch_dims:
+            size *= dim
+            wrapped = jax.vmap(wrapped, 0, 0)
+
+        keys = jnp.reshape(rand.split(rng_key, size), batch_dims)
         return wrapped(keys, site_vals, conditional)

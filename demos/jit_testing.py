@@ -10,6 +10,7 @@ import jax
 from dataclasses import dataclass
 from functools import partial
 import timeit
+import time
 
 import os
 import sys
@@ -18,6 +19,33 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import stratcona
 from stratcona.modelling.relmodel import TestDef, ExpDims
+
+
+def jit_behaviour():
+
+    class MyClass:
+        def __init__(self, y):
+            self.y = y
+
+        def buildfunc(self):
+            def mf(x, vals, alt=False):
+                z = 0
+                for val in vals:
+                    z += vals[val]
+                return (x * self.y + z) if not alt else (x * self.y**2 + z)
+            return mf
+
+    c1 = MyClass(4)
+    f = c1.buildfunc()
+    mfj = jax.jit(f, static_argnames='alt')
+    time.sleep(2)
+    print(f"First call: {mfj(2, {})}")
+    time.sleep(2)
+    print(f"Second call: {mfj(2, {'a': 3, 'b': 2})}")
+    time.sleep(2)
+    print(f"Third call: {mfj(2, {'a': 1})}")
+    time.sleep(2)
+    print(f"Fourth call: {mfj(2, {'a': 5})}")
 
 
 def main():
@@ -51,34 +79,32 @@ def main():
     mb.add_observed('dvth_meas', dists.Normal, {'loc': 'dvth', 'scale': 'meas_var'}, 3)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
-    basic_model = am.relmdl.spm
-
-    def basic_sample(k, dims, priors, conds, prms):
-        return trace(seed(basic_model, k)).get_trace(dims, conds, priors, prms)['e_dvth_meas']['value']
 
     pri = {'a0_nom': {'loc': 4.0, 'scale': 1.0},
            'a0_dev': {'loc': 7, 'scale': 2},
            'a0_chp': {'loc': 5, 'scale': 2},
            'a0_lot': {'loc': 5, 'scale': 2},
            'e_aa_nom': {'loc': 5, 'scale': 2}}
-
     d = TestDef('t1', {'e': {'lot': 4, 'chp': 2}}, {'e': {'temp': 55 + 273.15, 'vdd': 0.88, 'time': 1000}})
-    prms = am.relmdl.param_vals
 
-    to_time = partial(basic_sample, k1, d.dims, pri, d.conds, prms)
+    am.relmdl.hyl_beliefs = pri
+    lp_f = am.relmdl.logp_new
+    s_f = am.relmdl.sample_new
+    print(lp_f(k1, d.dims, d.conds, {'a0_nom': jnp.array(3.5)}, None))
+    print(lp_f(k1, d.dims, d.conds, {'a0_dev': jnp.array(0.65)}, None))
+    print(lp_f(k1, d.dims, d.conds, {'a0_dev': jnp.array(0.75)}, None))
+
+    print(s_f(k1, d.dims, d.conds, (10,), ('a0_nom', 'a0_dev')))
+    print(s_f(k1, d.dims, d.conds, (10,), ('a0_nom', 'a0_dev')))
+
+
+    to_time = partial(am.relmdl.sample, k1, d, (10,), ['a0_nom', 'a0_dev'])
     best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
-    print(f'Best unjitted: {best_perf}')
+    print(f'Unjitted: {best_perf}s')
 
-    # Now jit compile it
-    j_sample = jax.jit(basic_sample, static_argnames='dims')
-    # Run it once with the correct static args to compile before timing
-    print(j_sample(k1, d.dims, pri, d.conds, prms))
-
-    to_time = partial(j_sample, k1, d.dims, pri, d.conds, prms)
+    to_time = partial(s_f, k1, d.dims, d.conds, (10,), ('a0_nom', 'a0_dev'))
     best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
-    print(f'Best jitted: {best_perf}')
-
-
+    print(f'Jitted: {best_perf}s')
 
 
 if __name__ == '__main__':
