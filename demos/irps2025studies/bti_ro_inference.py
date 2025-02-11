@@ -17,6 +17,7 @@ from io import StringIO
 
 import seaborn as sb
 from matplotlib import pyplot as plt
+import matplotlib.lines as pltlines
 
 import gerabaldi
 from gerabaldi.models import *
@@ -115,7 +116,7 @@ def vth_sensor_inference():
     ####################################################
     # First load in and process the experimental data used for inference. TODO: Only save the processed data in the repo
     ####################################################
-    h_data = load_gerabaldi_report('C:/Users/Ian Hill/PycharmProjects/hill-scripts/data_files/idfbcamp_htol_lt_meas.json')
+    h_data = load_gerabaldi_report('C:/Users/IanHi/OneDrive/Research/Test Data/IDFBCAMP/1500HourTest/idfbcamp_htol_lt_meas.json')
     h_data = h_data['Measurements']
     # Remove the measurement time that was only conducted for one of the lots
     h_data.drop(h_data[h_data['time'] == 3034800].index, inplace=True)
@@ -321,11 +322,18 @@ def vth_sensor_inference():
         p.plot(times[i], pst_fits[i].flatten(), alpha=float(pst_probs[i]), color='darkblue', label=lbl)
 
     # Add the measured data that was used for inference
-    measd_vals = deg_data['t1000']['nbti_std_ro'].flatten()
-    p.plot(jnp.full((len(measd_vals),), 1000), measd_vals, color='darkorange', linestyle='', marker='.', markersize=8,
-           label='Observed degradation')
+    colours = ['darkorange', 'sienna', 'gold', 'firebrick']
+    for chp, clr in enumerate(colours):
+        measd_vals = deg_data['t1000']['nbti_std_ro'][chp]
+        p.plot(jnp.full((len(measd_vals),), 1000), measd_vals, color=clr, linestyle='', marker='.',
+               markersize=8, label=None)
 
-    leg = p.legend(loc='upper right')
+    hndl, lbls = p.get_legend_handles_labels()
+    lgnd2 = pltlines.Line2D([0], [0], color='black', linestyle='', marker='.')
+    hndl.insert(0, lgnd2)
+    lbls.insert(0, 'Simulated data, coloured by chip')
+
+    leg = p.legend(hndl, lbls, loc='lower right')
     for lbl in leg.legend_handles:
         lbl.set_alpha(1)
     p.set_xlim(0, 1100)
