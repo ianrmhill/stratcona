@@ -4,6 +4,7 @@
 import inspect
 from graphlib import TopologicalSorter
 from typing import Self
+from copy import deepcopy
 
 import jax.numpy as jnp
 import numpyro as npyro
@@ -11,16 +12,20 @@ import numpyro.distributions as dists
 from numpyro.distributions import TransformedDistribution as TrDist
 from numpyro.distributions.transforms import AffineTransform as AffineTr
 
-from stratcona.modelling.relmodel import ReliabilityModel
-from stratcona.assistants.dist_translate import convert_to_categorical
+from stratcona.modelling.relmodel import ReliabilityModel, ExpDims
 from stratcona.engine.minimization import minimize
+
+
+def unity(x): return x
 
 
 class _HyperLatent():
     def __init__(self, name, distribution, prior_params, transform=None, fixed_prms=None, scaling=1.0):
         self.dist = distribution
         self.is_continuous = self.is_continuous()
-        self.dist_transform = transform
+        # Determine the scaling factor applied to the variable, if any
+        self.tf = transform if transform is not None else unity
+        self.tf_inv = transform._inverse if transform is not None else unity
         self.prms = prior_params
         self.fixed_prms = fixed_prms
         self.site_name = name
@@ -39,6 +44,9 @@ class _HyperLatent():
         filtered = lambda o: True if inspect.isclass(o) and issubclass(o, dists.Distribution) else False
         continuous_dists = [d[1] for d in inspect.getmembers(dists.continuous, filtered)]
         return True if self.dist in continuous_dists else False
+
+    def __copy__(self):
+        return _HyperLatent(self.site_name, self.dist.copy(), self.prms, self.tf.copy(), self.fixed_prms, self.scale_factor)
 
 
 class _Latent():
@@ -101,10 +109,7 @@ class SPMBuilder():
             self.params[prm] = params[prm]
 
     def add_hyperlatent(self, name, distribution, prior, transform=None, fixed_prms=None):
-        # Determine the scaling factor applied to the variable, if any
-        def unity(x): return x
-        scaling = unity if transform is None else transform._inverse
-        self.hyls[name] = _HyperLatent(name, distribution, prior, transform, fixed_prms, scaling)
+        self.hyls[name] = _HyperLatent(name, distribution, prior, transform, fixed_prms)
 
     def add_latent(self, name, nom, dev, chp=None, lot=None):
         self.latents[name] = _Latent(name, nom, dev, chp, lot)
@@ -167,95 +172,97 @@ class SPMBuilder():
             obs_info.deps_sorted = list(TopologicalSorter(obs_info.dep_graph).static_order())
 
         # Construct the probabilistic function that defines the physical model
-        def spm(dims, conds, priors, params, measured=None, compute_predictors=True):
+        def spm(dims: frozenset[ExpDims], conds, priors, params, measured=None, compute_predictors=True):
             hyls_and_prms, samples, ltnts, meds, observes, fail_criteria = params.copy(), {}, {}, {}, {}, {}
             # First define the hyper-latents that we wish to reduce the entropy of
             for name, hyl in self.hyls.items():
-                if hyl.dist_transform is None:
+                if hyl.tf is unity:
                     hyls_and_prms[name] = npyro.sample(name, hyl.dist(**priors[name]))
                 else:
-                    hyls_and_prms[name] = npyro.sample(name, TrDist(hyl.dist(**priors[name]), hyl.dist_transform))
+                    hyls_and_prms[name] = npyro.sample(name, TrDist(hyl.dist(**priors[name]), hyl.tf))
 
             # Experimental variables are constructed independently for each experiment to ensure that each experiment
             # within a test is statistically independent
             for exp in dims:
-                samples[exp], ltnts[exp], meds[exp], observes[exp], fail_criteria[exp] = {'lot': {}, 'chp': {}, 'dev': {}}, {}, {}, {}, {}
+                e = exp.name
+                samples[e], ltnts[e], meds[e], observes[e], fail_criteria[e] = {'lot': {}, 'chp': {}, 'dev': {}}, {}, {}, {}, {}
 
-                with npyro.plate(f'{exp}_lot', dims[exp]['lot']):
+                with npyro.plate(f'{e}_lot', exp.lot):
                     for ltnt in [l for l in self.latents if self.latents[l].lot is not None]:
-                        samples[exp]['lot'][ltnt] = npyro.sample(f'{exp}_{ltnt}_lot', TrDist(
+                        samples[e]['lot'][ltnt] = npyro.sample(f'{e}_{ltnt}_lot_ls', TrDist(
                             dists.Normal(), AffineTr(0, hyls_and_prms[self.latents[ltnt].lot])))
 
-                    with npyro.plate(f'{exp}_chp', dims[exp]['chp']):
+                    with npyro.plate(f'{e}_chp', exp.chp):
                         for ltnt in [l for l in self.latents if self.latents[l].chp is not None]:
-                            samples[exp]['chp'][ltnt] = npyro.sample(f'{exp}_{ltnt}_chp', TrDist(
+                            samples[e]['chp'][ltnt] = npyro.sample(f'{e}_{ltnt}_chp_ls', TrDist(
                                 dists.Normal(), AffineTr(0, hyls_and_prms[self.latents[ltnt].chp])))
 
                         # Device level behaves differently since each chip may have multiple types of observed circuits,
                         # so this final layer has to have separate configuration per measurement type that is involved
                         obs_vars = self.observes | self.predictors if compute_predictors else self.observes
                         for obs in obs_vars:
-                            samples[exp]['dev'][obs], ltnts[exp][obs], meds[exp][obs] = {}, {}, {}
+                            samples[e]['dev'][obs], ltnts[e][obs], meds[e][obs] = {}, {}, {}
                             obs_info = self.observes[obs] if obs in self.observes else self.predictors[obs]
                             # Allow for experiment definitions to override the number of devices observed. In general
                             # this is not used but allows for comparisons of experiments with varied observable counts
-                            obs_dev_count = dims[exp][obs] if obs in dims[exp] else self.observable_counts[obs]
+                            obs_dev_count = exp.dev[obs] if obs in exp.dev else self.observable_counts[obs]
 
-                            with npyro.plate(f'{exp}_{obs}_dev', obs_dev_count):
+                            with npyro.plate(f'{e}_{obs}_dev', obs_dev_count):
                                 for ltnt in [l for l in self.latents if self.latents[l].dev is not None]:
-                                    samples[exp]['dev'][obs][ltnt] = npyro.sample(f'{exp}_{obs}_{ltnt}_dev', TrDist(
+                                    samples[e]['dev'][obs][ltnt] = npyro.sample(f'{e}_{obs}_{ltnt}_dev_ls', TrDist(
                                         dists.Normal(), AffineTr(0, hyls_and_prms[self.latents[ltnt].dev])))
 
                                 for ltnt in self.latents:
                                     # Merge all the multilevel variations to form the final sample values for the latent
                                     nom = hyls_and_prms[self.latents[ltnt].nom]
-                                    dev = samples[exp]['dev'][obs][ltnt] if self.latents[ltnt].dev else 0
-                                    chp = samples[exp]['chp'][ltnt] if self.latents[ltnt].chp else 0
-                                    lot = samples[exp]['lot'][ltnt] if self.latents[ltnt].lot else 0
-                                    ltnts[exp][obs][ltnt] = npyro.deterministic(f'{exp}_{obs}_{ltnt}',
+                                    dev = samples[e]['dev'][obs][ltnt] if self.latents[ltnt].dev else 0
+                                    chp = samples[e]['chp'][ltnt] if self.latents[ltnt].chp else 0
+                                    lot = samples[e]['lot'][ltnt] if self.latents[ltnt].lot else 0
+                                    ltnts[e][obs][ltnt] = npyro.deterministic(f'{e}_{obs}_{ltnt}',
                                                                                 nom + dev + chp + lot)
 
                                 # Compute intermediate variables; only provide the necessary inputs to each function
                                 for med in [n for n in obs_info.deps_sorted if n in self.intermediates]:
-                                    args = {arg: val for arg, val in {**ltnts[exp][obs], **meds[exp][obs], **conds[exp], **hyls_and_prms}.items() if arg in self.intermediates[med].requires}
+                                    args = {arg: val for arg, val in {**ltnts[e][obs], **meds[e][obs], **conds[e], **hyls_and_prms}.items() if arg in self.intermediates[med].requires}
                                     try:
                                         if type(self.intermediates[med]) is _CStochastic:
                                             dist_args = {arg: args[val] for arg, val in obs_info.prms.items()}
-                                            meds[exp][obs][med] = npyro.sample(f'{exp}_{obs}_{med}', self.intermediates[med].dist(**dist_args))
+                                            meds[e][obs][med] = npyro.sample(f'{e}_{obs}_{med}', self.intermediates[med].dist(**dist_args))
                                         else:
-                                            meds[exp][obs][med] = npyro.deterministic(f'{exp}_{obs}_{med}', self.intermediates[med].compute(**args))
+                                            meds[e][obs][med] = npyro.deterministic(f'{e}_{obs}_{med}', self.intermediates[med].compute(**args))
                                     except KeyError as e:
                                         if e.args[0] == 'fn':
                                             raise Exception(f'Intermediate variable {med} compute function does not return!')
                                         raise e
 
                                 # Next, define the observed or predictor variable measured in the experiment
-                                args = {arg: val for arg, val in {**ltnts[exp][obs], **meds[exp][obs], **conds[exp], **hyls_and_prms}.items() if arg in obs_info.requires}
-                                measd = measured[exp][obs] if measured is not None else None
+                                args = {arg: val for arg, val in {**ltnts[e][obs], **meds[e][obs], **conds[e], **hyls_and_prms}.items() if arg in obs_info.requires}
+                                measd = measured[e][obs] if measured is not None else None
                                 if type(obs_info) is _CStochastic:
                                     dist_args = {arg: args[val] for arg, val in obs_info.prms.items()}
-                                    observes[exp][obs] = npyro.sample(f'{exp}_{obs}', obs_info.dist(**dist_args), obs=measd)
+                                    observes[e][obs] = npyro.sample(f'{e}_{obs}', obs_info.dist(**dist_args), obs=measd)
+                                    #observes[e][obs] = npyro.sample(f'{e}_{obs}', obs_info.dist(**dist_args))
                                 else:
-                                    observes[exp][obs] = npyro.deterministic(f'{exp}_{obs}', obs_info.compute(**args))
+                                    observes[e][obs] = npyro.deterministic(f'{e}_{obs}', obs_info.compute(**args))
 
                         # Special predictor variables that reduce observed values down to a single yes/no failure status
                         # per chip, cannot take intermediate variables as inputs since those are sampled independently
                         # per observed variable
                         if compute_predictors:
                             for criterion in self.fail_criteria:
-                                args = {arg: val for arg, val in {**observes[exp], **conds[exp], **hyls_and_prms}.items() if arg in self.fail_criteria[criterion].requires}
-                                fail_criteria[exp][criterion] = npyro.deterministic(f'{exp}_{criterion}', self.fail_criteria[criterion].compute(**args))
+                                args = {arg: val for arg, val in {**observes[e], **conds[e], **hyls_and_prms}.items() if arg in self.fail_criteria[criterion].requires}
+                                fail_criteria[e][criterion] = npyro.deterministic(f'{e}_{criterion}', self.fail_criteria[criterion].compute(**args))
 
-        # Assemble the contextual information for the model needed to work with the defined SPMs
+        # Assemble the contextual information for the model needed to work with the defined SPM
         hyl_priors = {hyl: self.hyls[hyl].prms for hyl in self.hyls}
         hyl_info = {hyl: {'dist': self.hyls[hyl].dist, 'fixed': self.hyls[hyl].fixed_prms,
-                          'scale': self.hyls[hyl].scale_factor} for hyl in self.hyls}
-        ltnt_subsample_site_names = [f'{ltnt}_dev' for ltnt in self.latents if self.latents[ltnt].dev is not None]
-        ltnt_subsample_site_names.extend([f'{ltnt}_chp' for ltnt in self.latents if self.latents[ltnt].chp is not None])
-        ltnt_subsample_site_names.extend([f'{ltnt}_lot' for ltnt in self.latents if self.latents[ltnt].lot is not None])
+                          'transform': self.hyls[hyl].tf, 'transform_inv': self.hyls[hyl].tf_inv} for hyl in self.hyls}
+        ltnt_subsample_site_names = [f'{ltnt}_dev_ls' for ltnt in self.latents if self.latents[ltnt].dev is not None]
+        ltnt_subsample_site_names.extend([f'{ltnt}_chp_ls' for ltnt in self.latents if self.latents[ltnt].chp is not None])
+        ltnt_subsample_site_names.extend([f'{ltnt}_lot_ls' for ltnt in self.latents if self.latents[ltnt].lot is not None])
 
         return ReliabilityModel(self.model_name, spm, self.params,
-                                list(self.hyls.keys()), hyl_priors, hyl_info,
-                                list(self.latents.keys()), ltnt_subsample_site_names,
-                                list(self.observes.keys()), self.observable_counts,
-                                list(self.predictors.keys()), list(self.fail_criteria.keys()))
+                                tuple(self.hyls.keys()), hyl_priors, hyl_info,
+                                tuple(self.latents.keys()), tuple(ltnt_subsample_site_names),
+                                tuple(self.observes.keys()), self.observable_counts,
+                                tuple(self.predictors.keys()), tuple(self.fail_criteria.keys()))

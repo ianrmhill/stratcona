@@ -25,7 +25,7 @@ from gerabaldi.models import *
 import os
 import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import stratcona
 
@@ -211,11 +211,11 @@ def tddb_inference():
         for ltnt in ['a_o', 'e_aa']:
             for lyr in ['dev', 'chp', 'lot']:
                 if lyr == 'dev':
-                    sample_sites.append(f'{temp}_ttf_{ltnt}_{lyr}')
-                    val_map[f'{temp}_ttf_{ltnt}_{lyr}'] = 0.0
+                    sample_sites.append(f'{temp}_ttf_{ltnt}_{lyr}_ls')
+                    val_map[f'{temp}_ttf_{ltnt}_{lyr}_ls'] = 0.0
                 else:
-                    sample_sites.append(f'{temp}_{ltnt}_{lyr}')
-                    val_map[f'{temp}_{ltnt}_{lyr}'] = 0.0
+                    sample_sites.append(f'{temp}_{ltnt}_{lyr}_ls')
+                    val_map[f'{temp}_{ltnt}_{lyr}_ls'] = 0.0
         sample_sites.append(f'{temp}_ttf')
         val_map[f'{temp}_ttf'] = nom_ttfs[temp]
 
