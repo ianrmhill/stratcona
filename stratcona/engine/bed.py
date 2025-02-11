@@ -5,7 +5,6 @@ from pathlib import Path
 import time as t
 import datetime
 import json
-import warnings
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
@@ -21,7 +20,7 @@ from inspect import Parameter
 
 from matplotlib import pyplot as plt
 
-from stratcona.modelling.relmodel import ReliabilityTest
+from stratcona.modelling.relmodel import ReliabilityTest, ExpDims
 
 
 __all__ = ['eig_smc_refined', 'bed_runner']

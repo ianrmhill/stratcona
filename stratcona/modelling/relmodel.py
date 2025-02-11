@@ -52,9 +52,13 @@ class TestDef:
     dims: frozenset[ExpDims]
     conditions: dict[str: dict[str: float | int]]
 
-    def __init__(self, name: str, dims: dict[str: dict[str: int]], conditions: dict[str: dict[str: float | int]]):
+    def __init__(self, name: str, dims: dict[str: dict[str: int]] | set[ExpDims],
+                 conditions: dict[str: dict[str: float | int]]):
         self.name = name
-        self.dims = frozenset({ExpDims(e, **dims[e]) for e in dims})
+        if type(dims) == dict:
+            self.dims = frozenset({ExpDims(e, **dims[e]) for e in dims})
+        else:
+            self.dims = frozenset(dims)
         self.conds = conditions
 
     def __members(self):
@@ -184,14 +188,14 @@ class ReliabilityModel():
             for i, site in enumerate(keep_sites):
                 if site in self.observes or site in self.predictors:
                     for tst in test_dims:
-                        sites.append(f'{tst}_{site}')
+                        sites.append(f'{tst.name}_{site}')
                 elif site in self.ltnts or site in self.ltnt_subsamples:
                     for tst in test_dims:
                         if '_dev' in site:
                             for obs in self.observes:
-                                sites.append(f'{tst}_{obs}_{site}')
+                                sites.append(f'{tst.name}_{obs}_{site}')
                         else:
-                            sites.append(f'{tst}_{site}')
+                            sites.append(f'{tst.name}_{site}')
                 else:
                     sites.append(site)
         else:

@@ -50,7 +50,7 @@ def jit_behaviour():
 
 def main():
     key = rand.key(363)
-    k1, k2 = rand.split(key)
+    k1, k2, k3 = rand.split(key, 3)
 
     ####################################################
     # Define an NBTI empirical model within the SPM framework for inference
@@ -90,21 +90,15 @@ def main():
     am.relmdl.hyl_beliefs = pri
     lp_f = am.relmdl.logp_new
     s_f = am.relmdl.sample_new
-    print(lp_f(k1, d.dims, d.conds, {'a0_nom': jnp.array(3.5)}, None))
-    print(lp_f(k1, d.dims, d.conds, {'a0_dev': jnp.array(0.65)}, None))
-    print(lp_f(k1, d.dims, d.conds, {'a0_dev': jnp.array(0.75)}, None))
 
-    print(s_f(k1, d.dims, d.conds, (10,), ('a0_nom', 'a0_dev')))
-    print(s_f(k1, d.dims, d.conds, (10,), ('a0_nom', 'a0_dev')))
+    x_s = s_f(k1, d.dims, d.conds, (3,), am.relmdl.hyls)
+    y_s = s_f(k2, d.dims, d.conds, (1,), am.relmdl.observes)
+    lp_y_g_x = stratcona.engine.inference.int_out_v(k3, am.relmdl, (3, 5, 1), d.dims, d.conds, x_s, y_s)
+    print(lp_y_g_x)
 
-
-    to_time = partial(am.relmdl.sample, k1, d, (10,), ['a0_nom', 'a0_dev'])
-    best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
-    print(f'Unjitted: {best_perf}s')
-
-    to_time = partial(s_f, k1, d.dims, d.conds, (10,), ('a0_nom', 'a0_dev'))
-    best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
-    print(f'Jitted: {best_perf}s')
+    #to_time = partial(am.relmdl.sample, k1, d, (10,), ['a0_nom', 'a0_dev'])
+    #best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
+    #print(f'Unjitted: {best_perf}s')
 
 
 if __name__ == '__main__':

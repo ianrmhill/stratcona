@@ -262,7 +262,7 @@ class SPMBuilder():
         ltnt_subsample_site_names.extend([f'{ltnt}_lot_ls' for ltnt in self.latents if self.latents[ltnt].lot is not None])
 
         return ReliabilityModel(self.model_name, spm, self.params,
-                                list(self.hyls.keys()), hyl_priors, hyl_info,
-                                list(self.latents.keys()), ltnt_subsample_site_names,
-                                list(self.observes.keys()), self.observable_counts,
-                                list(self.predictors.keys()), list(self.fail_criteria.keys()))
+                                tuple(self.hyls.keys()), hyl_priors, hyl_info,
+                                tuple(self.latents.keys()), tuple(ltnt_subsample_site_names),
+                                tuple(self.observes.keys()), self.observable_counts,
+                                tuple(self.predictors.keys()), tuple(self.fail_criteria.keys()))
