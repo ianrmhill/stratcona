@@ -19,6 +19,71 @@ from stratcona.engine.bed import est_lp_y_g_x
 from stratcona.modelling.relmodel import ReliabilityTest, TestDef, ExpDims
 
 
+@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims', 'g_hyl'])
+def mhgibbs_inner_loop(rng_key, spm, test_dims, test_conds, x_s, y_t, beta, lp_x, lp_prev, batch_dims, g_hyl):
+    k2, k3, k4 = rand.split(rng_key, 3)
+    # Determine a new set of samples xp_s by random walk of one hyper-latent
+    # Take a random step in some direction
+    walks = dists.Normal(0.0, beta).sample(k2, x_s[g_hyl].shape)
+    new_s = spm.hyl_info[g_hyl]['transform_inv'](x_s[g_hyl]) + walks
+    xp_s_hyl = spm.hyl_info[g_hyl]['transform'](new_s)
+    xp_s = x_s.copy()
+    xp_s[g_hyl] = xp_s_hyl
+
+    # Evaluate the posterior probability of the new samples
+    lp_y_g_xp, stats_p = int_out_v(k3, spm, batch_dims, test_dims, test_conds, xp_s, y_t)
+    lp_xp_likely = lp_x + lp_y_g_xp.flatten()
+
+    # Accept or reject the new samples
+    p_accept = jnp.exp(lp_xp_likely - lp_prev)
+    a_s = dists.Uniform(0, 1).sample(k4, (batch_dims[0],))
+    accepted = jnp.where(jnp.greater(p_accept, a_s), True, False)
+    lp_new = jnp.where(accepted, lp_xp_likely, lp_prev)
+    x_new = x_s.copy()
+    x_new[g_hyl] = jnp.where(accepted, xp_s[g_hyl], x_s[g_hyl])
+    # Ongoing performance statistics
+    ap = jnp.count_nonzero(accepted) / batch_dims[0]
+    return x_new, lp_new, ap
+
+
+def custom_mhgibbs_new(rng_key, spm, d, y, num_chains, n_v, beta=0.5):
+    n_x = num_chains
+    chain_len, warmup_len = 2200, 200
+    k, kx, kv = rand.split(rng_key, 3)
+    y_t = {}
+    for exp in y:
+        y_t |= {f'{exp}_{y_e}': jnp.expand_dims(y[exp][y_e], 0) for y_e in y[exp]}
+    x_s = spm.sample_new(kx, d.dims, d.conds, (n_x,), spm.hyls)
+    lp_x = spm.logp_new(kx, d.dims, d.conds, x_s, None, (n_x,))
+    # Compute the posterior probability of each sample in x_s
+    batch_dims = (n_x, n_v, 1)
+    lp_y_g_x, stats = int_out_v(kv, spm, batch_dims, d.dims, d.conds, x_s, y_t)
+    lp_lkly = lp_x + lp_y_g_x.flatten()
+
+    accept_percent = 0.0
+    x_s_store = {hyl: jnp.array((), jnp.float32) for hyl in spm.hyls}
+    bar = Bar('Sampling', max=chain_len)
+    for i in range(chain_len):
+        k, kc, ki = rand.split(k, 3)
+        # Uniformly choose one of the hyper-latent variables
+        g_hyl = spm.hyls[rand.choice(kc, jnp.arange(len(spm.hyls)))]
+        x_s, lp_lkly, ap = mhgibbs_inner_loop(ki, spm, d.dims, d.conds, x_s, y_t, beta, lp_x, lp_lkly, batch_dims, g_hyl)
+        # Add to final set of samples if warmup complete
+        if i >= warmup_len:
+            for hyl in spm.hyls:
+                x_s_store[hyl] = jnp.append(x_s_store[hyl], x_s[hyl])
+        accept_percent = ((accept_percent * i) + ap) / (i + 1)
+        bar.next()
+
+    bar.finish()
+    # Fit the posterior distributions
+    new_prior = {}
+    for hyl in spm.hyl_info:
+        new_prior[hyl] = fit_dist_to_samples(spm.hyl_info[hyl], x_s_store[hyl])
+    perf_stats = {'accept_percent': accept_percent}
+    return new_prior, perf_stats
+
+
 def custom_mhgibbs_resampled_v(rng_key, spm, d, y, num_chains, n_v, beta=0.5):
     n_x = num_chains
     chain_len, warmup_len = 2200, 200
@@ -91,12 +156,20 @@ def batch_reindex(n_extra_dims):
     return inner
 
 
+@partial(jax.jit, static_argnames=['n', 'dims'])
 def get_inds_arr(n, dims):
     add_dims = tuple([0, 2] + [i + 3 for i in range(len(dims) - 2)])
     inner = jnp.repeat(jnp.repeat(jnp.expand_dims(jnp.arange(n), add_dims), dims[0], axis=0), dims[1], axis=2)
     for i, d in enumerate(dims[2:]):
         inner = jnp.repeat(inner, d, axis=i+3)
     return inner
+
+
+@jax.jit
+def count_unique(x):
+    """Credit to jakevdp for this approach: https://stackoverflow.com/questions/77082029/jax-count-unique-elements-in-array"""
+    x = jnp.sort(x.flatten())
+    return 1 + (x[1:] != x[:-1]).sum()
 
 
 @partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
@@ -159,14 +232,15 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                     resample_inds = choice(krs, inds, (n_v,), True, jnp.exp(resample_probs))
                     v_rs[lvl] |= {v: reindex(v_s_init[v], resample_inds) for v in e_ltnts}
 
-                if lvl == 'dev':
-                    # FIXME: Unique incompatible with jax
-                    v_diversity = [jnp.unique(v_rs[lvl][v]).size / (n_x * n_v * n_y * e.lot) for v in e_ltnts]
+                if lvl == 'lot':
+                    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * e.lot) for v in e_ltnts]
                 elif lvl == 'chp':
-                    v_diversity = [jnp.unique(v_rs[lvl][v]).size / (n_x * n_v * n_y * e.chp * e.lot) for v in e_ltnts]
+                    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * e.chp * e.lot) for v in e_ltnts]
                 else:
-                    v_diversity = [jnp.unique(v_rs[lvl][v]).size / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
+                    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
                 perf_stats[f'{e.name}_{lvl}_rs_diversity'] = sum(v_diversity) / len(e_ltnts)
+            #y_approx = spm.sample_new(kdum, test_dims, test_conds, batch_dims, spm.observes, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
+            #print('Lvl complete')
 
     # Final logp
     lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)

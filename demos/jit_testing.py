@@ -23,29 +23,27 @@ from stratcona.modelling.relmodel import TestDef, ExpDims
 
 def jit_behaviour():
 
-    class MyClass:
-        def __init__(self, y):
-            self.y = y
+    @partial(jax.jit, static_argnames=['op'])
+    def sw_f(x, y, op):
+        if op == 'add':
+            return x + y
+        elif op == 'sub':
+            return x - y
+        else:
+            return x * y
 
-        def buildfunc(self):
-            def mf(x, vals, alt=False):
-                z = 0
-                for val in vals:
-                    z += vals[val]
-                return (x * self.y + z) if not alt else (x * self.y**2 + z)
-            return mf
+    @partial(jax.jit, static_argnames=['f'])
+    def reduce(vals, f):
+        res = vals[0]
+        for i in range(1, len(vals)):
+            res = f(res, vals[i])
+        return res
 
-    c1 = MyClass(4)
-    f = c1.buildfunc()
-    mfj = jax.jit(f, static_argnames='alt')
-    time.sleep(2)
-    print(f"First call: {mfj(2, {})}")
-    time.sleep(2)
-    print(f"Second call: {mfj(2, {'a': 3, 'b': 2})}")
-    time.sleep(2)
-    print(f"Third call: {mfj(2, {'a': 1})}")
-    time.sleep(2)
-    print(f"Fourth call: {mfj(2, {'a': 5})}")
+    myarr = jnp.array([2,3,4,5,6])
+
+    print(f"Call: {reduce(myarr, partial(sw_f, op='add'))}")
+    print(f"Call: {reduce(myarr, partial(sw_f, op='sub'))}")
+    print(f"Call: {reduce(myarr, partial(sw_f, op='mul'))}")
 
 
 def main():
@@ -60,7 +58,7 @@ def main():
         return 1000 * (a0 * 0.001) * jnp.exp((e_aa * 0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
 
     mb = stratcona.SPMBuilder(mdl_name='bti-empirical')
-    mb.add_params(k=8.617e-5, zero=0.0, meas_var=2, n_nom=2, alpha=3.5, n=2)
+    mb.add_params(k=8.617e-5, zero=0.0, meas_var=1, n_nom=2, alpha=3.5, n=2)
 
     # Initial parameters are simulating some data to then learn
     mb.add_hyperlatent('a0_nom', dists.Normal, {'loc': 5, 'scale': 0.01})
@@ -87,19 +85,24 @@ def main():
            'e_aa_nom': {'loc': 5, 'scale': 2}}
     d = TestDef('t1', {'e': {'lot': 4, 'chp': 2}}, {'e': {'temp': 55 + 273.15, 'vdd': 0.88, 'time': 1000}})
 
+    am.set_test_definition(d)
     am.relmdl.hyl_beliefs = pri
-    lp_f = am.relmdl.logp_new
     s_f = am.relmdl.sample_new
+    y_s = s_f(k2, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'dvth_meas': y_s['e_dvth_meas']}}
+    am.do_inference_mhgibbs(y, beta=0.25)
+    print(am.relmdl.hyl_beliefs)
 
-    x_s = s_f(k1, d.dims, d.conds, (3,), am.relmdl.hyls)
-    y_s = s_f(k2, d.dims, d.conds, (1,), am.relmdl.observes)
-    lp_y_g_x = stratcona.engine.inference.int_out_v(k3, am.relmdl, (3, 5, 1), d.dims, d.conds, x_s, y_s)
-    print(lp_y_g_x)
-
-    #to_time = partial(am.relmdl.sample, k1, d, (10,), ['a0_nom', 'a0_dev'])
-    #best_perf = min(timeit.Timer(to_time).repeat(repeat=100, number=100))
-    #print(f'Unjitted: {best_perf}s')
+    #x_s = s_f(k1, d.dims, d.conds, (100,), am.relmdl.hyls)
+    #y_s = s_f(k2, d.dims, d.conds, (1,), am.relmdl.observes)
+    #get_lp_y_g_x = stratcona.engine.inference.int_out_v
+    #start = time.time()
+    #lp_y_g_x, perf_stats = get_lp_y_g_x(k3, am.relmdl, (100, 100, 1), d.dims, d.conds, x_s, y_s)
+    #print(f'Unjitted: {time.time() - start}s')
+    #to_time = partial(get_lp_y_g_x, k3, am.relmdl, (100, 100, 1), d.dims, d.conds, x_s, y_s)
+    #best_perf = min(timeit.Timer(to_time).repeat(repeat=10, number=10))
+    #print(f'Jitted: {best_perf}s')
 
 
 if __name__ == '__main__':
-    main()
+    jit_behaviour()
