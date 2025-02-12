@@ -172,7 +172,7 @@ def count_unique(x):
     return 1 + (x[1:] != x[:-1]).sum()
 
 
-@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
+#@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
 def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s):
     n_x, n_v, n_y = batch_dims
     k, k_init, kdum = rand.split(rng_key, 3)
@@ -239,8 +239,8 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                 else:
                     v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
                 perf_stats[f'{e.name}_{lvl}_rs_diversity'] = sum(v_diversity) / len(e_ltnts)
-            #y_approx = spm.sample_new(kdum, test_dims, test_conds, batch_dims, spm.observes, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
-            #print('Lvl complete')
+            y_approx = spm.sample_new(kdum, test_dims, test_conds, batch_dims, spm.observes, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
+            print('Lvl complete')
 
     # Final logp
     lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
