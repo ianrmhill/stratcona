@@ -208,14 +208,23 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                     # Number of devices might be different for each observed variable, so have to sum across devices and chips
                     if lvl == 'dev':
                         lp_v = sum([lp_v_init[ltnt] for ltnt in e_ltnts if yp in ltnt])
-                        lp_y_g_xv_tot = lp_y_g_xv[yp] - lp_v
+                        # Craziest step - resampling probabilities are adjusted based on the dimensionality (# of RVs) of v
+                        # This is done to massively reduce the variance of the lp_y_g_x estimate when the dimensionality is high, as
+                        # all sampled v need to give similar likelihood for y to avoid lucky samples dominating the estimates.
+                        # Instead, all samples become very lucky on average, thus the variance decreases
+                        # It does reduce the resample diversity, but less than one would intuitively expect, and can be compensated for
+                        # by increasing n_v
+                        # FIXME: Finding v samples so close to y causes measurement noise to leak into inference estimates of variability
+                        lp_y_g_xv_tot = (lp_y_g_xv[yp] * (1 + jnp.log(100))) - lp_v #TODO: Auto determine the v dimension size
+                        #lp_y_g_xv_tot = (lp_y_g_xv[yp]) * (1 + jnp.log(50)) + lp_v
                     else:
                         lp_v = sum([lp_v_init[ltnt] for ltnt in e_ltnts])
                         sum_axes = (3, 4) if lvl == 'lot' else 3
                         lp_y_g_xv = {y: jnp.sum(lp_y_g_xv[y], axis=sum_axes) for y in lp_y_g_xv}
                         # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
                         # Subtract the sample probability p(v|x) for each to avoid biasing resamples towards the prior values
-                        lp_y_g_xv_tot = sum(lp_y_g_xv.values()) - lp_v
+                        lp_y_g_xv_tot = (sum(lp_y_g_xv.values()) * (1 + jnp.log(25))) - lp_v # TODO: Auto determine the v dimension size
+
 
                     # Sum of all p_marg array elements must be 1 for resampling via random choice
                     resample_probs = lp_y_g_xv_tot - logsumexp(lp_y_g_xv_tot, axis=1, keepdims=True)
@@ -239,12 +248,14 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                 else:
                     v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
                 perf_stats[f'{e.name}_{lvl}_rs_diversity'] = sum(v_diversity) / len(e_ltnts)
-            y_approx = spm.sample_new(kdum, test_dims, test_conds, batch_dims, spm.observes, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
-            print('Lvl complete')
+            #y_approx = spm.sample_new(kdum, test_dims, test_conds, batch_dims, spm.observes, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
+            #print('Lvl complete')
 
     # Final logp
     lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
+    print(f'LP-V mean - {jnp.mean(lp_v_g_x)}, std dev - {jnp.std(lp_v_g_x)}, min - {jnp.min(lp_v_g_x)}, max - {jnp.max(lp_v_g_x)}')
     lp_y_g_xv = spm.logp_new(kdum, test_dims, test_conds, y_s_t, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'], batch_dims)
+    print(f'LP-Y mean - {jnp.mean(lp_y_g_xv)}, std dev - {jnp.std(lp_y_g_xv)}, min - {jnp.min(lp_y_g_xv)}, max - {jnp.max(lp_y_g_xv)}')
     lp_y_g_x = logsumexp(lp_v_g_x + lp_y_g_xv, axis=1)
     return lp_y_g_x, perf_stats
 

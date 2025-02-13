@@ -31,25 +31,30 @@ def simplest_lp_y_g_x():
     y = {'e_y': jnp.array([[[gold]]])}
     mb = stratcona.SPMBuilder('barebones')
     mb.add_hyperlatent('x', dists.Normal, {'loc': 1.3, 'scale': 0.0001})
-    mb.add_hyperlatent('xs', dists.Normal, {'loc': 0.3, 'scale': 0.0001})
+    mb.add_hyperlatent('xs', dists.Normal, {'loc': 0.1, 'scale': 0.0001})
     mb.add_latent('v', nom='x', dev='xs')
-    mb.add_params(ys=0.04)
-    mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 50)
+    mb.add_params(ys=0.02)
+    mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 100)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48)
     d = TestDef('bare', {'e': {'lot': 1, 'chp': 1}}, {'e': {}})
-    batch_dims = (300, 300, 1)
+    batch_dims = (1000, 500, 1)
     k = rand.key(8275)
     k1, k2 = rand.split(k, 2)
     y_s = am.relmdl.sample_new(k1, d.dims, d.conds, (1,), am.relmdl.observes)
     print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
 
-    am.relmdl.hyl_beliefs = {'x': {'loc': 1.2, 'scale': 0.2}, 'xs': {'loc': 0.28, 'scale': 0.06}}
+    am.relmdl.hyl_beliefs = {'x': {'loc': 1.2, 'scale': 0.2}, 'xs': {'loc': 0.1, 'scale': 0.02}}
     x_s = am.relmdl.sample_new(k1, d.dims, d.conds, (batch_dims[0],), am.relmdl.hyls)
-    lp, _ = int_out_v(k2, am.relmdl, batch_dims, d.dims, d.conds, x_s, y_s)
+    #x_s = {'x': jnp.full_like(x_s['x'], 1.3), 'xs': jnp.full_like(x_s['xs'], 0.1)}
+    lp, stats = int_out_v(k2, am.relmdl, batch_dims, d.dims, d.conds, x_s, y_s)
+    print(stats)
+    p = jnp.exp(lp - jnp.max(lp))
+    print(f'P mean - {jnp.mean(p)}, std dev - {jnp.std(p)}, min - {jnp.min(p)}, max - {jnp.max(p)}')
 
-    df = pd.DataFrame({'p': lp.flatten() - jnp.max(lp), 'x': x_s['x'], 'xs': x_s['xs']})
-    seaborn.scatterplot(df, x='x', y='xs', palette='viridis', hue='p', hue_norm=(-10, 0))
+    df = pd.DataFrame({'lp': lp.flatten() - jnp.max(lp), 'x': x_s['x'], 'xs': x_s['xs']})
+    seaborn.scatterplot(df, x='x', y='xs', palette='viridis', hue='lp', hue_norm=(-10, 0))
+    plt.grid()
     plt.show()
 
 
