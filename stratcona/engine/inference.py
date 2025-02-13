@@ -9,6 +9,7 @@ from jax.scipy.special import logsumexp
 from progress.bar import Bar
 from functools import partial
 from math import prod
+import numpy as np
 
 from numpyro.infer import NUTS, MCMC
 import numpyro.distributions as dists
@@ -175,11 +176,17 @@ def count_unique(x):
 #@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
 def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s):
     n_x, n_v, n_y = batch_dims
-    k, k_init, kdum = rand.split(rng_key, 3)
+    k, k_init, k_noise, kdum = rand.split(rng_key, 4)
     perf_stats = {}
+    # Adjust the variance of y_s_t to compensate for measurement noise
+    meas_noise_std = 0.04
+    vscale = {y: jnp.sqrt(jnp.abs(jnp.std(y_s[y])**2 - meas_noise_std**2)) / jnp.std(y_s[y]) for y in y_s}
+    y_s_a = {y: ((y_s[y] - jnp.mean(y_s[y])) * vscale[y]) + jnp.mean(y_s[y]) for y in y_s}
+    print(f'Yadj std dev: {jnp.std(y_s_a["e_y"])}')
     # Tile the x and y sample arrays to match the problem dimensions for full vectorization
     x_s_t = {x: jnp.repeat(jnp.repeat(jnp.expand_dims(x_s[x], (1, 2)), n_v, axis=1), n_y, axis=2) for x in x_s}
-    y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s}
+    y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s_a[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s_a}
+
 
     v_init = spm.sample_new(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
     lp_v_init = spm.logp_new(kdum, test_dims, test_conds, v_init, x_s_t, batch_dims, sum_lps=False)
@@ -187,7 +194,8 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
     v_dev_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_dev' in v}
     v_chp_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_chp' in v}
     v_rs = {'lot': {}, 'chp': v_chp_zeros, 'dev': v_dev_zeros}
-    in_loops = {'lot': ['na'], 'chp': ['na'], 'dev': [y for y in y_s]}
+
+    in_loops = {'lot': ['na'], 'chp': ['na'], 'dev': [y for y in y_s_t]}
     for i, lvl in enumerate(v_rs.keys()):
         lvl_ltnts = [ltnt for ltnt in v_init if f'_{lvl}' in ltnt]
         if len(lvl_ltnts) > 0:
@@ -217,6 +225,9 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                         # FIXME: Finding v samples so close to y causes measurement noise to leak into inference estimates of variability
                         lp_y_g_xv_tot = (lp_y_g_xv[yp] * (1 + jnp.log(100))) - lp_v #TODO: Auto determine the v dimension size
                         #lp_y_g_xv_tot = (lp_y_g_xv[yp]) * (1 + jnp.log(50)) + lp_v
+                        #lp_y_g_xv_tot = lp_y_g_xv[yp] - lp_v
+                        #lp_y_g_xv_tot = (lp_y_g_xv[yp]) * (1 + jnp.log(100))
+                        #lp_y_g_xv_tot = lp_y_g_xv[yp]
                     else:
                         lp_v = sum([lp_v_init[ltnt] for ltnt in e_ltnts])
                         sum_axes = (3, 4) if lvl == 'lot' else 3
@@ -248,13 +259,13 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                 else:
                     v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
                 perf_stats[f'{e.name}_{lvl}_rs_diversity'] = sum(v_diversity) / len(e_ltnts)
-            #y_approx = spm.sample_new(kdum, test_dims, test_conds, batch_dims, spm.observes, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
-            #print('Lvl complete')
 
     # Final logp
     lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
+    lp_v_np = np.array(lp_v_g_x)
     print(f'LP-V mean - {jnp.mean(lp_v_g_x)}, std dev - {jnp.std(lp_v_g_x)}, min - {jnp.min(lp_v_g_x)}, max - {jnp.max(lp_v_g_x)}')
     lp_y_g_xv = spm.logp_new(kdum, test_dims, test_conds, y_s_t, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'], batch_dims)
+    lp_y_np = np.array(lp_y_g_xv)
     print(f'LP-Y mean - {jnp.mean(lp_y_g_xv)}, std dev - {jnp.std(lp_y_g_xv)}, min - {jnp.min(lp_y_g_xv)}, max - {jnp.max(lp_y_g_xv)}')
     lp_y_g_x = logsumexp(lp_v_g_x + lp_y_g_xv, axis=1)
     return lp_y_g_x, perf_stats

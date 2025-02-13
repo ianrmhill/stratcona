@@ -26,6 +26,24 @@ from stratcona.modelling.relmodel import TestDef, ExpDims
 from stratcona.engine.inference import int_out_v
 
 
+def noise_testing():
+    k = rand.key(28437)
+    k, ky = rand.split(k, 2)
+    s1, s2 = 3, 6
+    y = dists.Normal(4, s1).sample(ky, (100_000,))
+    print(f'Y mean - {jnp.mean(y)}, std dev - {jnp.std(y)}, min - {jnp.min(y)}, max - {jnp.max(y)}')
+    yp = y.copy()
+    k, kn = rand.split(k, 2)
+    n = dists.Normal(0, s2).sample(kn, (100_000,))
+    yp = yp + n
+    print(f'YP mean - {jnp.mean(yp)}, std dev - {jnp.std(yp)}, min - {jnp.min(yp)}, max - {jnp.max(yp)}')
+    print(f'Expected std dev: {jnp.sqrt((s1**2) + (s2**2))}')
+    des = jnp.sqrt((jnp.std(yp)**2 - s2**2))
+    y_rec = yp * (des / jnp.std(yp))
+    print(f'Yrec mean - {jnp.mean(y_rec)}, std dev - {jnp.std(y_rec)}, min - {jnp.min(y_rec)}, max - {jnp.max(y_rec)}')
+    print(f'Expected std dev: {s1}')
+
+
 def simplest_lp_y_g_x():
     gold = 1.2
     y = {'e_y': jnp.array([[[gold]]])}
@@ -33,21 +51,21 @@ def simplest_lp_y_g_x():
     mb.add_hyperlatent('x', dists.Normal, {'loc': 1.3, 'scale': 0.0001})
     mb.add_hyperlatent('xs', dists.Normal, {'loc': 0.1, 'scale': 0.0001})
     mb.add_latent('v', nom='x', dev='xs')
-    mb.add_params(ys=0.02)
+    mb.add_params(ys=0.04)
     mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 100)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48)
     d = TestDef('bare', {'e': {'lot': 1, 'chp': 1}}, {'e': {}})
     batch_dims = (1000, 500, 1)
-    k = rand.key(8275)
-    k1, k2 = rand.split(k, 2)
+    k = rand.key(3737)
+    k1, k2, k3 = rand.split(k, 3)
     y_s = am.relmdl.sample_new(k1, d.dims, d.conds, (1,), am.relmdl.observes)
     print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
 
     am.relmdl.hyl_beliefs = {'x': {'loc': 1.2, 'scale': 0.2}, 'xs': {'loc': 0.1, 'scale': 0.02}}
-    x_s = am.relmdl.sample_new(k1, d.dims, d.conds, (batch_dims[0],), am.relmdl.hyls)
+    x_s = am.relmdl.sample_new(k2, d.dims, d.conds, (batch_dims[0],), am.relmdl.hyls)
     #x_s = {'x': jnp.full_like(x_s['x'], 1.3), 'xs': jnp.full_like(x_s['xs'], 0.1)}
-    lp, stats = int_out_v(k2, am.relmdl, batch_dims, d.dims, d.conds, x_s, y_s)
+    lp, stats = int_out_v(k3, am.relmdl, batch_dims, d.dims, d.conds, x_s, y_s)
     print(stats)
     p = jnp.exp(lp - jnp.max(lp))
     print(f'P mean - {jnp.mean(p)}, std dev - {jnp.std(p)}, min - {jnp.min(p)}, max - {jnp.max(p)}')
