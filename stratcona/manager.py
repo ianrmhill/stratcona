@@ -8,9 +8,9 @@ from matplotlib import pyplot as plt
 import jax.random as rand
 
 import engine.bed
-from stratcona.engine.inference import inference_model, custom_inference, custom_mhgibbs_new
-from stratcona.engine.bed import bed_run, run_bed_newest
-from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement
+from stratcona.engine.inference import inference_model, custom_inference, custom_mhgibbs_new, inf_is_new
+from stratcona.engine.bed import bed_run, run_bed_newest, pred_bed_apr25
+from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement, TestDef
 
 
 class AnalysisManager:
@@ -25,11 +25,11 @@ class AnalysisManager:
         self.rng_key, for_use = rand.split(self.rng_key)
         return for_use
 
-    def set_test_definition(self, test_def: ReliabilityTest):
+    def set_test_definition(self, test_def: TestDef):
         self.test = test_def
 
     def set_field_use_conditions(self, conds):
-        self.field_test = ReliabilityTest({'field': {'lot': 1, 'chp': 1}}, {'field': conds})
+        self.field_test = TestDef('fielduse', {'field': {'lot': 1, 'chp': 1}}, {'field': conds})
 
     def update_priors(self, new_priors):
         self.relmdl.hyl_beliefs = new_priors
@@ -41,7 +41,7 @@ class AnalysisManager:
     def do_inference(self, observations, test: ReliabilityTest = None, auto_update_prior=True):
         rng = self._derive_key()
         test_info = test if test is not None else self.test
-        inf_mdl = partial(self.relmdl.spm, test_info.config, test_info.conditions, self.relmdl.hyl_beliefs, self.relmdl.param_vals)
+        inf_mdl = partial(self.relmdl.spm, test_info.dims, test_info.conds, self.relmdl.hyl_beliefs, self.relmdl.param_vals)
         new_prior = inference_model(inf_mdl, self.relmdl.hyl_info, observations, rng)
         if auto_update_prior:
             self.relmdl.hyl_beliefs = new_prior
@@ -55,9 +55,16 @@ class AnalysisManager:
     def do_inference_mhgibbs(self, observations, test: ReliabilityTest = None, num_chains=10, n_v=100, beta=0.5):
         rng = self._derive_key()
         test_info = test if test is not None else self.test
-        new_prior, perf_stats = custom_mhgibbs_new(rng, self.relmdl, test_info, observations, num_chains, n_v, beta)
+        new_prior, perf_stats = custom_mhgibbs_new(rng, self.relmdl, test_info, observations, self.relmdl.obs_noise, num_chains, n_v, beta)
         self.relmdl.hyl_beliefs = new_prior
         print(perf_stats)
+
+    def do_inference_is(self, observations, test: TestDef = None, n_x=10_000, n_v=500):
+        rng = self._derive_key()
+        test_info = test if test is not None else self.test
+        new_prior, perf_stats = inf_is_new(rng, self.relmdl, test_info, observations, self.relmdl.obs_noise, n_x, n_v)
+        self.relmdl.hyl_beliefs = new_prior
+        return perf_stats
 
     def evaluate_reliability(self, predictor, num_samples=300_000, plot_results=False):
         rng = self._derive_key()
@@ -87,6 +94,11 @@ class AnalysisManager:
     def find_best_experiment(self, l, n, m, exp_sampler, utility_functions=None):
         rng = self._derive_key()
         return bed_run(rng, l, n, m, exp_sampler, self.relmdl, utility_functions, self.field_test)
+
+    def determine_best_test_apr25(self, n_d, n_y, n_v, n_x, exp_sampler, u_funcs=engine.bed.eig_new):
+        rng = self._derive_key()
+        return pred_bed_apr25(rng, n_d, n_y, n_v, n_x, exp_sampler, self.relmdl,
+                              u_funcs, self.field_test)
 
     def do_bed(self, n_d, n_y, n_v, n_x, exp_sampler, utility_func=engine.bed.eig_new, trgt_lfspn=None):
         rng = self._derive_key()

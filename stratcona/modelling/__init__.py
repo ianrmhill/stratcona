@@ -2,4 +2,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .builder import SPMBuilder
-from .relmodel import ReliabilityRequirement, ReliabilityModel, ReliabilityTest
+from .relmodel import ReliabilityRequirement, ReliabilityModel, TestDef

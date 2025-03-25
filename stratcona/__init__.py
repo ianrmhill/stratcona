@@ -9,6 +9,6 @@ __version__ = '0.0.5'
 
 from .manager import AnalysisManager
 from . import assistants, engine, modelling
-from .modelling import SPMBuilder, ReliabilityModel, ReliabilityRequirement, ReliabilityTest
+from .modelling import SPMBuilder, ReliabilityModel, ReliabilityRequirement, TestDef
 
 __all__ = []

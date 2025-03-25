@@ -1,4 +1,4 @@
-# Copyright (c) 2024 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 import time as t
@@ -66,20 +66,15 @@ def electromigration_qualification():
     def em_blacks_equation(jn_wire, temp, em_n, em_eaa, wire_area, k):
         return (wire_area / (jn_wire ** em_n)) * jnp.exp((em_eaa * 0.01) / (k * temp))
 
-    # Add inherent variability to electromigration sensor line failure times corresponding to 7% of the average time
-    def em_variability(em_blacks, em_var_percent):
-        return jnp.abs(em_var_percent * em_blacks)
-
     # Now correspond the degradation mechanisms to the output values
     mb.add_intermediate('jn_wire', j_n)
     mb.add_intermediate('em_blacks', em_blacks_equation)
-    mb.add_intermediate('em_variability', em_variability)
-    mb.add_observed('em_ttf', dists.Normal, {'loc': 'em_blacks', 'scale': 'em_variability'}, num_devices)
+    mb.add_observed('em_ttf', dists.Normal, {'loc': 'em_blacks', 'scale': 'fail_var'}, num_devices)
 
-    mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 1.8, 'scale': 0.3})
-    mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
-    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 8, 'scale': 1})
-    mb.add_hyperlatent('eaa_var', dists.Normal, {'loc': 0.1, 'scale': 0.02})
+    mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 1.8, 'scale': 0.1})
+    mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.05})
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 8, 'scale': 0.3})
+    mb.add_hyperlatent('eaa_var', dists.Normal, {'loc': 0.2, 'scale': 0.05})
     mb.add_latent('em_n', 'n_nom', 'n_var')
     mb.add_latent('em_eaa', 'eaa_nom', 'eaa_var')
 
@@ -89,10 +84,9 @@ def electromigration_qualification():
     mb.add_fail_criterion('lifespan', fail_time)
 
     # Wire area in nm^2
-    mb.add_params(n_fins=24, vth_typ=0.32, i_base=0.8, wire_area=1.024 * 1000 * 1000, k=BOLTZ_EV,
-                  em_var_percent=0.07, fail_var=12)
+    mb.add_params(n_fins=48, vth_typ=0.32, i_base=0.8, wire_area=1.024 * 1000 * 1000, k=BOLTZ_EV, fail_var=16800)
 
-    am = stratcona.AnalysisManager(mb.build_model(), rel_req=objective, rng_seed=2338923)
+    am = stratcona.AnalysisManager(mb.build_model(), rel_req=objective, rng_seed=2348923)
     am.set_field_use_conditions({'vdd': 0.85, 'temp': 330})
 
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
@@ -113,7 +107,7 @@ def electromigration_qualification():
     temps = [300, 325, 350, 375, 400]
     volts = [0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
     permute_conds = product(temps, volts)
-    possible_tests = [stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'vdd': v, 'temp': t}}) for t, v in permute_conds]
+    possible_tests = [stratcona.TestDef('', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'vdd': v, 'temp': t}}) for t, v in permute_conds]
     exp_sampler = stratcona.assistants.iter_sampler(possible_tests)
 
     '''
@@ -125,12 +119,15 @@ def electromigration_qualification():
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
     if run_bed_analysis:
-        qx_lbci_pp = partial(stratcona.engine.bed.mtrpp,
-                             metric_target=am.relreq.target_lifespan, quantile=am.relreq.quantile)
-        utility_options = [stratcona.engine.bed.eig, qx_lbci_pp]
+        def em_u_func(ig, qx_lbci, p_y, trgt):
+            eig = jnp.sum(ig * p_y)
+            mtrpp = jnp.sum(jnp.where(qx_lbci > trgt, p_y, 0))
+            return {'eig': eig, 'qx_lbci_pp': mtrpp}
+        em_u_func = partial(em_u_func, trgt=am.relreq.target_lifespan)
 
         # Run the experimental design analysis
-        results = am.find_best_experiment(15, 100, 100, exp_sampler, utility_options)
+        results, perf_stats = am.determine_best_test_apr25(3, 101, 500, 400, exp_sampler, em_u_func)
+        print(results)
 
         #def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
         #    return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)

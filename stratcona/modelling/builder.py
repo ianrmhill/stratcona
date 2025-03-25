@@ -241,7 +241,6 @@ class SPMBuilder():
                                 if type(obs_info) is _CStochastic:
                                     dist_args = {arg: args[val] for arg, val in obs_info.prms.items()}
                                     observes[e][obs] = npyro.sample(f'{e}_{obs}', obs_info.dist(**dist_args), obs=measd)
-                                    #observes[e][obs] = npyro.sample(f'{e}_{obs}', obs_info.dist(**dist_args))
                                 else:
                                     observes[e][obs] = npyro.deterministic(f'{e}_{obs}', obs_info.compute(**args))
 
@@ -260,9 +259,16 @@ class SPMBuilder():
         ltnt_subsample_site_names = [f'{ltnt}_dev_ls' for ltnt in self.latents if self.latents[ltnt].dev is not None]
         ltnt_subsample_site_names.extend([f'{ltnt}_chp_ls' for ltnt in self.latents if self.latents[ltnt].chp is not None])
         ltnt_subsample_site_names.extend([f'{ltnt}_lot_ls' for ltnt in self.latents if self.latents[ltnt].lot is not None])
+        obs_noise = {}
+        for obs in self.observes:
+            if 'scale' in self.observes[obs].prms and self.observes[obs].prms['scale'] in self.params:
+                obs_noise[obs] = self.params[self.observes[obs].prms['scale']]
+            else:
+                obs_noise[obs] = 0.0
 
         return ReliabilityModel(self.model_name, spm, self.params,
                                 tuple(self.hyls.keys()), hyl_priors, hyl_info,
                                 tuple(self.latents.keys()), tuple(ltnt_subsample_site_names),
-                                tuple(self.observes.keys()), self.observable_counts,
-                                tuple(self.predictors.keys()), tuple(self.fail_criteria.keys()))
+                                tuple(self.observes.keys()), self.observable_counts, obs_noise,
+                                tuple(self.predictors.keys()) + tuple(self.fail_criteria.keys()),
+                                tuple(self.fail_criteria.keys()))

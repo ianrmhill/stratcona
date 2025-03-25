@@ -6,22 +6,78 @@ import jax.numpy as jnp
 import jax.random as rand
 from jax.scipy.special import logsumexp
 
+from multiprocess import Pool
 from progress.bar import Bar
 from functools import partial
 from math import prod
 import numpy as np
+
+# TEMP
+import seaborn
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from numpyro.infer import NUTS, MCMC
 import numpyro.distributions as dists
 from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 
 from stratcona.assistants.dist_translate import npyro_to_scipy
-from stratcona.engine.bed import est_lp_y_g_x
-from stratcona.modelling.relmodel import ReliabilityTest, TestDef, ExpDims
+from stratcona.modelling.relmodel import TestDef, ExpDims
+
+
+@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
+def is_inner(rng_key, spm, batch_dims, test_dims, test_conds, y_t, y_noise):
+    kx, kv, kdum = rand.split(rng_key, 3)
+    x_s = spm.sample_new(kx, test_dims, test_conds, (batch_dims[0],), spm.hyls)
+    lp_y_g_x, perf_stats = int_out_v(kv, spm, batch_dims, test_dims, test_conds, x_s, y_t, y_noise)
+    return x_s, lp_y_g_x, perf_stats
+
+
+def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
+    k, krs = rand.split(rng_key)
+    y_t = {}
+    for exp in y:
+        y_t |= {f'{exp}_{y_e}': jnp.expand_dims(y[exp][y_e], 0) for y_e in y[exp]}
+    x_s_store = {hyl: jnp.array((), jnp.float32) for hyl in spm.hyls}
+    lp_ygx_store = jnp.array((), dtype=jnp.float32)
+    rs_dvrs = 0
+    num_chunks = 100
+    batch_dims = (int(n_x / num_chunks), n_v, 1)
+
+    bar = Bar('Sampling', max=num_chunks)
+    for i in range(num_chunks):
+        k, ki = rand.split(k)
+
+        x_s, lp_ygx, ps = is_inner(ki, spm, batch_dims, d.dims, d.conds, y_t, y_noise)
+        lp_ygx_store = jnp.append(lp_ygx_store, lp_ygx)
+        for hyl in spm.hyls:
+            x_s_store[hyl] = jnp.append(x_s_store[hyl], x_s[hyl])
+        rs = jnp.array([ps[s] for s in ps if '_rs_diversity' in s])
+        rs_dvrs = ((rs_dvrs * i) + jnp.mean(rs)) / (i + 1)
+        bar.next()
+    bar.finish()
+
+    # Resample evaluated x_s according to posterior probabilities
+    lw_n = lp_ygx_store - logsumexp(lp_ygx_store)
+    # TEMP
+    df = pd.DataFrame({'lp': lw_n - max(lw_n), 'x': x_s_store['x'], 'xsc': x_s_store['xsc']})
+    seaborn.scatterplot(df, x='x', y='xsc', palette='viridis', hue='lp', hue_norm=(-10, 0))
+    plt.grid()
+    plt.show()
+
+    inds_arr = jnp.arange(n_x)
+    inds = rand.choice(krs, inds_arr, (n_x,), True, jnp.exp(lw_n))
+    x_rs, new_pri = {}, {}
+    for hyl in spm.hyls:
+        x_rs[hyl] = x_s_store[hyl][inds]
+        # Fit the posterior distribution
+        new_pri[hyl] = fit_dist_to_samples(spm.hyl_info[hyl], x_rs[hyl])
+    perf_stats = {'rs_dvrs_v': rs_dvrs, 'rs_dvrs_x': count_unique(inds) / len(inds)}
+    return new_pri, perf_stats
 
 
 @partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims', 'g_hyl'])
-def mhgibbs_inner_loop(rng_key, spm, test_dims, test_conds, x_s, y_t, beta, lp_x, lp_prev, batch_dims, g_hyl):
+def mhgibbs_inner_loop(rng_key, spm, test_dims, test_conds, x_s, y_t, y_noise, beta, lp_x, lp_prev, batch_dims, g_hyl):
     k2, k3, k4 = rand.split(rng_key, 3)
     # Determine a new set of samples xp_s by random walk of one hyper-latent
     # Take a random step in some direction
@@ -32,7 +88,7 @@ def mhgibbs_inner_loop(rng_key, spm, test_dims, test_conds, x_s, y_t, beta, lp_x
     xp_s[g_hyl] = xp_s_hyl
 
     # Evaluate the posterior probability of the new samples
-    lp_y_g_xp, stats_p = int_out_v(k3, spm, batch_dims, test_dims, test_conds, xp_s, y_t)
+    lp_y_g_xp, stats_p = int_out_v(k3, spm, batch_dims, test_dims, test_conds, xp_s, y_t, y_noise)
     lp_xp_likely = lp_x + lp_y_g_xp.flatten()
 
     # Accept or reject the new samples
@@ -47,7 +103,7 @@ def mhgibbs_inner_loop(rng_key, spm, test_dims, test_conds, x_s, y_t, beta, lp_x
     return x_new, lp_new, ap
 
 
-def custom_mhgibbs_new(rng_key, spm, d, y, num_chains, n_v, beta=0.5):
+def custom_mhgibbs_new(rng_key, spm, d, y, y_noise, num_chains, n_v, beta=0.5):
     n_x = num_chains
     chain_len, warmup_len = 2200, 200
     k, kx, kv = rand.split(rng_key, 3)
@@ -58,7 +114,7 @@ def custom_mhgibbs_new(rng_key, spm, d, y, num_chains, n_v, beta=0.5):
     lp_x = spm.logp_new(kx, d.dims, d.conds, x_s, None, (n_x,))
     # Compute the posterior probability of each sample in x_s
     batch_dims = (n_x, n_v, 1)
-    lp_y_g_x, stats = int_out_v(kv, spm, batch_dims, d.dims, d.conds, x_s, y_t)
+    lp_y_g_x, stats = int_out_v(kv, spm, batch_dims, d.dims, d.conds, x_s, y_t, y_noise)
     lp_lkly = lp_x + lp_y_g_x.flatten()
 
     accept_percent = 0.0
@@ -68,7 +124,7 @@ def custom_mhgibbs_new(rng_key, spm, d, y, num_chains, n_v, beta=0.5):
         k, kc, ki = rand.split(k, 3)
         # Uniformly choose one of the hyper-latent variables
         g_hyl = spm.hyls[rand.choice(kc, jnp.arange(len(spm.hyls)))]
-        x_s, lp_lkly, ap = mhgibbs_inner_loop(ki, spm, d.dims, d.conds, x_s, y_t, beta, lp_x, lp_lkly, batch_dims, g_hyl)
+        x_s, lp_lkly, ap = mhgibbs_inner_loop(ki, spm, d.dims, d.conds, x_s, y_t, y_noise, beta, lp_x, lp_lkly, batch_dims, g_hyl)
         # Add to final set of samples if warmup complete
         if i >= warmup_len:
             for hyl in spm.hyls:
@@ -169,33 +225,36 @@ def get_inds_arr(n, dims):
 @jax.jit
 def count_unique(x):
     """Credit to jakevdp for this approach: https://stackoverflow.com/questions/77082029/jax-count-unique-elements-in-array"""
+    # Can't use a normal unique method as jax can't compile code that leads to dynamically-sized arrays
     x = jnp.sort(x.flatten())
     return 1 + (x[1:] != x[:-1]).sum()
 
 
-#@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
-def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s):
+@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
+def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
     n_x, n_v, n_y = batch_dims
-    k, k_init, k_noise, kdum = rand.split(rng_key, 4)
+    k, k_init, kdum = rand.split(rng_key, 3)
     perf_stats = {}
+
     # Adjust the variance of y_s_t to compensate for measurement noise
-    meas_noise_std = 0.04
-    vscale = {y: jnp.sqrt(jnp.abs(jnp.std(y_s[y])**2 - meas_noise_std**2)) / jnp.std(y_s[y]) for y in y_s}
+    y_stddev = {}
+    for e in test_dims:
+        y_stddev |= {f'{e.name}_{y}': y_noise[y] for y in y_noise}
+    meas_noise_stddev = {y: y_stddev[y] if y in y_stddev else 0. for y in y_s}
+    vscale = {y: jnp.sqrt(jnp.abs(jnp.std(y_s[y])**2 - meas_noise_stddev[y]**2)) / jnp.std(y_s[y]) for y in y_s}
     y_s_a = {y: ((y_s[y] - jnp.mean(y_s[y])) * vscale[y]) + jnp.mean(y_s[y]) for y in y_s}
-    print(f'Yadj std dev: {jnp.std(y_s_a["e_y"])}')
+
     # Tile the x and y sample arrays to match the problem dimensions for full vectorization
     x_s_t = {x: jnp.repeat(jnp.repeat(jnp.expand_dims(x_s[x], (1, 2)), n_v, axis=1), n_y, axis=2) for x in x_s}
     y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s_a[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s_a}
-
-
+    # Generate the spread of v values for each x sample and the corresponding log probabilities
     v_init = spm.sample_new(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
     lp_v_init = spm.logp_new(kdum, test_dims, test_conds, v_init, x_s_t, batch_dims, sum_lps=False)
-
+    # Define initial uniform zero deviation arrays for device and chip level variables since we first optimize lot level
     v_dev_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_dev' in v}
     v_chp_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_chp' in v}
     v_rs = {'lot': {}, 'chp': v_chp_zeros, 'dev': v_dev_zeros}
 
-    in_loops = {'lot': ['na'], 'chp': ['na'], 'dev': [y for y in y_s_t]}
     for i, lvl in enumerate(v_rs.keys()):
         lvl_ltnts = [ltnt for ltnt in v_init if f'_{lvl}' in ltnt]
         if len(lvl_ltnts) > 0:
@@ -212,34 +271,32 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                 # Get the log probabilities without summing so each lot can be considered individually
                 lp_y_g_xv = spm.logp_new(kdum, e_tst.dims, e_tst.conds, e_y_s_t, conditional, batch_dims, sum_lps=False)
 
+                # Number of devices might be different for each observed variable
+                in_loops = {'lot': ['na'], 'chp': ['na'], 'dev': [y for y in e_y_s_t]}
                 for yp in in_loops[lvl]:
-                    # Number of devices might be different for each observed variable, so have to sum across devices and chips
                     if lvl == 'dev':
                         lp_v = sum([lp_v_init[ltnt] for ltnt in e_ltnts if yp in ltnt])
-                        # Craziest step - resampling probabilities are adjusted based on the dimensionality (# of RVs) of v
+                        # Resampling probabilities are adjusted based on the dimensionality (# of RVs) of v
                         # This is done to massively reduce the variance of the lp_y_g_x estimate when the dimensionality is high, as
                         # all sampled v need to give similar likelihood for y to avoid lucky samples dominating the estimates.
                         # Instead, all samples become very lucky on average, thus the variance decreases
                         # It does reduce the resample diversity, but less than one would intuitively expect, and can be compensated for
                         # by increasing n_v
-                        # FIXME: Finding v samples so close to y causes measurement noise to leak into inference estimates of variability
-                        lp_y_g_xv_tot = (lp_y_g_xv[yp] * (1 + jnp.log(100))) - lp_v #TODO: Auto determine the v dimension size
-                        #lp_y_g_xv_tot = (lp_y_g_xv[yp]) * (1 + jnp.log(50)) + lp_v
-                        #lp_y_g_xv_tot = lp_y_g_xv[yp] - lp_v
-                        #lp_y_g_xv_tot = (lp_y_g_xv[yp]) * (1 + jnp.log(100))
-                        #lp_y_g_xv_tot = lp_y_g_xv[yp]
+                        tot_devs = lp_y_g_xv[yp].shape[3] * lp_y_g_xv[yp].shape[4] * lp_y_g_xv[yp].shape[5]
+                        lp_y_g_xv_tot = (lp_y_g_xv[yp] * (1 + jnp.log(tot_devs))) - lp_v
                     else:
                         lp_v = sum([lp_v_init[ltnt] for ltnt in e_ltnts])
+                        # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
                         sum_axes = (3, 4) if lvl == 'lot' else 3
                         lp_y_g_xv = {y: jnp.sum(lp_y_g_xv[y], axis=sum_axes) for y in lp_y_g_xv}
-                        # Element-wise addition of log-probabilities across different observe variables now that the dimensions match
+                        tot_samples = e.chp * e.lot if lvl == 'chp' else e.lot
                         # Subtract the sample probability p(v|x) for each to avoid biasing resamples towards the prior values
-                        lp_y_g_xv_tot = (sum(lp_y_g_xv.values()) * (1 + jnp.log(25))) - lp_v # TODO: Auto determine the v dimension size
-
+                        lp_y_g_xv_tot = (sum(lp_y_g_xv.values()) * (1 + jnp.log(tot_samples))) - lp_v
 
                     # Sum of all p_marg array elements must be 1 for resampling via random choice
                     resample_probs = lp_y_g_xv_tot - logsumexp(lp_y_g_xv_tot, axis=1, keepdims=True)
-                    # Resample according to relative likelihood, need to resample indices so that resamples are the same for each lot-level latent variable
+                    # Resample according to relative likelihood, need to resample indices so that resamples are the same
+                    # for each latent variable
                     if lvl == 'lot':
                         dims = (n_x, n_y, e.lot)
                     elif lvl == 'chp':
@@ -262,12 +319,10 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
 
     # Final logp
     lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
-    lp_v_np = np.array(lp_v_g_x)
-    print(f'LP-V mean - {jnp.mean(lp_v_g_x)}, std dev - {jnp.std(lp_v_g_x)}, min - {jnp.min(lp_v_g_x)}, max - {jnp.max(lp_v_g_x)}')
     lp_y_g_xv = spm.logp_new(kdum, test_dims, test_conds, y_s_t, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'], batch_dims)
-    lp_y_np = np.array(lp_y_g_xv)
-    print(f'LP-Y mean - {jnp.mean(lp_y_g_xv)}, std dev - {jnp.std(lp_y_g_xv)}, min - {jnp.min(lp_y_g_xv)}, max - {jnp.max(lp_y_g_xv)}')
     lp_y_g_x = logsumexp(lp_v_g_x + lp_y_g_xv, axis=1)
+    perf_stats['lp_v_g_x_std_dev'] = jnp.mean(jnp.std(lp_v_g_x, axis=1))
+    perf_stats['lp_y_g_xv_std_dev'] = jnp.mean(jnp.std(lp_y_g_xv, axis=1))
     return lp_y_g_x, perf_stats
 
 

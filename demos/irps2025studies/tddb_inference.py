@@ -45,10 +45,10 @@ def tddb_inference():
     # frequentist techniques to compare. Only temperature acceleration considered.
     # Define the simulation test
     tl, tm, th = 85 + CELSIUS_TO_KELVIN, 125 + CELSIUS_TO_KELVIN, 145 + CELSIUS_TO_KELVIN
-    test_s = stratcona.ReliabilityTest(
+    test_s = stratcona.TestDef('smol',
         {'el': {'lot': 1, 'chp': 1}, 'em': {'lot': 1, 'chp': 1}, 'eh': {'lot': 1, 'chp': 1}},
         {'el': {'temp': tl, 'vg': 1.1}, 'em': {'temp': tm, 'vg': 1.1}, 'eh': {'temp': th, 'vg': 1.1}})
-    test_l = stratcona.ReliabilityTest(
+    test_l = stratcona.TestDef('large',
         {'el': {'lot': 7, 'chp': 7}, 'em': {'lot': 7, 'chp': 7}, 'eh': {'lot': 7, 'chp': 7}},
         {'el': {'temp': tl, 'vg': 1.1}, 'em': {'temp': tm, 'vg': 1.1}, 'eh': {'temp': th, 'vg': 1.1}})
     fails_s = {'el': {}, 'em': {}, 'eh': {}}
@@ -286,7 +286,7 @@ def tddb_inference():
     am.set_field_use_conditions({'temp': 55 + CELSIUS_TO_KELVIN})
 
     # Sample some curves from the prior predictive
-    test = stratcona.ReliabilityTest(
+    test = stratcona.TestDef('single',
         {'e': {'lot': 1, 'chp': 1}},
         {'e': {'temp': 300, 'vg': 1.1}, 'em': {'temp': tm, 'vg': 1.1}, 'eh': {'temp': th, 'vg': 1.1}})
     rng = rand.key(48408)

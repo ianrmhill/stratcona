@@ -89,7 +89,7 @@ class ReliabilityModel():
     hyl_info: dict[dict]
 
     def __init__(self, name, spm, param_vals, hyl_sites, prior, hyl_info, ltnt_sites,
-                 ltnt_subsample_sites, obs_sites, meas_counts, pred_sites, fail_sites):
+                 ltnt_subsample_sites, obs_sites, meas_counts, obs_noise, pred_sites, fail_sites):
         self.name = name
         self.spm = spm
 
@@ -104,6 +104,7 @@ class ReliabilityModel():
 
         self.observes = obs_sites
         self.obs_per_chp = meas_counts
+        self.obs_noise = obs_noise
 
         self.predictors = pred_sites
         self.fail_criteria = fail_sites
@@ -117,7 +118,7 @@ class ReliabilityModel():
         # TODO
         pass
 
-    def sample(self, rng_key: rand.key, test: ReliabilityTest, num_samples: tuple = (), keep_sites: list = None,
+    def sample(self, rng_key: rand.key, test: TestDef, num_samples: tuple = (), keep_sites: list = None,
                    conditionals: dict = None, full_trace=False, alt_priors=None):
         # Convert any keep_sites that need more complex node names
         if keep_sites is not None:
@@ -156,12 +157,12 @@ class ReliabilityModel():
 
         return wrapped(keys, conditionals)
 
-    def logp(self, rng_key: rand.key, test: ReliabilityTest, site_vals: dict, conditional: dict | None, dims: tuple = (), sum_lps=True):
+    def logp(self, rng_key: rand.key, test: TestDef, site_vals: dict, conditional: dict | None, dims: tuple = (), sum_lps=True):
 
         def get_log_prob(rng, vals, cond):
             mdl = self.spm if cond is None else condition(self.spm, data=cond)
             seeded = seed(mdl, rng)
-            tr = trace(seeded).get_trace(test.config, test.conditions, self.hyl_beliefs, self.param_vals)
+            tr = trace(seeded).get_trace(test.dims, test.conds, self.hyl_beliefs, self.param_vals)
             lp = 0 if sum_lps else {}
             for site in vals:
                 if sum_lps:
@@ -179,9 +180,9 @@ class ReliabilityModel():
         keys = jnp.reshape(rand.split(rng_key, size), dims)
         return wrapped(keys, site_vals, conditional)
 
-    @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'keep_sites'])
+    @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'keep_sites', 'full_trace', 'compute_predictors'])
     def sample_new(self, rng_key: rand.key, test_dims: frozenset[ExpDims], test_conds: dict, batch_dims: tuple = (),
-                   keep_sites: tuple = None, conditionals: dict = None, full_trace=False):
+                   keep_sites: tuple = None, conditionals: dict = None, full_trace=False, compute_predictors=False):
         # Convert any keep_sites that need more complex node names
         if keep_sites is not None:
             sites = []
@@ -208,7 +209,7 @@ class ReliabilityModel():
         def sampler(rng, set_vals):
             mdl = self.spm if set_vals is None else condition(self.spm, data=set_vals)
             seeded = seed(mdl, rng)
-            tr = trace(seeded).get_trace(test_dims, test_conds, priors, self.param_vals)
+            tr = trace(seeded).get_trace(test_dims, test_conds, priors, self.param_vals, compute_predictors=compute_predictors)
             samples = {site: tr[site] if full_trace else tr[site]['value'] for site in tr}
             return dict((k, samples[k]) for k in sites) if sites is not None else samples
 

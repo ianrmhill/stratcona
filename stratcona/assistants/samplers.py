@@ -25,7 +25,7 @@ def iter_sampler(possible_vals, cycle_infinitely: bool = True):
     """
     iterator = cycle(possible_vals) if cycle_infinitely else iter(possible_vals)
 
-    def _():
+    def _(rng_key):
         return next(iterator)
     return _
 

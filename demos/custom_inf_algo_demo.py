@@ -18,9 +18,6 @@ from io import StringIO
 import seaborn as sb
 from matplotlib import pyplot as plt
 
-import gerabaldi
-from gerabaldi.models import *
-
 import os
 import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
@@ -30,6 +27,106 @@ import stratcona
 
 BOLTZ_EV = 8.617e-5
 CELSIUS_TO_KELVIN = 273.15
+
+
+def simple_high_dev_count():
+    # Define the simple model
+    mb = stratcona.SPMBuilder('barebones')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('x', dists.Normal, {'loc': 1.3, 'scale': 0.0001})
+    mb.add_hyperlatent('xs', dists.Normal, {'loc': 1, 'scale': 0.0001}, var_tf)
+    mb.add_latent('v', nom='x', dev='xs')
+    mb.add_params(ys=0.04)
+    mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 100)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('bare', {'e': {'lot': 1, 'chp': 1}}, {'e': {}})
+    am.set_test_definition(d)
+    k = rand.key(3737)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'y': y_s['e_y']}}
+    print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'x': {'loc': 1.2, 'scale': 0.2}, 'xs': {'loc': 0.9, 'scale': 0.2}}
+    perf = am.do_inference_is(y, n_x=1000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'x': {'loc': 1.2, 'scale': 0.2}, 'xs': {'loc': 0.9, 'scale': 0.2}}
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
+def simple_chip_level():
+    # Define the simple model
+    mb = stratcona.SPMBuilder('barebones')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('x', dists.Normal, {'loc': 6.8, 'scale': 0.0001})
+    mb.add_hyperlatent('xsd', dists.Normal, {'loc': 3, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('xsc', dists.Normal, {'loc': 6, 'scale': 0.0001}, var_tf)
+    mb.add_latent('v', nom='x', dev='xsd', chp='xsc')
+    mb.add_params(ys=0.1)
+    mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 5)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('bare', {'e': {'lot': 1, 'chp': 20}}, {'e': {}})
+    am.set_test_definition(d)
+    k = rand.key(9784)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'y': y_s['e_y']}}
+    print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1},
+                             'xsd': {'loc': 4, 'scale': 2}, 'xsc': {'loc': 4, 'scale': 2}}
+    perf = am.do_inference_is(y, n_x=10_000, n_v=1_000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1},
+                             'xsd': {'loc': 4, 'scale': 2}, 'xsc': {'loc': 4, 'scale': 2}}
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
+def simple_all_level():
+    # Define the simple model
+    mb = stratcona.SPMBuilder('barebones')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('x', dists.Normal, {'loc': 6.8, 'scale': 0.0001})
+    mb.add_hyperlatent('xsd', dists.Normal, {'loc': 3, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('xsc', dists.Normal, {'loc': 6, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('xsl', dists.Normal, {'loc': 3, 'scale': 0.0001}, var_tf)
+    mb.add_latent('v', nom='x', dev='xsd', chp='xsc', lot='xsl')
+    mb.add_params(ys=0.1)
+    mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 4)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('bare', {'e': {'lot': 5, 'chp': 5}}, {'e': {}})
+    am.set_test_definition(d)
+    k = rand.key(6536)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'y': y_s['e_y']}}
+    print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1}, 'xsd': {'loc': 4, 'scale': 1},
+                             'xsc': {'loc': 5, 'scale': 1}, 'xsl': {'loc': 4, 'scale': 1}}
+    perf = am.do_inference_is(y, n_x=10_000, n_v=500)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1}, 'xsd': {'loc': 4, 'scale': 1},
+                             'xsc': {'loc': 5, 'scale': 1}, 'xsl': {'loc': 4, 'scale': 1}}
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
 
 
 def demo_custom_inference():
@@ -74,7 +171,7 @@ def demo_custom_inference():
     ####################################################
     # Define the HTOL test that the experimental data was collected from
     ####################################################
-    htol_end_test = stratcona.ReliabilityTest({'e': {'lot': 5, 'chp': 5}, 'f': {'lot': 5, 'chp': 5}},
+    htol_end_test = stratcona.TestDef('htol', {'e': {'lot': 5, 'chp': 5}, 'f': {'lot': 5, 'chp': 5}},
                                               {'e': {'temp': 125 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000},
                                                'f': {'temp': 55 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000}})
     am.set_test_definition(htol_end_test)
@@ -112,7 +209,7 @@ def demo_custom_inference():
                              'e_aa_nom': {'loc': 5, 'scale': 2}}
 
     start_time = time.time()
-    am.do_inference_mhgibbs(y)
+    am.do_inference_mhgibbs(y, n_v=400, beta=0.1)
     print(f'Custom inference time: {time.time() - start_time}')
     print(am.relmdl.hyl_beliefs)
 
@@ -186,11 +283,11 @@ def demo_custom_nom_only():
                              'e_aa_nom': {'loc': 5, 'scale': 2}}
 
     start_time = time.time()
-    #am.do_inference_mhgibbs(y, num_chains=4, beta=0.1)
-    am.do_inference_custom(y, n_x=10_000)
+    am.do_inference_mhgibbs(y, num_chains=4, beta=0.1)
+    #am.do_inference_custom(y, n_x=10_000)
     print(f'Custom inference time: {time.time() - start_time}')
     print(am.relmdl.hyl_beliefs)
 
 
 if __name__ == '__main__':
-    demo_custom_inference()
+    simple_all_level()
