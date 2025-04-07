@@ -60,10 +60,10 @@ def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
     # Resample evaluated x_s according to posterior probabilities
     lw_n = lp_ygx_store - logsumexp(lp_ygx_store)
     # TEMP
-    df = pd.DataFrame({'lp': lw_n - max(lw_n), 'x': x_s_store['x'], 'xsc': x_s_store['xsc']})
-    seaborn.scatterplot(df, x='x', y='xsc', palette='viridis', hue='lp', hue_norm=(-10, 0))
-    plt.grid()
-    plt.show()
+    #df = pd.DataFrame({'lp': lw_n - max(lw_n), 'x': x_s_store['x'], 'xsc': x_s_store['xsc']})
+    #seaborn.scatterplot(df, x='x', y='xsc', palette='viridis', hue='lp', hue_norm=(-10, 0))
+    #plt.grid()
+    #plt.show()
 
     inds_arr = jnp.arange(n_x)
     inds = rand.choice(krs, inds_arr, (n_x,), True, jnp.exp(lw_n))

@@ -9,7 +9,7 @@ import jax.random as rand
 
 import engine.bed
 from stratcona.engine.inference import inference_model, custom_inference, custom_mhgibbs_new, inf_is_new
-from stratcona.engine.bed import bed_run, run_bed_newest, pred_bed_apr25
+from stratcona.engine.bed import pred_bed_apr25, eig
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement, TestDef
 
 
@@ -91,16 +91,7 @@ class AnalysisManager:
             p.set_xlabel('Failure Time (years)', fontsize='medium')
             p.set_ylabel('Probability Density')
 
-    def find_best_experiment(self, l, n, m, exp_sampler, utility_functions=None):
-        rng = self._derive_key()
-        return bed_run(rng, l, n, m, exp_sampler, self.relmdl, utility_functions, self.field_test)
-
-    def determine_best_test_apr25(self, n_d, n_y, n_v, n_x, exp_sampler, u_funcs=engine.bed.eig_new):
+    def determine_best_test_apr25(self, n_d, n_y, n_v, n_x, exp_sampler, u_funcs=engine.bed.eig):
         rng = self._derive_key()
         return pred_bed_apr25(rng, n_d, n_y, n_v, n_x, exp_sampler, self.relmdl,
                               u_funcs, self.field_test)
-
-    def do_bed(self, n_d, n_y, n_v, n_x, exp_sampler, utility_func=engine.bed.eig_new, trgt_lfspn=None):
-        rng = self._derive_key()
-        return run_bed_newest(rng, n_d, n_y, n_v, n_x, exp_sampler, self.relmdl,
-                              utility=utility_func, d_field=self.field_test, trgt_lifespan=trgt_lfspn)

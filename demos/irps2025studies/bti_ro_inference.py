@@ -13,7 +13,6 @@ import time
 from functools import partial
 import json
 import pandas as pd
-from io import StringIO
 
 import seaborn as sb
 from matplotlib import pyplot as plt
@@ -41,71 +40,6 @@ def likelihood_to_alpha(probs, max_alpha=0.5):
     return alphas
 
 
-def avg_same_time_measurements(measd, average=True, normalize=False):
-    avgd = pd.DataFrame()
-    t_prev = -10000
-    # Average the measurements of the same parameter taken near the same time relative to the total test length
-    for prm in measd['param'].unique():
-        prm_meas = measd.loc[measd['param'] == prm]
-        # Averaging for repeated measurement of devices during each measurement time step
-        for lot in range(prm_meas['lot #'].min(), prm_meas['lot #'].max() + 1):
-            for chp in range(prm_meas['chip #'].min(), prm_meas['chip #'].max() + 1):
-                for dev in range(prm_meas['device #'].min(), prm_meas['device #'].max() + 1):
-                    # For every individual device measured, we find measured times that are close together (+-6 mins)
-                    dev_meas = prm_meas.loc[(prm_meas['device #'] == dev) &
-                                            (prm_meas['chip #'] == chp) &
-                                            (prm_meas['lot #'] == lot)]
-                    for t in dev_meas['time']:
-                        # Only process each time 'group' once
-                        if t <= t_prev - 360 or t >= t_prev + 360:
-                            meas_group = dev_meas.loc[(dev_meas['time'] >= t - 360) & (dev_meas['time'] <= t + 360)]
-                            # Find the average of all the measurements taken near the specified time
-                            avg = meas_group['measured'].mean()
-                            dev_meas.loc[dev_meas['time'] == t, 'measured'] = avg
-                            # Assemble the new dataframe by appending each averaged row in turn
-                            avgd = pd.concat((avgd, dev_meas.loc[dev_meas['time'] == t]), ignore_index=True)
-                            t_prev = t
-    return avgd
-
-
-def diff_from_max_val(measd, return_maxes=False):
-    vals = measd.copy()
-    for prm in vals['param'].unique():
-        prm_data = vals.loc[vals['param'] == prm]
-        for lot in range(prm_data['lot #'].min(), prm_data['lot #'].max() + 1):
-            for chp in range(prm_data['chip #'].min(), prm_data['chip #'].max() + 1):
-                for dev in range(prm_data['device #'].min(), prm_data['device #'].max() + 1):
-                    max_val = prm_data.loc[(prm_data['device #'] == dev) & (prm_data['chip #'] == chp) & (
-                            prm_data['lot #'] == lot), 'measured'].max()
-                    if return_maxes:
-                        vals.loc[(vals['param'] == prm) & (vals['device #'] == dev) & (vals['chip #'] == chp) & (
-                                vals['lot #'] == lot), 'measured'] = max_val
-                    else:
-                        vals.loc[(vals['param'] == prm) & (vals['device #'] == dev) & (vals['chip #'] == chp) & (
-                                vals['lot #'] == lot), 'measured'] -= max_val
-    return vals
-
-
-def rename_series(measd, prm, new_name, device):
-    new_df = measd.copy()
-    new_df.loc[new_df['param'] == prm, 'device #'] = device
-    new_df.loc[new_df['param'] == prm, 'param'] = new_name
-    return new_df
-
-
-def load_gerabaldi_report(file: str = None):
-    """Load in a test report exported from the Gerabaldi simulator."""
-    if file:
-        with open(file, 'r') as f:
-            json_rprt = json.load(f)
-    else:
-        raise Exception('No report to load specified')
-    # Convert the pandas dataframes
-    json_rprt['Measurements'] = pd.read_json(StringIO(json_rprt['Measurements']))
-    json_rprt['Test Summary'] = pd.read_json(StringIO(json_rprt['Test Summary']))
-    return json_rprt
-
-
 def vth_sensor_inference():
     """
     This study shows the application of Bayesian inference to an NBTI physical model based on experimental data. The
@@ -114,33 +48,11 @@ def vth_sensor_inference():
     """
 
     ####################################################
-    # First load in and process the experimental data used for inference. TODO: Only save the processed data in the repo
+    # First load in the experimental data used for inference.
     ####################################################
-    h_data = load_gerabaldi_report('C:/Users/IanHi/OneDrive/Research/Test Data/IDFBCAMP/1500HourTest/idfbcamp_htol_lt_meas.json')
-    h_data = h_data['Measurements']
-    # Remove the measurement time that was only conducted for one of the lots
-    h_data.drop(h_data[h_data['time'] == 3034800].index, inplace=True)
-    h_data.drop(h_data[h_data['time'] == 3034860].index, inplace=True)
-    h_data.drop(h_data[h_data['time'] == 3034920].index, inplace=True)
-    # Drop all but the BTI RO sensor measurements
-    sensor_types = ['nbti_std_ro', 'nbti_iso_ro']
-    h_data = h_data[h_data['param'].isin(sensor_types)]
-    # Average the three measurements taken at each 100 hour mark
-    h_data = avg_same_time_measurements(h_data)
-    # Now extract the vth shift as the difference from the max value
-    h_data = diff_from_max_val(h_data)
-    # Don't care about which board the chip was on, just the chip IDs
-    h_data['chip #'] = h_data['chip #'] + (2 * h_data['lot #'])
-
-    deg_data = {}
-    for t in jnp.linspace(0, 3_600_000, 11):
-        hours = int(t / 3600)
-        deg_data[f't{hours}'] = {}
-        for sensor in sensor_types:
-            vth = h_data.loc[(h_data['param'] == sensor) & (h_data['time'] == t)].drop(columns=['param', 'lot #', 'time'])
-            vth = vth.sort_values(['device #', 'chip #'], ascending=[True, True])
-            vth_array = jnp.array(vth['measured'].values).reshape((vth['device #'].nunique(), vth['chip #'].nunique(), 1))
-            deg_data[f't{hours}'][sensor] = vth_array * -0.001
+    with open('./bti_ro_data.json', 'r') as f:
+        deg_data = json.load(f)
+    deg_data['t1000']['nbti_std_ro'] = jnp.array(deg_data['t1000']['nbti_std_ro'])
 
     ####################################################
     # Define the NBTI empirical model within the SPM framework for inference
@@ -177,15 +89,15 @@ def vth_sensor_inference():
     ####################################################
     # Define the HTOL test that the experimental data was collected from
     ####################################################
-    htol_end_test = stratcona.ReliabilityTest({'t1000': {'lot': 1, 'chp': 4}},
-                                              {'t1000': {'temp': 125 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000}})
+    htol_end_test = stratcona.TestDef('htol_end', {'t1000': {'lot': 1, 'chp': 4}},
+                                      {'t1000': {'temp': 125 + CELSIUS_TO_KELVIN, 'vdd': 0.88, 'time': 1000}})
     am.set_test_definition(htol_end_test)
 
     ######################################################
     # Render the SPM for viewing
     ######################################################
-    dims = htol_end_test.config
-    conds = htol_end_test.conditions
+    dims = htol_end_test.dims
+    conds = htol_end_test.conds
     priors = am.relmdl.hyl_beliefs
     params = am.relmdl.param_vals
     npyro.render_model(am.relmdl.spm, model_args=(dims, conds, priors, params),

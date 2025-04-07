@@ -45,7 +45,7 @@ def tddb_inference():
     # frequentist techniques to compare. Only temperature acceleration considered.
     # Define the simulation test
     tl, tm, th = 85 + CELSIUS_TO_KELVIN, 125 + CELSIUS_TO_KELVIN, 145 + CELSIUS_TO_KELVIN
-    test_s = stratcona.TestDef('smol',
+    test_s = stratcona.TestDef('small',
         {'el': {'lot': 1, 'chp': 1}, 'em': {'lot': 1, 'chp': 1}, 'eh': {'lot': 1, 'chp': 1}},
         {'el': {'temp': tl, 'vg': 1.1}, 'em': {'temp': tm, 'vg': 1.1}, 'eh': {'temp': th, 'vg': 1.1}})
     test_l = stratcona.TestDef('large',
@@ -128,39 +128,8 @@ def tddb_inference():
     vars['ie']['el_l'], vars['ie']['em_l'], vars['ie']['eh_l'] = ttfs['l']['ie']['el']['ttf'].var(), ttfs['l']['ie']['em']['ttf'].var(), ttfs['l']['ie']['eh']['ttf'].var()
     fails_l['el']['ie'], fails_l['em']['ie'], fails_l['eh']['ie'] = convert(ttfs['l']['ie']['el']), convert(ttfs['l']['ie']['em']), convert(ttfs['l']['ie']['eh'])
 
-    # V model
     # Note: With constant voltage, V model ends up having identical form to the E model just with a prescale, so
     #       it is not used here
-    #mb_v = stratcona.SPMBuilder(mdl_name='V-Model')
-
-    #def v_model_ttf(temp, a_o, beta, e_aa, vg, k):
-    #    ttf_hours = 1e-5 * a_o * jnp.exp(-beta * vg) * jnp.exp(e_aa / (k * temp))
-    #    ttf_years = ttf_hours / 8760
-    #    return ttf_years
-
-    #mb_v.add_params(a_o_nom=9.8, a_o_dev=0.04, a_o_chp=0.02, a_o_lot=0.04)
-    #mb_v.add_latent('a_o', nom='a_o_nom', dev='a_o_dev', chp='a_o_chp', lot='a_o_lot')
-    #mb_v.add_params(beta_nom=1.1, beta_dev=0.05, beta_chp=0.1, beta_lot=0.05)
-    #mb_v.add_latent('beta', nom='beta_nom', dev='beta_dev', chp='beta_chp', lot='beta_lot')
-    #mb_v.add_params(e_aa_nom=0.72, e_aa_dev=0.01, e_aa_chp=0.01, e_aa_lot=0.02)
-    #mb_v.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_dev', chp='e_aa_chp', lot='e_aa_lot')
-
-    #mb_v.add_params(k=BOLTZ_EV, ttf_var=0.001)
-    #mb_v.add_dependent('ttf_base', v_model_ttf)
-    #mb_v.add_measured('ttf', dists.Normal, {'loc': 'ttf_base', 'scale': 'ttf_var'}, 10)
-
-    #means['v'], vars['v'] = {}, {}
-    #am_v = stratcona.AnalysisManager(mb_v.build_model(), rng_seed=1299323)
-    #am_v.set_test_definition(test_s)
-    #ttfs['s']['v'] = am_v.sim_test_measurements()
-    #means['v']['el_s'], means['v']['em_s'], means['v']['eh_s'] = ttfs['s']['v']['el']['ttf'].mean(), ttfs['s']['v']['em']['ttf'].mean(), ttfs['s']['v']['eh']['ttf'].mean()
-    #vars['v']['el_s'], vars['v']['em_s'], vars['v']['eh_s'] = ttfs['s']['v']['el']['ttf'].var(), ttfs['s']['v']['em']['ttf'].var(), ttfs['s']['v']['eh']['ttf'].var()
-    #fails_s['el']['v'], fails_s['em']['v'], fails_s['eh']['v'] = convert(ttfs['s']['v']['el']), convert(ttfs['s']['v']['em']), convert(ttfs['s']['v']['eh'])
-    #am_v.set_test_definition(test_l)
-    #ttfs['l']['v'] = am_v.sim_test_measurements()
-    #means['v']['el_l'], means['v']['em_l'], means['v']['eh_l'] = ttfs['l']['v']['el']['ttf'].mean(), ttfs['l']['v']['em']['ttf'].mean(), ttfs['l']['v']['eh']['ttf'].mean()
-    #vars['v']['el_l'], vars['v']['em_l'], vars['v']['eh_l'] = ttfs['l']['v']['el']['ttf'].var(), ttfs['l']['v']['em']['ttf'].var(), ttfs['l']['v']['eh']['ttf'].var()
-    #fails_l['el']['v'], fails_l['em']['v'], fails_l['eh']['v'] = convert(ttfs['l']['v']['el']), convert(ttfs['l']['v']['em']), convert(ttfs['l']['v']['eh'])
 
     # Power law model, reference: Interplay of voltage and temperature acceleration of oxide breakdown for
     # ultra-thin gate oxides: https://doi.org/10.1016/S0038-1101(02)00151-X

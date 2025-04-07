@@ -61,8 +61,8 @@ def weibull_inference():
     # Define the simulation test
     num_devs, num_chps, num_lots = 8, 5, 3
     test_conds = {'e': {'temp': 130 + CELSIUS_TO_KELVIN, 'vg': 1.1}}
-    test_130 = stratcona.ReliabilityTest({'e': {'lot': num_lots, 'chp': num_chps}}, test_conds)
-    test_130_single = stratcona.ReliabilityTest({'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, test_conds)
+    test_130 = stratcona.TestDef('t130', {'e': {'lot': num_lots, 'chp': num_chps}}, test_conds)
+    test_130_single = stratcona.TestDef('t130_1', {'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, test_conds)
 
     # Define the SPM for simulation and Weibull analysis
     mb_w = stratcona.SPMBuilder(mdl_name='weibull-2p')
@@ -77,7 +77,7 @@ def weibull_inference():
     mb_w.add_intermediate('sc_pos', lambda sc: jnp.log(1 + jnp.exp(sc)))
     mb_w.add_observed('ttf', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'}, num_devs)
 
-    am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633839)
+    am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633836)
 
     # Simulate some Weibull distributed failure data
     am_w.set_test_definition(test_130)
@@ -256,7 +256,7 @@ def weibull_inference():
     pri_fits = weibull_cdf(x, prm_samples['e_ttf_k_pos'], prm_samples['e_ttf_sc_pos'])
 
     start_time = time.time()
-    am_w.do_inference_custom(ttfs, test_130)
+    am_w.do_inference(ttfs, test_130)
     print(f'Inference time taken: {time.time() - start_time}')
     print(am_w.relmdl.hyl_beliefs)
     post_cond = {'e': {'k_nom': am_w.relmdl.hyl_beliefs['k_nom']['loc'], 'sc_nom': am_w.relmdl.hyl_beliefs['sc_nom']['loc'],
@@ -282,8 +282,8 @@ def weibull_inference():
     ######################################################
     # Render the SPM for viewing
     ######################################################
-    dims = test_130.config
-    conds = test_130.conditions
+    dims = test_130.dims
+    conds = test_130.conds
     priors = am_w.relmdl.hyl_beliefs
     params = am_w.relmdl.param_vals
     npyro.render_model(am_w.relmdl.spm, model_args=(dims, conds, priors, params),
