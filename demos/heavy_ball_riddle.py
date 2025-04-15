@@ -29,9 +29,10 @@ def riddle_demo():
         return scale_state
 
     mb.add_hyperlatent('i_heavy_ball', dists.Categorical, {'probs': jnp.array([0.32, 0.32, 0.06, 0.06, 0.06, 0.06, 0.06, 0.06])})
+    #mb.add_hyperlatent('i_heavy_ball', dists.Categorical, {'probs': jnp.array([0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125])})
 
     mb.add_intermediate('scale_pos', scale_weigh)
-    mb.add_params(outcome_var=0.03)
+    mb.add_params(outcome_var=0.0001)
     mb.add_observed('outcome', dists.Normal, {'loc': 'scale_pos', 'scale': 'outcome_var'}, 1)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=92764927)
@@ -52,20 +53,20 @@ def riddle_demo():
         am.relmdl.i_s_custom = i_s_ball_pos
 
     exp_sampler = stratcona.assistants.iter_sampler([
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 2, 2, 2, 2, 2, 2])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 2, 2, 2, 2])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 2, 0, 1, 1, 2, 2, 2])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 0, 1, 2, 2])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 2, 0, 1, 0, 1, 1, 2])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([2, 2, 0, 0, 0, 1, 1, 1])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 0, 0, 1, 1, 1, 2, 2])}}),
-        stratcona.ReliabilityTest({'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 0, 1, 0, 1])}}),
+        stratcona.TestDef('1ps', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 2, 2, 2, 2, 2, 2])}}),
+        stratcona.TestDef('2ps', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 2, 2, 2, 2])}}),
+        stratcona.TestDef('2ps2', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 2, 0, 1, 1, 2, 2, 2])}}),
+        stratcona.TestDef('3ps', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 0, 1, 2, 2])}}),
+        stratcona.TestDef('3ps2', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 2, 0, 1, 0, 1, 1, 2])}}),
+        stratcona.TestDef('3ps3', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([2, 2, 0, 0, 0, 1, 1, 1])}}),
+        stratcona.TestDef('3ps4', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 0, 0, 1, 1, 1, 2, 2])}}),
+        stratcona.TestDef('4ps', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'placements': jnp.array([0, 1, 0, 1, 0, 1, 0, 1])}}),
     ])
     if compute_exact:
         eigs = am.find_best_experiment(7, 3, 8, exp_sampler)
     else:
-        eigs = am.find_best_experiment(7, 10, 10000, exp_sampler)
-    eigs_bits = [eigs[i]['eig'] * 1.442695 for i in range(len(eigs))]
+        eigs, stats = am.determine_best_test_apr25(8, 10000, 1, 10000, exp_sampler)
+    eigs_bits = [eigs[i]['utility'] * 1.442695 for i in range(len(eigs))]
     print(eigs_bits)
 
     # EIG of one per side: 1.061278, two: 1.5, three: 1.561278, four: 1.0 (bits)

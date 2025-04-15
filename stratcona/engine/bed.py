@@ -149,8 +149,8 @@ def h_x_g_y(lw, lp_x):
 
 
 @jax.jit
-def eig(ig, p_y):
-    return jnp.sum(ig * p_y)
+def eig(ig):
+    return jnp.sum(ig) / ig.size
 
 
 @jax.jit
@@ -198,7 +198,11 @@ def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, fie
 
         # Now compute summary statistics for each sample 'y'
         metrics = {}
-        for m in [prm for prm in signature(utility).parameters if prm not in utility.keywords]:
+        if hasattr(utility, 'keywords'):
+            ms = [prm for prm in signature(utility).parameters if prm not in utility.keywords]
+        else:
+            ms = [prm for prm in signature(utility).parameters]
+        for m in ms:
             # Start by supporting IG and QX%-LBCI metrics, ideally QX%-HDCR too
             match m:
                 case 'ig':
@@ -211,6 +215,8 @@ def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, fie
                                          conditionals=x_s_tz, compute_predictors=True)
                     metrics[m] = qx_lbci(w_z, z_s['field_lifespan'], 0.01)
                 case 'p_y':
+                    # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
+                    #       according to p(y)
                     # Always have p_y sum to 1 to make calculation of summary statistics easier
                     lp_y_normed = lp_y - logsumexp(lp_y)
                     metrics[m] = jnp.exp(lp_y_normed).flatten()

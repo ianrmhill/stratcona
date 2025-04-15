@@ -119,9 +119,9 @@ def electromigration_qualification():
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
     if run_bed_analysis:
-        def em_u_func(ig, qx_lbci, p_y, trgt):
-            eig = jnp.sum(ig * p_y)
-            mtrpp = jnp.sum(jnp.where(qx_lbci > trgt, p_y, 0))
+        def em_u_func(ig, qx_lbci, trgt):
+            eig = jnp.sum(ig) / ig.size
+            mtrpp = jnp.sum(jnp.where(qx_lbci > trgt, 1, 0)) / qx_lbci.size
             return {'eig': eig, 'qx_lbci_pp': mtrpp}
         em_u_func = partial(em_u_func, trgt=am.relreq.target_lifespan)
 
