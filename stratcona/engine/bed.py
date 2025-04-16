@@ -162,7 +162,58 @@ def qx_lbci(w, z, q):
     return w_quantile(z_ty, w_t, q)
 
 
-def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, field_d=None, trgt_lifespan=None):
+@partial(jax.jit, static_argnames=['spm', 'd_dims', 'batch_dims', 'utility', 'fd_dims'])
+def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd_dims, fd_conds):
+    n_y, n_v, n_x = batch_dims
+    k, kv, ky, ku, kz, kd = rand.split(k, 6)
+    # Sample observations from joint prior y~p(x,v,y|d), keeping y independent of the already sampled x and v values
+    y_s = spm.sample_new(ky, d_dims, d_conds, batch_dims=(n_y,), keep_sites=spm.observes)
+
+    # Compute the log likelihoods of each y given x via our specialized resampling algorithm to marginalize across
+    # the aleatoric uncertainty v
+    batch_dims = (n_x, n_v, n_y)
+    y_noise = spm.obs_noise
+    lp_y_g_x, v_marg_alg_stats = int_out_v(kv, spm, batch_dims, d_dims, d_conds, x_s, y_s, y_noise)
+
+    # Marginalize across epistemic uncertainty axis 'x'
+    lp_y = logsumexp(lp_y_g_x, axis=0, keepdims=True) - jnp.log(n_x)
+    # Now can compute the importance weights
+    lw_z = lp_y_g_x - lp_y
+    # Properties of algebra during the lp_y_g_x - lp_y step mean w_z_norm will always be the value of n_x
+    w_z = jnp.exp(lw_z)
+
+    # Now compute summary statistics for each sample 'y'
+    metrics = {}
+    if hasattr(utility, 'keywords'):
+        ms = [prm for prm in signature(utility).parameters if prm not in utility.keywords]
+    else:
+        ms = [prm for prm in signature(utility).parameters]
+    for m in ms:
+        # Start by supporting IG and QX%-LBCI metrics, ideally QX%-HDCR too
+        match m:
+            case 'ig':
+                h_xgy = h_x_g_y(lw_z, lp_x)
+                metrics[m] = h_x - h_xgy
+            case 'qx_lbci':
+                n_z = n_v
+                x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
+                z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
+                                     conditionals=x_s_tz, compute_predictors=True)
+                metrics[m] = qx_lbci(w_z, z_s['field_lifespan'], 0.01)
+            case 'p_y':
+                # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
+                #       according to p(y)
+                # Always have p_y sum to 1 to make calculation of summary statistics easier
+                lp_y_normed = lp_y - logsumexp(lp_y)
+                metrics[m] = jnp.exp(lp_y_normed).flatten()
+            case _:
+                raise Exception('Unsupported metric requested')
+
+    # Now compute the utility summary statistic for 'd' based on the metrics for each 'y' sample
+    return utility(**metrics)
+
+
+def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, field_d=None):
     k, kd, kx = rand.split(rng_key, 3)
     perf_stats = {}
     # Get the first proposal experiment design, need to sample here to get dummy input to x_s sample and lp_x logp
@@ -174,57 +225,13 @@ def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, fie
         lp_x = spm.logp_new(kx, d.dims, d.conds, site_vals=x_s, conditional=None, batch_dims=(n_x,))
         # Using importance sampling from prior: H[X] = (1/n_x) * SUM[-lp_x]
         h_x = jnp.sum(-lp_x) / n_x
+    else:
+        lp_x, h_x = 0, 0
 
     # We loop over sample test designs instead of vectorizing since test designs can modify dimensionality
     us = []
     for _ in range(n_d):
-        k, kv, ky, ku, kz, kd = rand.split(k, 6)
-        # Sample observations from joint prior y~p(x,v,y|d), keeping y independent of the already sampled x and v values
-        y_s = spm.sample_new(ky, d.dims, d.conds, batch_dims=(n_y,), keep_sites=spm.observes)
-
-        # Compute the log likelihoods of each y given x via our specialized resampling algorithm to marginalize across
-        # the aleatoric uncertainty v
-        batch_dims = (n_x, n_v, n_y)
-        y_noise = spm.obs_noise
-        lp_y_g_x, v_marg_alg_stats = int_out_v(kv, spm, batch_dims, d.dims, d.conds, x_s, y_s, y_noise)
-
-        # Marginalize across epistemic uncertainty axis 'x'
-        lp_y_g_x_maxes = jnp.max(lp_y_g_x, axis=0)
-        lp_y = logsumexp(lp_y_g_x, axis=0, keepdims=True) - jnp.log(n_x)
-        # Now can compute the importance weights
-        lw_z = lp_y_g_x - lp_y
-        # Properties of algebra during the lp_y_g_x - lp_y step mean w_z_norm will always be the value of n_x
-        w_z = jnp.exp(lw_z)
-
-        # Now compute summary statistics for each sample 'y'
-        metrics = {}
-        if hasattr(utility, 'keywords'):
-            ms = [prm for prm in signature(utility).parameters if prm not in utility.keywords]
-        else:
-            ms = [prm for prm in signature(utility).parameters]
-        for m in ms:
-            # Start by supporting IG and QX%-LBCI metrics, ideally QX%-HDCR too
-            match m:
-                case 'ig':
-                    h_xgy = h_x_g_y(lw_z, lp_x)
-                    metrics[m] = h_x - h_xgy
-                case 'qx_lbci':
-                    n_z = n_v
-                    x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
-                    z_s = spm.sample_new(kz, field_d.dims, field_d.conds, (n_x, n_z), keep_sites=spm.predictors,
-                                         conditionals=x_s_tz, compute_predictors=True)
-                    metrics[m] = qx_lbci(w_z, z_s['field_lifespan'], 0.01)
-                case 'p_y':
-                    # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
-                    #       according to p(y)
-                    # Always have p_y sum to 1 to make calculation of summary statistics easier
-                    lp_y_normed = lp_y - logsumexp(lp_y)
-                    metrics[m] = jnp.exp(lp_y_normed).flatten()
-                case _:
-                    raise Exception('Unsupported metric requested')
-
-        # Now compute the utility summary statistic for 'd' based on the metrics for each 'y' sample
-        u = utility(**metrics)
+        u = eval_u_of_d(k, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds)
         us.append({'design': d, 'utility': u})
         # Now update the test design for the next iteration, the final design (index n_d) is not used
         d = d_sampler(kd)

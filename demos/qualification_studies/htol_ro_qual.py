@@ -1,10 +1,12 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import time as t
-import numpy as np
-import pytensor.tensor as pt
-import pymc
+import numpyro.distributions as dist
+
+import jax.numpy as jnp
+
+import time as time
+from itertools import product
 
 import gerabaldi
 from gerabaldi.models import *
@@ -22,7 +24,7 @@ import stratcona
 
 def htol_demo():
     ### Define some constants ###
-    num_devices = 5
+    ro_count_per_chp = 4
     boltz_ev = 8.617e-5
     # 125C in Kelvin
     htol_temp = 398.15
@@ -31,35 +33,52 @@ def htol_demo():
     ### 1. Define the predictive wear-out model to infer                 ###
     ########################################################################
     ### Define the model we will use to fit degradation ###
-    mb = stratcona.ModelBuilder(mdl_name='HTOL Test')
+    mb = stratcona.SPMBuilder(mdl_name='Arrhenius')
 
     # Model provided in JEDEC's JEP122H as generally used NBTI degradation model, equation 5.3.1
-    def bti_vth_shift_empirical(a0, e_aa, temp, vdd, alpha, time, n):
-        return 1000 * (a0 * 0.001) * pt.exp((e_aa * 0.01) / (boltz_ev * temp)) * (vdd ** alpha) * (time ** n)
+    def bti_vth_shift_empirical(a0, e_aa, temp, vdd, alpha, time, k, n):
+        return 1000 * (a0 * 0.001) * jnp.exp((e_aa * 0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
 
-    mb.add_latent_variable('a0', pymc.Normal, {'mu': 6, 'sigma': 0.5})
-    mb.add_latent_variable('e_aa', pymc.Normal, {'mu': -5, 'sigma': 0.3})
-    mb.add_latent_variable('alpha', pymc.Normal, {'mu': 9.5, 'sigma': 0.5})
-    mb.add_latent_variable('n', pymc.Normal, {'mu': 0.4, 'sigma': 0.1})
+    # Generic Arrhenius model used by JEDEC for abstract-level lifespan extrapolation from accelerated conditions
+    def arrhenius_t_and_v(a, eaat, eaav, temp, volt):
+        return (0.1 * a) * jnp.exp((0.1 * eaat) / (boltz_ev * temp)) * jnp.exp((0.1 * eaav) / (boltz_ev * volt))
 
-    mb.define_experiment_params(['vdd', 'temp', 'time'], simultaneous_experiments=['lot1', 'lot2', 'lot3'],
-                                samples_per_observation={'all': num_devices})
+    def ro_freq(f0, df):
+        return f0 - df
 
-    mb.add_dependent_variable('delta_vth', bti_vth_shift_empirical)
-    mb.set_variable_observed('delta_vth', variability=25)
+    var_tf = dist.transforms.ComposeTransform([dist.transforms.SoftplusTransform(), dist.transforms.AffineTransform(0, 0.01)])
+    mb.add_hyperlatent('a_nom', dist.Normal, {'loc': 4, 'scale': 1})
+    mb.add_hyperlatent('a_dev', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('a_chp', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('a_lot', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('eaat_nom', dist.Normal, {'loc': 7, 'scale': 1})
+    mb.add_hyperlatent('eaat_dev', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('eaat_chp', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('eaat_lot', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('eaav_nom', dist.Normal, {'loc': 4, 'scale': 1})
+    mb.add_hyperlatent('eaav_dev', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('eaav_chp', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
+    mb.add_hyperlatent('eaav_lot', dist.Normal, {'loc': 4, 'scale': 1}, transform=var_tf)
 
-    # This function is the inverse of the degradation mechanism with a set failure point
-    mb.gen_lifespan_variable('fail_point', fail_bounds={'delta_vth': 0.3}, field_use_conds={'temp': htol_temp, 'vdd': 1.15})
+    mb.add_latent('a', 'a_nom', 'a_dev', 'a_chp', 'a_lot')
+    mb.add_latent('eaat', 'eaat_nom', 'eaat_dev', 'eaat_chp', 'eaat_lot')
+    mb.add_latent('eaav', 'eaav_nom', 'eaav_dev', 'eaav_chp', 'eaav_lot')
+
+    mb.add_intermediate('fit', arrhenius_t_and_v)
+    mb.add_intermediate('f', ro_freq)
+    mb.add_params(f0=20.0, fvar=1.0)
+    mb.add_observed('fmeas', dist.Normal, {'loc': 'f', 'scale': 'fvar'}, ro_count_per_chp)
+
+    #def slowest_ro(fmeas, fmin):
+    #    return jnp.any(fmeas < fmin)
+    #mb.add_fail_criterion('margin_violation', slowest_ro)
 
     ########################################################################
-    ### 2. Compile the model for use                                     ###
-    ########################################################################
-    tm = stratcona.TestDesignManager(mb)
-
-    tm.set_experiment_conditions({'lot1': {'vdd': 1.05, 'temp': htol_temp, 'time': 1000},
-                                  'lot2': {'vdd': 1.15, 'temp': htol_temp, 'time': 1000},
-                                  'lot3': {'vdd': 1.15, 'temp': htol_temp - 15, 'time': 1000}})
-    #tm.examine('prior_predictive')
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9283747)
+    am.set_field_use_conditions({'volt': 0.85, 'temp': 330})
+    tsample = stratcona.TestDef('sample_vals', {'b1': {'lot': 3, 'chp': 77}}, {'b1': {'volt': 0.85, 'temp': 330}})
+    am.set_test_definition()
+    am.sim_test_measurements('prior_predictive')
 
     #start_time = t.time()
     #estimate = tm.estimate_reliability(num_samples=3000)
@@ -68,20 +87,25 @@ def htol_demo():
 
     #plt.show()
 
+    t1 = stratcona.TestDef(
+        'htol', {'b1': {'lot': 1, 'chp': 77}, 'b2': {'lot': 1, 'chp': 77}, 'b3': {'lot': 1, 'chp': 77}},
+        {'b1': {'volt': 0.9, 'temp': 400}, 'b2': {'volt': 0.9, 'temp': 400}, 'b3': {'volt': 0.9, 'temp': 400}})
+    t2 = stratcona.TestDef(
+        'htol', {'b1': {'lot': 1, 'chp': 77}, 'b2': {'lot': 1, 'chp': 77}, 'b3': {'lot': 1, 'chp': 77}},
+        {'b1': {'volt': 0.9, 'temp': 350}, 'b2': {'volt': 0.9, 'temp': 400}, 'b3': {'volt': 0.9, 'temp': 425}})
+    possible_tests = [t1, t2]
+    exp_sampler = stratcona.assistants.iter_sampler(possible_tests)
+
     ########################################################################
     ### 3. Determine the best experiment to conduct                      ###
     ########################################################################
-    exp_sampler = stratcona.assistants.iterator.iter_sampler([
-        {'lot1': {'vdd': 1.05, 'temp': htol_temp, 'time': 1000, 'samples': 5},
-         'lot2': {'vdd': 1.15, 'temp': htol_temp, 'time': 1000, 'samples': 5},
-         'lot3': {'vdd': 1.15, 'temp': htol_temp - 15, 'time': 1000, 'samples': 5}}])
-
-    start_time = t.time()
-    tm.determine_best_test(exp_sampler, (-0.2, 1.2), num_tests_to_eval=1,
-                           num_obs_samples_per_test=200, num_ltnt_samples_per_test=200)
-    print(f"Test EIG estimation time: {t.time() - start_time} seconds")
+    start_time = time.time()
+    eigs, pstats = am.determine_best_test_apr25(2, 10, 10, 10, exp_sampler)
+    print(f"Test EIG estimation time: {time.time() - start_time} seconds")
+    print(eigs)
 
     return
+
     ########################################################################
     ### 4. Simulate the Experiment                                       ###
     ########################################################################

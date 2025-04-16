@@ -73,8 +73,8 @@ def electromigration_qualification():
 
     mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 1.8, 'scale': 0.1})
     mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.05})
-    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 8, 'scale': 0.3})
-    mb.add_hyperlatent('eaa_var', dists.Normal, {'loc': 0.2, 'scale': 0.05})
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 8, 'scale': 0.2})
+    mb.add_hyperlatent('eaa_var', dists.Normal, {'loc': 0.15, 'scale': 0.04})
     mb.add_latent('em_n', 'n_nom', 'n_var')
     mb.add_latent('em_eaa', 'eaa_nom', 'eaa_var')
 
@@ -104,8 +104,8 @@ def electromigration_qualification():
     
     The maximum and minimum voltages and temperatures that can be used are [0.7, 0.95] and [300, 400] respectively.
     '''
-    temps = [300, 325, 350, 375, 400]
-    volts = [0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+    temps = [275, 300, 325, 350, 375, 400, 425]
+    volts = [0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
     permute_conds = product(temps, volts)
     possible_tests = [stratcona.TestDef('', {'t1': {'lot': 1, 'chp': 1}}, {'t1': {'vdd': v, 'temp': t}}) for t, v in permute_conds]
     exp_sampler = stratcona.assistants.iter_sampler(possible_tests)
@@ -126,8 +126,16 @@ def electromigration_qualification():
         em_u_func = partial(em_u_func, trgt=am.relreq.target_lifespan)
 
         # Run the experimental design analysis
-        results, perf_stats = am.determine_best_test_apr25(3, 101, 500, 400, exp_sampler, em_u_func)
-        print(results)
+        results, perf_stats = am.determine_best_test_apr25(56, 201, 300, 200, exp_sampler, em_u_func)
+
+        fig, ax = plt.subplots()
+        eigs = jnp.array([res['utility']['eig'] for res in results]).reshape((len(temps), len(volts)))
+        print(eigs)
+        ax.contourf(volts, temps, eigs)
+        ax.set_ylabel('Temperature')
+        ax.set_xlabel('Voltage')
+        plt.show()
+
 
         #def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
         #    return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)

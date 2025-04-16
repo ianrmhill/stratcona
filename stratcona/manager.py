@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 
 import jax.random as rand
 
-import engine.bed
+from stratcona import engine
 from stratcona.engine.inference import inference_model, custom_inference, custom_mhgibbs_new, inf_is_new
 from stratcona.engine.bed import pred_bed_apr25, eig
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement, TestDef
@@ -37,6 +37,10 @@ class AnalysisManager:
     def sim_test_measurements(self, alt_priors=None, rtrn_tr=False, num=()):
         rng = self._derive_key()
         return self.relmdl.sample(rng, self.test, num_samples=num, alt_priors=alt_priors, full_trace=rtrn_tr)
+
+    def sim_test_meas_new(self, num=()):
+        rng = self._derive_key()
+        return self.relmdl.sample_new(rng, self.test.dims, self.test.conds, num, self.relmdl.observes)
 
     def do_inference(self, observations, test: ReliabilityTest = None, auto_update_prior=True):
         rng = self._derive_key()

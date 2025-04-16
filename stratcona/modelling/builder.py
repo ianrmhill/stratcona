@@ -111,7 +111,7 @@ class SPMBuilder():
     def add_hyperlatent(self, name, distribution, prior, transform=None, fixed_prms=None):
         self.hyls[name] = _HyperLatent(name, distribution, prior, transform, fixed_prms)
 
-    def add_latent(self, name, nom, dev, chp=None, lot=None):
+    def add_latent(self, name, nom, dev=None, chp=None, lot=None):
         self.latents[name] = _Latent(name, nom, dev, chp, lot)
 
     def add_intermediate(self, name, compute_func):
