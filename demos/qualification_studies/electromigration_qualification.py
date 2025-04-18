@@ -126,7 +126,7 @@ def electromigration_qualification():
         em_u_func = partial(em_u_func, trgt=am.relreq.target_lifespan)
 
         # Run the experimental design analysis
-        results, perf_stats = am.determine_best_test_apr25(56, 201, 300, 200, exp_sampler, em_u_func)
+        results, perf_stats = am.determine_best_test_apr25(56, 51, 300, 50, exp_sampler, em_u_func)
 
         fig, ax = plt.subplots()
         eigs = jnp.array([res['utility']['eig'] for res in results]).reshape((len(temps), len(volts)))
