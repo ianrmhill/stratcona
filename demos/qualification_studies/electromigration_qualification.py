@@ -4,6 +4,7 @@
 import time as t
 from itertools import product
 from functools import partial
+import json
 
 import numpyro
 import numpyro.distributions as dists
@@ -126,7 +127,7 @@ def electromigration_qualification():
         em_u_func = partial(em_u_func, trgt=am.relreq.target_lifespan)
 
         # Run the experimental design analysis
-        results, perf_stats = am.determine_best_test_apr25(56, 51, 300, 50, exp_sampler, em_u_func)
+        results, perf_stats = am.determine_best_test_apr25(56, 101, 300, 100, exp_sampler, em_u_func)
 
         fig, ax = plt.subplots()
         eigs = jnp.array([res['utility']['eig'] for res in results]).reshape((len(temps), len(volts)))
@@ -134,19 +135,25 @@ def electromigration_qualification():
         ax.contourf(volts, temps, eigs)
         ax.set_ylabel('Temperature')
         ax.set_xlabel('Voltage')
-        plt.show()
+        #plt.show()
 
-
+        simplified = {}
+        for i, d in enumerate(results):
+            simplified[str(i)] = {'Temp': float(d['design'].conds['t1']['temp']), 'Volt': float(d['design'].conds['t1']['vdd']),
+                                  'EIG': float(d['utility']['eig']), 'MTRPP': float(d['utility']['qx_lbci_pp'])}
+        with open('../bed_data/em_bed_evals.json', 'w') as f:
+            json.dump(simplified, f)
         #def bed_score(pass_prob, fails_eig_gap, test_cost=0.0):
         #    return 1 / (((1 - pass_prob) * fails_eig_gap) + test_cost)
         #results['final_score'] = bed_score(results['rig_pass_prob'], results['rig_fails_only_eig_gap'])
 
-        selected_test = results.iloc[results['final_score'].idxmax()]['design']
+        #selected_test = results.iloc[results['final_score'].idxmax()]['design']
+        selected_test = results[2]
     else:
         selected_test = {'t1': {'vdd': 0.90, 'temp': 375}}
 
     am.set_test_definition(selected_test)
-    print(am.test)
+    return
 
     '''
     ===== 5) Conduct the selected test =====

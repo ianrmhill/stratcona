@@ -11,6 +11,7 @@ from jax.scipy.special import logsumexp
 import jax.random as rand
 
 from multiprocessing import Pool
+from progress.bar import Bar
 from functools import partial
 from typing import Callable
 from inspect import signature
@@ -229,10 +230,13 @@ def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, fie
         lp_x, h_x = 0, 0
 
     # We loop over sample test designs instead of vectorizing since test designs can modify dimensionality
+    bar = Bar('Evaluating possible designs', max=n_d)
     us = []
     for _ in range(n_d):
         u = eval_u_of_d(k, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds)
         us.append({'design': d, 'utility': u})
+        bar.next()
         # Now update the test design for the next iteration, the final design (index n_d) is not used
         d = d_sampler(kd)
+    bar.finish()
     return us, perf_stats
