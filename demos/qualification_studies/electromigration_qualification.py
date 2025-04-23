@@ -22,7 +22,7 @@ from matplotlib import pyplot as plt
 import os
 import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import stratcona
 
