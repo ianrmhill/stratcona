@@ -289,5 +289,52 @@ def demo_custom_nom_only():
     print(am.relmdl.hyl_beliefs)
 
 
+def build_to_idfbcamp():
+    # Define the simple model
+    mb = stratcona.SPMBuilder('idfbcamp-pmos')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+
+    def nbti_vth(time, vdd, temp, a0, eaa, alpha, n, k):
+        return 0.01 * a0 * jnp.exp((eaa * -0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
+
+    mb.add_hyperlatent('a0n', dists.Normal, {'loc': 3.3, 'scale': 0.0001})
+    #mb.add_hyperlatent('a0d', dists.Normal, {'loc': 5.6, 'scale': 0.0001}, var_tf)
+    #mb.add_hyperlatent('a0c', dists.Normal, {'loc': 9.2, 'scale': 0.0001}, var_tf)
+    #mb.add_hyperlatent('eaan', dists.Normal, {'loc': 5.9, 'scale': 0.0001})
+    mb.add_hyperlatent('alphan', dists.Normal, {'loc': 4.0, 'scale': 0.0001})
+    mb.add_hyperlatent('nn', dists.Normal, {'loc': 1.9, 'scale': 0.0001})
+    mb.add_latent('a0', 'a0n', 'a0d', 'a0c')
+    mb.add_latent('a0', 'a0n')
+    #mb.add_latent('eaa', 'eaan')
+    mb.add_latent('alpha', 'alphan')
+    mb.add_latent('n', 'nn')
+    mb.add_params(time=530, vdd=0.95, temp=400, k=8.617e-5, eaa=5.9)
+    mb.add_params(ys=0.04)
+    mb.add_intermediate('nbti_vth', nbti_vth)
+    mb.add_observed('y', dists.Normal, {'loc': 'nbti_vth', 'scale': 'ys'}, 4)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('bare', {'e': {'lot': 1, 'chp': 10}}, {'e': {}})
+    am.set_test_definition(d)
+    k = rand.key(6536)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'y': y_s['e_y']}}
+    print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    priors = {'a0n': {'loc': 3.6, 'scale': 1.2}, 'a0d': {'loc': 5.3, 'scale': 3.5}, 'a0c': {'loc': 10.6, 'scale': 3},
+              'eaan': {'loc': 6.2, 'scale': 0.2}, 'alphan': {'loc': 3.5, 'scale': 0.4}, 'nn': {'loc': 2, 'scale': 0.1}}
+    am.relmdl.hyl_beliefs = priors
+    perf = am.do_inference_is(y, n_x=10_000, n_v=500)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = priors
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
 if __name__ == '__main__':
-    simple_all_level()
+    build_to_idfbcamp()

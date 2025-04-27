@@ -163,6 +163,34 @@ def qx_lbci(w, z, q):
     return w_quantile(z_ty, w_t, q)
 
 
+@partial(jax.jit, static_argnames=['num_bins'])
+def qx_hdcr(w, z, q: int | float, num_bins: int = 1000):
+    """
+    The highest density interval can be useful for situations in which we aren't worried about liability of edge cases
+    with poor reliability and prefer to find a general estimate of the likely lifespan for a product.
+    """
+    # Z expected to have dimensions (n_x, n_z)
+    z_ty = jnp.repeat(jnp.expand_dims(z, axis=2), w.shape[1], axis=2)
+    # w expected to have dimensions (n_x, n_y)
+    w_t = jnp.repeat(jnp.expand_dims(w, axis=1), z.shape[1], axis=1)
+    # We bin the samples into intervals, then keep adding the intervals with the highest counts until we pass the target
+    bins = jnp.linspace(jnp.min(z_ty, axis=0), jnp.max(z_ty, axis=0), num_bins)
+    bin_len = bins[1] - bins[0]
+    densities, intervals = jnp.histogram(z_ty, bins, density=True)
+    # Sort the bins from highest density to lowest (and their corresponding intervals)
+    i_order = jnp.flip(jnp.argsort(densities))
+    sorted_density = densities[i_order]
+    # Add the largest bins until the interval size is surpassed
+    i = 0
+    summed = jnp.cumsum(sorted_density, axis=0)
+    while jnp.sum(sorted_density[:i] * bin_len) < (q / 100):
+        i += 1
+    # Now determine the size of the HDCR
+    region_size = bin_len * i
+    # In this compiled version no sanity checks are performed for speed and compilation reasons
+    return region_size
+
+
 @partial(jax.jit, static_argnames=['spm', 'd_dims', 'batch_dims', 'utility', 'fd_dims'])
 def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd_dims, fd_conds):
     n_y, n_v, n_x = batch_dims
@@ -201,6 +229,12 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
                 metrics[m] = qx_lbci(w_z, z_s['field_lifespan'], 0.01)
+            case 'qx_hdcr':
+                n_z = n_v
+                x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
+                z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
+                                     conditionals=x_s_tz, compute_predictors=True)
+                metrics[m] = qx_hdcr(w_z, z_s['field_lifespan'], 0.1)
             case 'p_y':
                 # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
                 #       according to p(y)
@@ -214,7 +248,7 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
     return utility(**metrics)
 
 
-def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, field_d=None):
+def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, field_d=None):
     k, kd, kx = rand.split(rng_key, 3)
     perf_stats = {}
     # Get the first proposal experiment design, need to sample here to get dummy input to x_s sample and lp_x logp
@@ -234,7 +268,7 @@ def pred_bed_apr25(rng_key, n_d, n_y, n_v, n_x, d_sampler, spm, utility=eig, fie
     us = []
     for _ in range(n_d):
         u = eval_u_of_d(k, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds)
-        us.append({'design': d, 'utility': u})
+        us.append({'design': d, 'utility': u.block_until_ready()})
         bar.next()
         # Now update the test design for the next iteration, the final design (index n_d) is not used
         d = d_sampler(kd)

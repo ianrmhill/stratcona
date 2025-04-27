@@ -97,5 +97,5 @@ class AnalysisManager:
 
     def determine_best_test_apr25(self, n_d, n_y, n_v, n_x, exp_sampler, u_funcs=engine.bed.eig):
         rng = self._derive_key()
-        return pred_bed_apr25(rng, n_d, n_y, n_v, n_x, exp_sampler, self.relmdl,
+        return pred_bed_apr25(rng, exp_sampler, n_d, n_y, n_v, n_x, self.relmdl,
                               u_funcs, self.field_test)

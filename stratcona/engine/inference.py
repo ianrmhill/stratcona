@@ -25,7 +25,7 @@ from stratcona.assistants.dist_translate import npyro_to_scipy
 from stratcona.modelling.relmodel import TestDef, ExpDims
 
 
-@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
+#@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
 def is_inner(rng_key, spm, batch_dims, test_dims, test_conds, y_t, y_noise):
     kx, kv, kdum = rand.split(rng_key, 3)
     x_s = spm.sample_new(kx, test_dims, test_conds, (batch_dims[0],), spm.hyls)
@@ -45,10 +45,13 @@ def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
     batch_dims = (int(n_x / num_chunks), n_v, 1)
 
     bar = Bar('Sampling', max=num_chunks)
+    #is_batch = jax.jit(partial(is_inner, spm=spm, batch_dims=batch_dims, test_dims=d.dims, test_conds=d.conds, y_t=y_t, y_noise=y_noise))
+    is_batch = partial(is_inner, spm=spm, batch_dims=batch_dims, test_dims=d.dims, test_conds=d.conds, y_t=y_t, y_noise=y_noise)
     for i in range(num_chunks):
         k, ki = rand.split(k)
+        # The main work function is executed here
+        x_s, lp_ygx, ps = is_batch(ki)
 
-        x_s, lp_ygx, ps = is_inner(ki, spm, batch_dims, d.dims, d.conds, y_t, y_noise)
         lp_ygx_store = jnp.append(lp_ygx_store, lp_ygx)
         for hyl in spm.hyls:
             x_s_store[hyl] = jnp.append(x_s_store[hyl], x_s[hyl])
@@ -59,9 +62,10 @@ def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
 
     # Resample evaluated x_s according to posterior probabilities
     lw_n = lp_ygx_store - logsumexp(lp_ygx_store)
+    print(f'Num good x samples: {jnp.count_nonzero(jnp.where(jnp.greater(lw_n, jnp.log(1 / n_x)), 1, 0))}')
     # TEMP
-    #df = pd.DataFrame({'lp': lw_n - max(lw_n), 'x': x_s_store['x'], 'xsc': x_s_store['xsc']})
-    #seaborn.scatterplot(df, x='x', y='xsc', palette='viridis', hue='lp', hue_norm=(-10, 0))
+    #df = pd.DataFrame({'lp': lw_n - max(lw_n), 'x': x_s_store['nbti_a0_nom'], 'y': x_s_store['nbti_a0_dev']})
+    #seaborn.scatterplot(df, x='x', y='y', palette='viridis', hue='lp', hue_norm=(-10, 0))
     #plt.grid()
     #plt.show()
 
@@ -230,7 +234,7 @@ def count_unique(x):
     return 1 + (x[1:] != x[:-1]).sum()
 
 
-@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
+#@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
 def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
     n_x, n_v, n_y = batch_dims
     k, k_init, kdum = rand.split(rng_key, 3)
@@ -242,6 +246,7 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
         y_stddev |= {f'{e.name}_{y}': y_noise[y] for y in y_noise}
     meas_noise_stddev = {y: y_stddev[y] if y in y_stddev else 0. for y in y_s}
     vscale = {y: jnp.sqrt(jnp.abs(jnp.std(y_s[y])**2 - meas_noise_stddev[y]**2)) / jnp.std(y_s[y]) for y in y_s}
+    #vscale = {y: 1.0 for y in y_s}
     y_s_a = {y: ((y_s[y] - jnp.mean(y_s[y])) * vscale[y]) + jnp.mean(y_s[y]) for y in y_s}
 
     # Tile the x and y sample arrays to match the problem dimensions for full vectorization
@@ -316,6 +321,11 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                 else:
                     v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
                 perf_stats[f'{e.name}_{lvl}_rs_diversity'] = sum(v_diversity) / len(e_ltnts)
+
+    # Debug stuff
+    if True:
+        y_constructed = spm.sample_new(kdum, test_dims, test_conds, batch_dims, keep_sites=spm.observes,
+                                       conditionals=x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
 
     # Final logp
     lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
