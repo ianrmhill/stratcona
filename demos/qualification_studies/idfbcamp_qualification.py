@@ -245,15 +245,15 @@ def idfbcamp_qualification():
         #em_u_func = partial(em_u_func, trgt=am.relreq.target_lifespan)
 
         # Run the experimental design analysis
-        num_processors = 20
-        d_batch_size = 500
-        exp_samplers = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(4)]
-        keys = rand.split(amp._derive_key(), num_processors)
-        bed_args = zip(keys, exp_samplers)
-        eval_d_batch = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=10_000, n_v=1, n_x=100_000, spm=amp.relmdl,
+        batches = 4
+        d_batch_size = 20
+        exp_samplers = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
+        keys = rand.split(amp._derive_key(), batches)
+        eval_d_batch = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=1_000, n_v=1, n_x=10_000, spm=amp.relmdl,
                                utility=stratcona.engine.bed.eig, field_d=amp.field_test)
-        with Pool(processes=num_processors) as pool:
-            eigs = pool.starmap(eval_d_batch, bed_args)
+        eigs = []
+        for i in range(batches):
+            eigs.append(eval_d_batch(keys[i], exp_samplers[i]))
         results, perf_stats = [], []
         for batch in eigs:
             results.extend(batch[0])
