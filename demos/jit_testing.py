@@ -115,40 +115,6 @@ def jit_behaviour():
     print(f"Call: {reduce(myarr, partial(sw_f, op='mul'))}")
 
 
-@partial(jax.jit, static_argnames=['n_bins'])
-def hdcr_vectorization(z, w, q, n_bins):
-    # Generate the weighted histogram of values
-    densities, bin_edges = jax.vmap(jnp.histogram, (1, None, None, 1), 1)(z, n_bins, None, w)
-    densities = densities / jnp.sum(densities, axis=0)
-
-    # Sort the bins from highest density to lowest (and their corresponding intervals)
-    sorted_density = jnp.flip(jnp.sort(densities, axis=0), axis=0)
-
-    # Add the largest bins until the interval size is surpassed
-    cum = jnp.cumsum(sorted_density, axis=0)
-    ind = jax.vmap(jnp.searchsorted, (1, None), 0)(cum, q)
-
-    # Now determine the size of the HDCR
-    region_sizes = (bin_edges[1, :] - bin_edges[0, :]) * ind
-    # In this compiled version no sanity checks are performed for speed and compilation reasons
-    return region_sizes
-
-
-def hdcr_jit_test():
-    k1, k2 = rand.split(rand.key(482394))
-    z = rand.normal(k1, (40000, 5))
-    z = z.at[:, 3].mul(2.5)
-    z = z.at[:, 2].add(-3)
-    w = rand.uniform(k2, (40000, 5))
-    q = 0.9
-    n_bins = 1000
-
-    to_time = partial(hdcr_vectorization, z=z, w=w, q=q, n_bins=n_bins)
-    to_time()
-    best_perf = min(timeit.Timer(to_time).repeat(repeat=10, number=10))
-    print(best_perf)
-
-
 def main():
     key = rand.key(363)
     k1, k2, k3 = rand.split(key, 3)

@@ -1,11 +1,11 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
-import pymc
-import pytensor as pt
+import jax.numpy as jnp
+import jax.random as rand
 
 from stratcona.engine.metrics import *
+from stratcona.engine.bed import qx_hdcr_width
 
 
 def test_lower_quantile_bound():
@@ -33,3 +33,25 @@ def test_highest_density_region():
     sampler = pymc.compile_pymc([], [output], name='out_sampler', random_seed=654)
     result = highest_density_credible_region(sampler, 50, 30000, 100)
     assert np.allclose(np.round(result, 4), [[1.7895, 2.2153], [2.8049, 3.1652]])
+
+
+def test_qxhdcr_width():
+    q = 0.9
+    n_bins = 100
+    k1, k2 = rand.split(rand.key(482394))
+    z = rand.normal(k1, (3, 1000))
+    w = rand.uniform(k2, (3, 4))
+    # With uniform random weights, the regions should all be similar
+    widths = qx_hdcr_width(z, w, q, n_bins)
+    assert jnp.allclose(jnp.round(widths, 2), jnp.array([3.14, 3.14, 3.14, 3.21]))
+    # With weights prioritizing different normal distributions of different widths, we can predict relative region sizes
+    z = z.at[0, :].mul(0.5)
+    z = z.at[2, :].mul(2.5)
+    w = jnp.array([[0.3, 0.9, 0.2, 0.01], [0.3, 0.1, 0.5, 0.98], [0.3, 0.1, 0.9, 0.01]])
+    widths = qx_hdcr_width(z, w, q, n_bins)
+    assert jnp.allclose(jnp.round(widths, 2), jnp.array([5.17, 2.13, 6.54, 3.35]))
+    # Shifting the distributions increases the overall spread of the distribution, increasing region sizes
+    z = z.at[0, :].add(4)
+    z = z.at[1, :].add(-4)
+    widths = qx_hdcr_width(z, w, q, n_bins)
+    assert jnp.allclose(jnp.round(widths, 2), jnp.array([8.82, 4.72, 9.13, 3.50]))

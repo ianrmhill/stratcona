@@ -102,6 +102,7 @@ def entropy(samples, lp_func, p_args=None, in_bits=False,
     return h if not in_bits else h * NATS_TO_BITS
 
 
+@partial(jax.jit, static_argnames=['y_dim'])
 def w_quantile(s, w, q, y_dim=2):
     """
     This procedure is based on the 'wquantiles' library but adapted for JAX numpy and vectorized.
@@ -163,32 +164,36 @@ def qx_lbci(w, z, q):
     return w_quantile(z_ty, w_t, q)
 
 
-@partial(jax.jit, static_argnames=['num_bins'])
-def qx_hdcr(w, z, q: int | float, num_bins: int = 1000):
+@partial(jax.jit, static_argnames=['n_bins'])
+def qx_hdcr_width(z, w, q, n_bins):
     """
-    The highest density interval can be useful for situations in which we aren't worried about liability of edge cases
-    with poor reliability and prefer to find a general estimate of the likely lifespan for a product.
+    Compilable function to compute the region width of the QX%-HDCR (highest density credible region for some quantile)
+    given sample values z and sample weights w. Pay careful attention to the dimensions of z and w as they are
+    unintuitive.
+
+    Parameters
+    ----------
+    z: (n_x, n_z) - A set of n_x distributions represented as n_z samples
+    w: (n_x, n_y) - A set of weightings for each of the n_x distributions per batch dimension n_y
+    q: float - The quantile cutoff for the HDCR (i.e., the X in Q<X>%-HDCR)
+    n_bins: int - The number of buckets to group the z samples into to model the overall weighted distributions
+
+    Returns
+    -------
+    widths - (n_y,) - The HDCR total region width for each batch element
     """
-    # Z expected to have dimensions (n_x, n_z)
-    z_ty = jnp.repeat(jnp.expand_dims(z, axis=2), w.shape[1], axis=2)
-    # w expected to have dimensions (n_x, n_y)
+    # Duplicate the weights to apply to all n_z samples that compose each of the n_x distributions
     w_t = jnp.repeat(jnp.expand_dims(w, axis=1), z.shape[1], axis=1)
-    # We bin the samples into intervals, then keep adding the intervals with the highest counts until we pass the target
-    bins = jnp.linspace(jnp.min(z_ty, axis=0), jnp.max(z_ty, axis=0), num_bins)
-    bin_len = bins[1] - bins[0]
-    densities, intervals = jnp.histogram(z_ty, bins, density=True)
-    # Sort the bins from highest density to lowest (and their corresponding intervals)
-    i_order = jnp.flip(jnp.argsort(densities))
-    sorted_density = densities[i_order]
-    # Add the largest bins until the interval size is surpassed
-    i = 0
-    summed = jnp.cumsum(sorted_density, axis=0)
-    while jnp.sum(sorted_density[:i] * bin_len) < (q / 100):
-        i += 1
-    # Now determine the size of the HDCR
-    region_size = bin_len * i
-    # In this compiled version no sanity checks are performed for speed and compilation reasons
-    return region_size
+    # Generate the weighted histogram of values
+    densities, bin_edges = jax.vmap(jnp.histogram, (None, None, None, 2), 1)(z, n_bins, None, w_t)
+    densities = densities / jnp.sum(densities, axis=0, keepdims=True)
+    # Sort the PDF histogram bins from highest density to lowest
+    sorted_density = jnp.flip(jnp.sort(densities, axis=0), axis=0)
+    # Find the minimum number of bins required to capture q% of the total distribution
+    cum = jnp.cumsum(sorted_density, axis=0)
+    ind = jax.vmap(jnp.searchsorted, (1, None), 0)(cum, q)
+    # Now determine the size of the HDCR, no analysis of appropriate number of bins for speed and compilation reasons
+    return (bin_edges[1, :] - bin_edges[0, :]) * ind
 
 
 @partial(jax.jit, static_argnames=['spm', 'd_dims', 'batch_dims', 'utility', 'fd_dims'])
@@ -224,6 +229,8 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 h_xgy = h_x_g_y(lw_z, lp_x)
                 metrics[m] = h_x - h_xgy
             case 'qx_lbci':
+                # FIXME: Don't implicitly use n_v for n_z, the user may want control over n_z and n_v may not be
+                #        appropriate in all circumstances
                 n_z = n_v
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
@@ -234,7 +241,7 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
-                metrics[m] = qx_hdcr(w_z, z_s['field_lifespan'], 0.1)
+                metrics[m] = qx_hdcr_width(w_z, z_s['field_lifespan'], 0.1)
             case 'p_y':
                 # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
                 #       according to p(y)
