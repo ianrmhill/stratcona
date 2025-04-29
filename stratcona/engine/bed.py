@@ -135,7 +135,7 @@ def w_quantile(s, w, q, y_dim=2):
     # Don't map over x=q, but axis 1 of bins and s_srt correspond to different y observations. Out axis is 0 as interp
     # with a single float x=q will only produce a 1D output array, collapsing axis 0 in bins and s_srt
     q_func_vect = jax.vmap(jnp.interp, (None, 1, 1), 0)
-    return q_func_vect(q, bins, s_srt)
+    return q_func_vect(1 - q, bins, s_srt)
 
 
 @jax.jit
@@ -156,7 +156,7 @@ def eig(ig):
 
 
 @jax.jit
-def qx_lbci(w, z, q):
+def qx_lbci(z, w, q):
     # Z expected to have dimensions (n_x, n_z)
     z_ty = jnp.repeat(jnp.expand_dims(z, axis=2), w.shape[1], axis=2)
     # w expected to have dimensions (n_x, n_y)
@@ -164,7 +164,7 @@ def qx_lbci(w, z, q):
     return w_quantile(z_ty, w_t, q)
 
 
-@partial(jax.jit, static_argnames=['n_bins'])
+#@partial(jax.jit, static_argnames=['n_bins'])
 def qx_hdcr_width(z, w, q, n_bins):
     """
     Compilable function to compute the region width of the QX%-HDCR (highest density credible region for some quantile)
@@ -235,13 +235,13 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
-                metrics[m] = qx_lbci(w_z, z_s['field_lifespan'], 0.01)
-            case 'qx_hdcr':
+                metrics[m] = qx_lbci(z_s['field_lifespan'], w_z, 0.99)
+            case 'qx_hdcr_width':
                 n_z = n_v
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
-                metrics[m] = qx_hdcr_width(w_z, z_s['field_lifespan'], 0.1)
+                metrics[m] = qx_hdcr_width(z_s['field_lifespan'], w_z, 0.9, n_bins=100)
             case 'p_y':
                 # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
                 #       according to p(y)
@@ -275,7 +275,8 @@ def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, fie
     us = []
     for _ in range(n_d):
         u = eval_u_of_d(k, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds)
-        us.append({'design': d, 'utility': u.block_until_ready()})
+        us.append({'design': d, 'utility': u})
+        #print(f"\nEwidth: {u['e_qx_hdcr_width'].block_until_ready()}\n")
         bar.next()
         # Now update the test design for the next iteration, the final design (index n_d) is not used
         d = d_sampler(kd)

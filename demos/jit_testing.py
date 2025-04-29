@@ -26,6 +26,25 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import stratcona
 from stratcona.modelling.relmodel import TestDef, ExpDims
 from stratcona.engine.inference import int_out_v
+from stratcona.engine.minimization import minimize_jax
+
+
+def minimization():
+    def test_parab(x, x_off):
+        return (x + x_off) ** 2
+
+    minimum = minimize_jax(test_parab, {'x_off': jnp.array([2, 3, -1])}, (-50.0, 50.0))
+    print(minimum)
+
+
+def jax_while():
+    ins = (jnp.array(2), jnp.array(0))
+    def stop(ins):
+        return jnp.less(ins[1], 7)
+    def accum(ins):
+        return ins[0] + 2, ins[1] + 1
+    res = jax.lax.while_loop(stop, accum, ins)
+    print(res)
 
 
 def noise_testing():
@@ -174,4 +193,4 @@ def main():
 
 
 if __name__ == '__main__':
-    hdcr_jit_test()
+    minimization()

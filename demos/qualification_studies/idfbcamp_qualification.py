@@ -179,11 +179,40 @@ def idfbcamp_qualification():
     mbn.add_intermediate('nhci_vamp_out', nhci_vamp_out)
     mbn.add_observed('nhci_voff_sensor', dists.Normal, {'loc': 'nhci_vamp_out', 'scale': 'adc_stddev'}, 5)
 
+    # Generate the lifespan predictor variable
+    def pmos_worst_deg(time, vdd, temp, vtp_typ,
+                      nbti_a0, nbti_eaa, nbti_alpha, nbti_n, k,
+                      phci_a0, phci_u, phci_alpha, phci_beta, tempref):
+
+        nbti_partial = (nbti_a0 * 0.01) * jnp.exp((nbti_eaa * -0.01) / (k * temp)) * (time ** (nbti_n * 0.1))
+        full_volt_coeff = ((vdd * 1.0) ** nbti_alpha)
+        hci_volt_coeff = ((vdd * 0.85) ** nbti_alpha)
+        nbti_full_vth = nbti_partial * full_volt_coeff
+        nbti_hci_vth = nbti_partial * hci_volt_coeff
+        phci_vth = (phci_a0 * 0.001) * (vdd ** phci_u) * (
+                    time ** ((phci_alpha * 0.1) + ((phci_beta * 0.0001) * (temp - tempref))))
+
+        nbti_strs_vth, phci_strs_vth = vtp_typ + nbti_full_vth, vtp_typ + nbti_hci_vth + phci_vth
+        # The degradation threshold is hit by the worse of the two transistor stress configurations
+        return jnp.maximum(nbti_strs_vth, phci_strs_vth)
+
+    def deg_threshold(vdd, temp, vtp_typ, nbti_a0, nbti_eaa, nbti_alpha, nbti_n, k, phci_a0, phci_u, phci_alpha, phci_beta, tempref):
+        threshold = vtp_typ * 1.1
+        func_args = {'vdd': vdd, 'temp': temp, 'vtp_typ': vtp_typ,
+                      'nbti_a0': nbti_a0, 'nbti_eaa': nbti_eaa, 'nbti_alpha': nbti_alpha, 'nbti_n': nbti_n, 'k': k,
+                      'phci_a0': phci_a0, 'phci_u': phci_u, 'phci_alpha': phci_alpha, 'phci_beta': phci_beta, 'tempref': tempref}
+        def residue(time, **kwargs):
+            return jnp.abs(threshold - pmos_worst_deg(time, **kwargs))
+        t_life = stratcona.engine.minimization.minimize_jax(residue, func_args, (1, 1e7), precision=1e-4, log_gold=True)
+        return t_life
+
+    mbp.add_predictor('lifespan', deg_threshold)
+
     # Package all the sensors together
     amp = stratcona.AnalysisManager(mbp.build_model(), rng_seed=49374575)
-    amp.set_field_use_conditions({'vdd': 0.8, 'temp': 330})
+    amp.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
     amn = stratcona.AnalysisManager(mbn.build_model(), rng_seed=94372847)
-    amn.set_field_use_conditions({'vdd': 0.8, 'temp': 330})
+    amn.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
 
     # Visualize the predicted degradation curves subject to the high uncertainty of prior beliefs
     if analyze_prior:
@@ -210,6 +239,15 @@ def idfbcamp_qualification():
             ps[i].set_title(raw130[i])
         fig.tight_layout()
         plt.show()
+
+    # Try generating some predictive lifespans
+    kx, kz = rand.split(rand.key(7342))
+    n_x, n_z = 4, 5
+    fd_dims, fd_conds = amp.field_test.dims, amp.field_test.conds
+    x_s = amp.relmdl.sample_new(kx, fd_dims, fd_conds, batch_dims=(n_x, n_z), keep_sites=amp.relmdl.hyls)
+    z_s = amp.relmdl.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=amp.relmdl.predictors,
+                                conditionals=x_s, compute_predictors=True)
+    print(f'Generated lifespans: {z_s}\n')
 
     '''
     ===== 3) Resource limitation analysis =====
@@ -238,11 +276,10 @@ def idfbcamp_qualification():
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
     if run_bed_analysis:
-        #def em_u_func(ig, qx_lbci, trgt):
-        #    eig = jnp.sum(ig) / ig.size
-        #    mtrpp = jnp.sum(jnp.where(qx_lbci > trgt, 1, 0)) / qx_lbci.size
-        #    return {'eig': eig, 'qx_lbci_pp': mtrpp}
-        #em_u_func = partial(em_u_func, trgt=am.relreq.target_lifespan)
+        def em_u_func(ig, qx_hdcr_width):
+            eig = jnp.sum(ig) / ig.size
+            pred_width = jnp.sum(qx_hdcr_width) / qx_hdcr_width.size
+            return {'eig': eig, 'e_qx_hdcr_width': pred_width}
 
         # Run the experimental design analysis
         batches = 4
@@ -250,7 +287,8 @@ def idfbcamp_qualification():
         exp_samplers = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
         keys = rand.split(amp._derive_key(), batches)
         eval_d_batch = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=1_000, n_v=1, n_x=10_000, spm=amp.relmdl,
-                               utility=stratcona.engine.bed.eig, field_d=amp.field_test)
+                               utility=em_u_func, field_d=amp.field_test)
+                               #utility = stratcona.engine.bed.eig, field_d = amp.field_test)
         eigs = []
         for i in range(batches):
             eigs.append(eval_d_batch(keys[i], exp_samplers[i]))
@@ -265,7 +303,7 @@ def idfbcamp_qualification():
             simplified[str(i)] = {'C1': float(d['design'].conds['b1']['temp']), 'C2': float(d['design'].conds['b2']['temp']),
                                   'V1': float(d['design'].conds['b1']['vdd']), 'V2': float(d['design'].conds['b2']['vdd']),
                                   'T1': float(d['design'].conds['b1']['time']), 'T2': float(d['design'].conds['b2']['time']),
-                                  'EIG': float(d['utility'])}
+                                  'EIG': float(d['utility']['eig']), 'E-HDCR-WIDTH': float(d['utility']['e_qx_hdcr_width'])}
         with open('../bed_data/idfbcamp_bed_evals.json', 'w') as f:
             json.dump(simplified, f)
 

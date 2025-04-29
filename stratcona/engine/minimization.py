@@ -1,6 +1,10 @@
 # Copyright (c) 2023 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
+import jax
+import jax.numpy as jnp
+
 import pytensor
 import pytensor.tensor as pt
 from pytensor.scan.utils import until
@@ -14,6 +18,105 @@ MACH_32BIT_EPS = 2 ** -24
 GOLDEN_RATIO = (1 + (5**0.5)) / 2
 GF1 = GOLDEN_RATIO - 1 # approx. 0.618
 GF2 = 2 - GOLDEN_RATIO # approx. 0.382 (in other words, 1 - GF1)
+
+
+@partial(jax.jit, static_argnames=['func', 'maxiter', 'log_gold'])
+def minimize_jax(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT_EPS, maxiter=20, log_gold=False):
+    f_args_order = extra_args.keys()
+    f_args = list(extra_args.values())
+    # We divide by three so that abs_tol directly represents the furthest that the estimated minimum can be from the
+    # true minimum
+    abs_tol = precision / 3.0
+    rel_tol = mach_eps ** 0.5
+    # Initialize the bounds a and b within which to find the function minimum, shape determined by first function arg
+    shape_to_match = f_args[0]
+    a = jnp.full_like(shape_to_match, jnp.log10(bounds[0]) if log_gold else bounds[0], dtype=jnp.float32)
+    b = jnp.full_like(shape_to_match, jnp.log10(bounds[1]) if log_gold else bounds[1], dtype=jnp.float32)
+    # Initialize the parabolic interpolation points
+    v = w = x = a + (GF2 * (b - a))
+    as_kwargs = {}
+    for i, arg in enumerate(f_args_order):
+        as_kwargs[arg] = f_args[i]
+    fv = fw = fx = func(10 ** x if log_gold else x, **as_kwargs)
+    # 'e' represents the step size between the old and new minimum estimate from two iterations ago. This bookkeeping
+    # is used to force golden section searches if parabolic interpolation is not proceeding faster than a bisection
+    # search method. Not strictly necessary for guaranteed convergence, but adds a guarantee that the algorithm is never
+    # much slower than a raw golden section search algorithm. Brent found that using 'e' from two iterations ago worked
+    # better than using 'd' from one iteration ago, no hard mathematical justification for the choice.
+    e = d = jnp.zeros_like(a, dtype=jnp.float32)
+
+    # Compute the midpoint of the bounded region, which will be our final estimate once the region is very small
+    m = (b + a) / 2.0
+    # The function will never be evaluated at two points closer together than the tolerance
+    tol = (rel_tol * jnp.abs(x)) + abs_tol
+    # Value used multiple times, do the multiplication only once here to save time
+    tol2 = tol * 2.0
+
+    i = 0
+    init_vals = (a, b, v, w, x, fv, fw, fx, d, e, m, tol, tol2, i)
+    def stop(vals):
+        a, b, v, w, x, fv, fw, fx, d, e, m, tol, tol2, i = vals
+        return jnp.less(i, maxiter) & ~jnp.all(jnp.less(jnp.abs(x - m), tol2 - (b - m)))
+
+    def brent_iter(vals):
+        a, b, v, w, x, fv, fw, fx, d, e, m, tol, tol2, i = vals
+        i += 1
+        # Start by identifying which problems are candidates for a parabolic interpolation step
+        use_para = jnp.greater(jnp.abs(e), tol)
+        xdiff1 = jnp.where(use_para, x - w, 0.0)
+        xdiff2 = jnp.where(use_para, x - v, 0.0)
+        # Currently doing for all as the diffs will be zeros for golden search problems, adds little computation
+        qsub1 = xdiff1 * (fx - fv)
+        qsub2 = xdiff2 * (fx - fw)
+        q = 2 * (qsub2 - qsub1)
+
+        use_para = use_para & jnp.not_equal(q, 0.0)
+        p = jnp.where(use_para, (xdiff2 * qsub2) - (xdiff1 * qsub1), 0.0)
+        p = jnp.where(jnp.greater(q, 0.0), -p, p)
+        q = jnp.abs(q)
+
+        further_boundary = jnp.where(jnp.greater_equal(x, m), a, b)
+        step = jnp.where(use_para, p / q, GF2 * (further_boundary - x))
+        u_tent = x + step
+
+        change_to_gold = use_para & (jnp.less(b, u_tent) | jnp.greater(a, u_tent) | jnp.greater(jnp.abs(step), (0.5 * jnp.abs(e))))
+        # Determine the golden search step for any problems where parabolic search just failed the final two checks
+        step = jnp.where(change_to_gold, GF2 * (further_boundary - x), step)
+        u_tent = jnp.where(change_to_gold, x + step, u_tent)
+        # Ensure all new points 'u' will be at least 'tol' away from 'x' and at least 2 'tol' from the interval bounds
+        step = jnp.where(jnp.less(u_tent - a, tol2) | jnp.less(b - u_tent, tol2), jnp.where(jnp.less(x, m), tol, -tol), step)
+        step = jnp.where(jnp.less(jnp.abs(step), tol), jnp.where(jnp.greater(step, 0), tol, -tol), step)
+        # Compute the new points
+        u = x + step
+        fu = func(10 ** u if log_gold else u, **as_kwargs)
+
+        # Now to update all the variables
+        e = d
+        d = step
+        is_less = jnp.less_equal(fu, fx)
+
+        a = jnp.where(is_less & jnp.greater_equal(u, x), x, jnp.where(~is_less & jnp.less(u, x), u, a))
+        b = jnp.where(is_less & jnp.less(u, x), x, jnp.where(~is_less & jnp.greater_equal(u, x), u, b))
+
+        v_cond_1, v_cond_2 = is_less | jnp.less_equal(fu, fw) | jnp.equal(w, x), jnp.less_equal(fu, fv) | jnp.equal(v, w) | jnp.equal(v, x)
+        v, fv = jnp.where(v_cond_1, w, jnp.where(v_cond_2, u, v)), jnp.where(v_cond_1, fw, jnp.where(v_cond_2, fu, fv))
+
+        w_cond = jnp.less_equal(fu, fw) | jnp.equal(w, x)
+        w, fw = jnp.where(is_less, x, jnp.where(w_cond, u, w)), jnp.where(is_less, fx, jnp.where(w_cond, fu, fw))
+
+        x, fx = jnp.where(is_less, u, x), jnp.where(is_less, fu, fx)
+
+        # Check whether our estimates are all good enough
+        m = (b + a) / 2.0
+        tol = (rel_tol * jnp.abs(x)) + abs_tol
+        tol2 = tol * 2.0
+
+        return a, b, v, w, x, fv, fw, fx, d, e, m, tol, tol2, i
+
+    res = jax.lax.while_loop(stop, brent_iter, init_vals)
+    x = res[4]
+
+    return 10 ** x if log_gold else x
 
 
 def minimize(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_32BIT_EPS, maxiter=20, log_gold=False):
