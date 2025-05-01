@@ -196,8 +196,8 @@ def idfbcamp_qualification():
         # The degradation threshold is hit by the worse of the two transistor stress configurations
         return jnp.maximum(nbti_strs_vth, phci_strs_vth)
 
-    def deg_threshold(vdd, temp, vtp_typ, nbti_a0, nbti_eaa, nbti_alpha, nbti_n, k, phci_a0, phci_u, phci_alpha, phci_beta, tempref):
-        threshold = vtp_typ * 1.1
+    def deg_threshold(vdd, temp, vtp_typ, nbti_a0, nbti_eaa, nbti_alpha, nbti_n, k, phci_a0, phci_u, phci_alpha, phci_beta, tempref, threshold):
+        #threshold = vtp_typ * 1.1
         func_args = {'vdd': vdd, 'temp': temp, 'vtp_typ': vtp_typ,
                       'nbti_a0': nbti_a0, 'nbti_eaa': nbti_eaa, 'nbti_alpha': nbti_alpha, 'nbti_n': nbti_n, 'k': k,
                       'phci_a0': phci_a0, 'phci_u': phci_u, 'phci_alpha': phci_alpha, 'phci_beta': phci_beta, 'tempref': tempref}
@@ -206,6 +206,7 @@ def idfbcamp_qualification():
         t_life = stratcona.engine.minimization.minimize_jax(residue, func_args, (1, 1e7), precision=1e-4, log_gold=True)
         return t_life
 
+    mbp.add_params(threshold=0.325 * 1.1)
     mbp.add_predictor('lifespan', deg_threshold)
 
     # Package all the sensors together
@@ -213,6 +214,20 @@ def idfbcamp_qualification():
     amp.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
     amn = stratcona.AnalysisManager(mbn.build_model(), rng_seed=94372847)
     amn.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
+
+    # Analyze inverse
+    check_inverse = False
+    if check_inverse:
+        k1, k2 = rand.split(rand.key(64728))
+        sites = ('nbti_a0_nom', 'nbti_alpha_nom', 'nbti_eaa_nom', 'nbti_n_nom',
+                 'phci_a0_nom', 'phci_alpha_nom', 'phci_beta_nom', 'phci_u_nom',
+                 'field_nbti_voff_sensor_nbti_strs_vth', 'field_phci_voff_sensor_phci_strs_vth')
+        sims = amp.relmdl.sample_new(k1, amp.field_test.dims, amp.field_test.conds, (), sites)
+        amp.relmdl.param_vals['threshold'] = jnp.maximum(sims['field_nbti_voff_sensor_nbti_strs_vth'], sims['field_phci_voff_sensor_phci_strs_vth'])
+        rv_sites = ('field_lifespan',)
+        reverse = amp.relmdl.sample_new(k2, amp.field_test.dims, amp.field_test.conds, (), rv_sites, sims, compute_predictors=True)
+        diff = reverse['field_lifespan'] - (10 * 8760)
+        print(f'Forward-reverse mismatch: {diff} hours')
 
     # Visualize the predicted degradation curves subject to the high uncertainty of prior beliefs
     if analyze_prior:

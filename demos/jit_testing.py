@@ -18,6 +18,11 @@ import seaborn
 import matplotlib.pyplot as plt
 import pandas as pd
 
+import datetime as dt
+import certifi
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
+
 import os
 import sys
 # This line adds the parent directory to the module search path so that the Stratcona module can be seen and imported
@@ -45,6 +50,39 @@ def jax_while():
         return ins[0] + 2, ins[1] + 1
     res = jax.lax.while_loop(stop, accum, ins)
     print(res)
+
+
+### DATABASE CONNECTION HANDLING ###
+
+DB_NAME = 'stratcona'
+COLL_NAME = 'sandbox'
+
+def login_to_database():
+    tls_ca = certifi.where()
+    uri = "mongodb+srv://arbutus.6v6mkhr.mongodb.net/?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority"
+    mongo_client = MongoClient(uri, tls=True, tlsCertificatekeyFile='cert/mongo_cert.pem', tlsCAFile=tls_ca)
+    db = mongo_client[DB_NAME]
+    dataset = db[COLL_NAME]
+    try:
+        mongo_client.admin.command('ping')
+    except PyMongoError as e:
+        print(e)
+        print("\nCould not connect to database successfully...")
+    return dataset
+
+
+def try_database_upload(dataset, formatted_data):
+    try:
+        dataset.insert_one(formatted_data)
+    except PyMongoError as e:
+        print(e)
+        print(f"Encountered error trying to upload data to database at {dt.datetime.now(tz=dt.UTC)}")
+
+
+def database_storage():
+    dataset = login_to_database()
+    test_data = {'f1': 4.1, 'f2': 'hello again', 'time': dt.datetime.now(tz=dt.UTC)}
+    try_database_upload(dataset, test_data)
 
 
 def noise_testing():
@@ -193,4 +231,4 @@ def main():
 
 
 if __name__ == '__main__':
-    minimization()
+    database_storage()
