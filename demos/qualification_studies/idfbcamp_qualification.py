@@ -16,6 +16,11 @@ import jax
 import jax.numpy as jnp # noqa: ImportNotAtTopOfFile
 import jax.random as rand
 
+import datetime as dt
+import certifi
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
+
 from matplotlib import pyplot as plt
 
 import os
@@ -28,6 +33,30 @@ import stratcona
 BOLTZ_EV = 8.617e-5
 CELSIUS_TO_KELVIN = 273.15
 SHOW_PLOTS = False
+DB_NAME = 'stratcona'
+COLL_NAME = 'idfbcamp-qual'
+
+
+def login_to_database():
+    tls_ca = certifi.where()
+    uri = "mongodb+srv://arbutus.6v6mkhr.mongodb.net/?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority"
+    mongo_client = MongoClient(uri, tls=True, tlsCertificatekeyFile='../cert/mongo_cert.pem', tlsCAFile=tls_ca)
+    db = mongo_client[DB_NAME]
+    dataset = db[COLL_NAME]
+    try:
+        mongo_client.admin.command('ping')
+    except PyMongoError as e:
+        print(e)
+        print("\nCould not connect to database successfully...")
+    return dataset
+
+
+def try_database_upload(dataset, formatted_data):
+    try:
+        dataset.insert_one(formatted_data)
+    except PyMongoError as e:
+        print(e)
+        print(f"Encountered error trying to upload data to database at {dt.datetime.now(tz=dt.UTC)}")
 
 
 def idfbcamp_qualification():
@@ -36,6 +65,7 @@ def idfbcamp_qualification():
     run_inference = False
     run_posterior_analysis = False
     simulated_data_mode = 'model'
+    dataset = login_to_database()
 
     '''
     ===== 1) Determine qualification objectives =====
@@ -291,41 +321,51 @@ def idfbcamp_qualification():
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
     if run_bed_analysis:
-        def em_u_func(ig, qx_hdcr_width):
+        # TODO: Add some other derived IG quantities
+        def p_u_func(ig, qx_hdcr_width):
             eig = jnp.sum(ig) / ig.size
+            vig = jnp.sum(((ig - eig) ** 2) / ig.size)
+            mig = jnp.min(ig)
             pred_width = jnp.sum(qx_hdcr_width) / qx_hdcr_width.size
-            return {'eig': eig, 'e_qx_hdcr_width': pred_width}
+            return {'eig': eig, 'vig': vig, 'mig': mig, 'e_qx_hdcr_width': pred_width}
+        def n_u_func(ig):
+            eig = jnp.sum(ig) / ig.size
+            vig = jnp.sum(((ig - eig) ** 2) / ig.size)
+            mig = jnp.min(ig)
+            return {'eig': eig, 'vig': vig, 'mig': mig}
 
-        # Run the experimental design analysis
-        batches = 4
-        d_batch_size = 20
-        exp_samplers = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
+        batches = 5
+        d_batch_size = 10
+        exp_samplers_p = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
+        exp_samplers_n = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
         keys = rand.split(amp._derive_key(), batches)
-        eval_d_batch = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=1_000, n_v=1, n_x=10_000, spm=amp.relmdl,
-                               utility=em_u_func, field_d=amp.field_test)
-                               #utility = stratcona.engine.bed.eig, field_d = amp.field_test)
-        eigs = []
+        eval_d_batch_p = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=1_000, n_v=1, n_x=10_000, spm=amp.relmdl,
+                                 utility=p_u_func, field_d=amp.field_test)
+        eval_d_batch_n = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=1_000, n_v=1, n_x=10_000, spm=amn.relmdl,
+                                 utility=n_u_func, field_d=amn.field_test)
+
+        # Run the experimental design analysis in batched segments to allow for checkpointing
         for i in range(batches):
-            eigs.append(eval_d_batch(keys[i], exp_samplers[i]))
-        results, perf_stats = [], []
-        for batch in eigs:
-            results.extend(batch[0])
-            perf_stats.extend(batch[1])
+            res_p, perf_p = eval_d_batch_p(keys[i], exp_samplers_p[i])
+            res_n, perf_n = eval_d_batch_n(keys[i], exp_samplers_n[i])
+            simplified = {'batch': i, 'batch-size': d_batch_size, 'submit-time': str(dt.datetime.now(tz=dt.UTC)),
+                          'n-y': 1_000, 'n-x': 10_000}
+            for j in range(d_batch_size):
+                simplified[f'{str(i)}-{str(j)}'] = {
+                    'c1': float(res_p[j]['design'].conds['b1']['temp']), 'c2': float(res_p[j]['design'].conds['b2']['temp']),
+                    'v1': float(res_p[j]['design'].conds['b1']['vdd']), 'v2': float(res_p[j]['design'].conds['b2']['vdd']),
+                    't1': float(res_p[j]['design'].conds['b1']['time']), 't2': float(res_p[j]['design'].conds['b2']['time']),
+                    'eig-p': float(res_p[j]['utility']['eig']), 'eig-n': float(res_n[j]['utility']['eig']),
+                    'vig-p': float(res_p[j]['utility']['vig']), 'vig-n': float(res_n[j]['utility']['vig']),
+                    'mig-p': float(res_p[j]['utility']['mig']), 'mig-n': float(res_n[j]['utility']['mig']),
+                    'e-hdcr-width-p': float(res_p[j]['utility']['e_qx_hdcr_width'])}
+            with open(f'../bed_data/idfbcamp_bed_evals_batch{i}.json', 'w') as f:
+                json.dump(simplified, f)
+            try_database_upload(dataset, simplified)
 
-
-        simplified = {}
-        for i, d in enumerate(results):
-            simplified[str(i)] = {'C1': float(d['design'].conds['b1']['temp']), 'C2': float(d['design'].conds['b2']['temp']),
-                                  'V1': float(d['design'].conds['b1']['vdd']), 'V2': float(d['design'].conds['b2']['vdd']),
-                                  'T1': float(d['design'].conds['b1']['time']), 'T2': float(d['design'].conds['b2']['time']),
-                                  'EIG': float(d['utility']['eig']), 'E-HDCR-WIDTH': float(d['utility']['e_qx_hdcr_width'])}
-        with open('../bed_data/idfbcamp_bed_evals.json', 'w') as f:
-            json.dump(simplified, f)
-
-        #selected_test = results.iloc[results['final_score'].idxmax()]['design']
-        selected_test = results[2]
+        selected_test = None
     else:
-        selected_test = {'t1': {'vdd': 0.90, 'temp': 375}}
+        selected_test = None
 
     inftest = stratcona.TestDef('sim', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}},
                                 {'b1': {'vdd': 1, 'temp': 403, 'time': 530}, 'b2': {'vdd': 0.9, 'temp': 363, 'time': 730}})
@@ -335,7 +375,6 @@ def idfbcamp_qualification():
 
     '''
     ===== 5) Conduct the selected test =====
-    
     '''
     real_data = False
     if real_data:
@@ -347,7 +386,7 @@ def idfbcamp_qualification():
         infp_data = {}
         infp_data['b1'] = {key[3:]: simp[key] for key in simp if 'b1_' in key}
         infp_data['b2'] = {key[3:]: simp[key] for key in simp if 'b2_' in key}
-        print(infp_data)
+        #print(infp_data)
         infn_data = {}
         infn_data['b1'] = {key[3:]: simn[key] for key in simn if 'b1_' in key}
         infn_data['b2'] = {key[3:]: simn[key] for key in simn if 'b2_' in key}

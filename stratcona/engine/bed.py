@@ -164,7 +164,7 @@ def qx_lbci(z, w, q):
     return w_quantile(z_ty, w_t, q)
 
 
-#@partial(jax.jit, static_argnames=['n_bins'])
+@partial(jax.jit, static_argnames=['n_bins'])
 def qx_hdcr_width(z, w, q, n_bins):
     """
     Compilable function to compute the region width of the QX%-HDCR (highest density credible region for some quantile)

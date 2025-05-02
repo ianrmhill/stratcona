@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from functools import partial
 import timeit
 import time
+import json
 
 import seaborn
 import matplotlib.pyplot as plt
@@ -83,6 +84,35 @@ def database_storage():
     dataset = login_to_database()
     test_data = {'f1': 4.1, 'f2': 'hello again', 'time': dt.datetime.now(tz=dt.UTC)}
     try_database_upload(dataset, test_data)
+
+
+def examine_data():
+    with open('bed_data/idfbcamp_bed_evals_y2k_x25k.json', 'r') as f:
+        eigs = json.load(f)
+
+    eig_list = [e for e in eigs.values()]
+    eig_max = 0
+    i_eig_max = -1
+    for i, e in enumerate(eig_list):
+        if e['EIG'] > eig_max:
+            eig_max = e['EIG']
+            i_eig_max = i
+    print(eig_list[i_eig_max])
+    high_eigs = [e for e in eig_list if e['EIG'] > eig_max * 0.99]
+
+    slice_time, slice_vdd, slice_temp = 730, 1.0, 403.15
+    eig_slice = [e for e in eigs.values() if e['T1'] == slice_time and e['T2'] == slice_time
+                 and e['C1'] == slice_temp and e['C2'] == slice_temp]
+                 #and e['V1'] == slice_vdd and e['V2'] == slice_vdd]
+    t1 = t2 = [303.15, 328.15, 353.15, 378.15, 403.15]
+    v1 = v2 = [0.8, 0.85, 0.9, 0.95, 1.0]
+    eig = jnp.array([e['EIG'] for e in eig_slice]).reshape((5, 5))
+
+    fig, ax = plt.subplots()
+    ax.contourf(v1, v2, eig)
+    ax.set_ylabel('V1')
+    ax.set_xlabel('V2')
+    plt.show()
 
 
 def noise_testing():
@@ -231,4 +261,4 @@ def main():
 
 
 if __name__ == '__main__':
-    database_storage()
+    examine_data()
