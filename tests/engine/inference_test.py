@@ -1,8 +1,8 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 from stratcona.engine.inference import *
 
 
-def test_basic_inference():
+def test_is_inference():
     pass

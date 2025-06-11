@@ -28,8 +28,12 @@ def minimize_jax(func, extra_args: dict, bounds, precision=1e-5, mach_eps=MACH_3
     # true minimum
     abs_tol = precision / 3.0
     rel_tol = mach_eps ** 0.5
-    # Initialize the bounds a and b within which to find the function minimum, shape determined by first function arg
+    # Need to determine the shape of any non-singular so that the number of parallel solutions is known
     shape_to_match = f_args[0]
+    for arg in f_args:
+        if hasattr(arg, 'shape') and arg.shape != ():
+            shape_to_match = arg
+    # Initialize the bounds a and b within which to find the function minimum, shape determined by first function arg
     a = jnp.full_like(shape_to_match, jnp.log10(bounds[0]) if log_gold else bounds[0], dtype=jnp.float32)
     b = jnp.full_like(shape_to_match, jnp.log10(bounds[1]) if log_gold else bounds[1], dtype=jnp.float32)
     # Initialize the parabolic interpolation points

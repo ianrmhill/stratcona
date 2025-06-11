@@ -63,6 +63,9 @@ def weibull_inference():
     test_conds = {'e': {'temp': 130 + CELSIUS_TO_KELVIN, 'vg': 1.1}}
     test_130 = stratcona.TestDef('t130', {'e': {'lot': num_lots, 'chp': num_chps}}, test_conds)
     test_130_single = stratcona.TestDef('t130_1', {'e': {'lot': 1, 'chp': 1, 'ttf': 1}}, test_conds)
+    # Define the reliability requirement
+    relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_lbci, 99, 3000)
+    f_test_conds = {'field': {'temp': 130 + CELSIUS_TO_KELVIN, 'vg': 1.1}}
 
     # Define the SPM for simulation and Weibull analysis
     mb_w = stratcona.SPMBuilder(mdl_name='weibull-2p')
@@ -76,8 +79,9 @@ def weibull_inference():
     mb_w.add_intermediate('k_pos', lambda k: jnp.log(1 + jnp.exp(k)))
     mb_w.add_intermediate('sc_pos', lambda sc: jnp.log(1 + jnp.exp(sc)))
     mb_w.add_observed('ttf', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'}, num_devs)
+    mb_w.add_predictor_stochastic('lifespan', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'})
 
-    am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633836)
+    am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633836, rel_req=relreq)
 
     # Simulate some Weibull distributed failure data
     am_w.set_test_definition(test_130)
@@ -278,6 +282,11 @@ def weibull_inference():
     p3 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': lot_vals[0][2], 'e_sc_lot_ls': lot_vals[1][2]}, post_cond))
     pst_sim_probs = jnp.array([p1, p2, p3]) / mean_prob
     print(f'Posterior normalized likelihood of simulation lot variability: {pst_sim_probs}')
+
+    # Compute the Q99%-LBCI for the posterior
+    am_w.set_field_use_conditions(f_test_conds)
+    lbci = am_w.evaluate_reliability('lifespan')
+    print(lbci)
 
     ######################################################
     # Render the SPM for viewing

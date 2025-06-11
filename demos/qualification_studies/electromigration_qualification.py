@@ -72,6 +72,7 @@ def electromigration_qualification():
     mb.add_intermediate('em_blacks', em_blacks_equation)
     mb.add_observed('em_ttf', dists.Normal, {'loc': 'em_blacks', 'scale': 'fail_var'}, num_devices)
 
+    # TODO: Try using a wider tailed distribution than Normal to make predictions more conservative
     mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 1.8, 'scale': 0.1})
     mb.add_hyperlatent('n_var', dists.Normal, {'loc': 0.1, 'scale': 0.05})
     mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 8, 'scale': 0.2})

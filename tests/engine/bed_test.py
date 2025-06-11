@@ -57,10 +57,10 @@ def test_entropy():
     assert e_bad_lddp > e_lddp
 
     # 6) Test zero entropy LDDP conditions
-    g = dist.Uniform(1.0, 1.001)
+    g = dist.Uniform(1.0, 1.0001)
     k = rand.key(58365)
     s3 = g.sample(k, (100_000,))
-    g_lddp = entropy(s3, g.log_prob, limiting_density_range=(0, 8_388.608))
+    g_lddp = entropy(s3, g.log_prob, limiting_density_range=(-838.8608, 838.8607))
     assert jnp.round(g_lddp, 4) == 0.0
     g_lddp_2 = entropy(s3, g.log_prob, limiting_density_range=(1.0, 1.128), precision=float(2**7))
     assert jnp.round(g_lddp_2, 4) == 0.0

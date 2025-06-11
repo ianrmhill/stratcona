@@ -234,24 +234,25 @@ def count_unique(x):
     return 1 + (x[1:] != x[:-1]).sum()
 
 
-#@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
+@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
 def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
     n_x, n_v, n_y = batch_dims
     k, k_init, kdum = rand.split(rng_key, 3)
     perf_stats = {}
 
     # Adjust the variance of y_s_t to compensate for measurement noise
-    y_stddev = {}
+    y_ns = {}
     for e in test_dims:
-        y_stddev |= {f'{e.name}_{y}': y_noise[y] for y in y_noise}
-    meas_noise_stddev = {y: y_stddev[y] if y in y_stddev else 0. for y in y_s}
-    vscale = {y: jnp.sqrt(jnp.abs(jnp.std(y_s[y])**2 - meas_noise_stddev[y]**2)) / jnp.std(y_s[y]) for y in y_s}
-    #vscale = {y: 1.0 for y in y_s}
+        y_ns |= {f'{e.name}_{y}': y_noise[y] for y in y_noise}
+    y_eps = {y: y_ns[y] if y in y_ns else 0. for y in y_s}
+    vscale = {}
+    for y in y_s:
+        vscale[y] = jnp.where(y_eps[y] == 0.0, 1.0, jnp.sqrt(jnp.abs(jnp.std(y_s[y])**2 - y_eps[y]**2)) / jnp.std(y_s[y]))
     y_s_a = {y: ((y_s[y] - jnp.mean(y_s[y])) * vscale[y]) + jnp.mean(y_s[y]) for y in y_s}
 
     # Tile the x and y sample arrays to match the problem dimensions for full vectorization
     x_s_t = {x: jnp.repeat(jnp.repeat(jnp.expand_dims(x_s[x], (1, 2)), n_v, axis=1), n_y, axis=2) for x in x_s}
-    y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s_a[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s_a}
+    y_s_a_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s_a[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s_a}
     # Generate the spread of v values for each x sample and the corresponding log probabilities
     v_init = spm.sample_new(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
     lp_v_init = spm.logp_new(kdum, test_dims, test_conds, v_init, x_s_t, batch_dims, sum_lps=False)
@@ -269,15 +270,16 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                 e_ltnts = [ltnt for ltnt in lvl_ltnts if f'{e.name}_' in ltnt]
                 # Get a subset of the test defined by test_dims and test_conds, the single experiment
                 e_tst = TestDef(e.name, {e}, {e.name: test_conds[e.name]})
-                e_y_s_t = {y: y_s_t[y] for y in y_s_t if f'{e.name}_' in y}
+                e_y_s_a_t = {y: y_s_a_t[y] for y in y_s_a_t if f'{e.name}_' in y}
                 v_s_init = {ltnt: v_init[ltnt] for ltnt in e_ltnts}
-                v_rs[lvl] = v_s_init
+                for ltnt in e_ltnts:
+                    v_rs[lvl][ltnt] = v_s_init[ltnt]
                 conditional = x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev']
                 # Get the log probabilities without summing so each lot can be considered individually
-                lp_y_g_xv = spm.logp_new(kdum, e_tst.dims, e_tst.conds, e_y_s_t, conditional, batch_dims, sum_lps=False)
+                lp_y_g_xv = spm.logp_new(kdum, e_tst.dims, e_tst.conds, e_y_s_a_t, conditional, batch_dims, sum_lps=False)
 
                 # Number of devices might be different for each observed variable
-                in_loops = {'lot': ['na'], 'chp': ['na'], 'dev': [y for y in e_y_s_t]}
+                in_loops = {'lot': ['na'], 'chp': ['na'], 'dev': [y for y in e_y_s_a_t]}
                 for yp in in_loops[lvl]:
                     if lvl == 'dev':
                         lp_v = sum([lp_v_init[ltnt] for ltnt in e_ltnts if yp in ltnt])
@@ -326,38 +328,37 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
     if True:
         y_constructed = spm.sample_new(kdum, test_dims, test_conds, batch_dims, keep_sites=spm.observes,
                                        conditionals=x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
+        y_rounded = {y: jnp.round(y_constructed[y], 0) for y in y_constructed}
 
+    y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s}
     # Final logp
     lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
     lp_y_g_xv = spm.logp_new(kdum, test_dims, test_conds, y_s_t, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'], batch_dims)
     lp_y_g_x = logsumexp(lp_v_g_x + lp_y_g_xv, axis=1)
-    perf_stats['lp_v_g_x_std_dev'] = jnp.mean(jnp.std(lp_v_g_x, axis=1))
-    perf_stats['lp_y_g_xv_std_dev'] = jnp.mean(jnp.std(lp_y_g_xv, axis=1))
+    # Variance of lp(v|x,d) across v samples indicates ?
+    perf_stats['lp_v_g_x_var'] = jnp.mean(jnp.std(lp_v_g_x, axis=1) ** 2)
+    # Variance of lp(y|v,x,d) across v samples gives an indication of how uniformly distributed around f(v,x) ~= y the
+    # samples are, though note there is dependence on x as well
+    perf_stats['lp_y_g_xv_var'] = jnp.mean(jnp.std(lp_y_g_xv, axis=1) ** 2)
     return lp_y_g_x, perf_stats
 
 
-def custom_inference(rng_key, spm, d, y, n_x, n_v):
-    k, kx, kv, kc = rand.split(rng_key, 4)
-    y_t = {}
-    for exp in y:
-        y_t |= {f'{exp}_{y_e}': jnp.expand_dims(y[exp][y_e], 0) for y_e in y[exp]}
-    x_s = spm.sample(kx, d, num_samples=(n_x,), keep_sites=spm.hyls)
-    lp_x = spm.logp(kx, d, site_vals=x_s, conditional=None, dims=(n_x,))
+def int_out_v_naive(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
+    # This algorithm implements basic importance sampling from the target distribution (in this case p(v|x,d)) to
+    # marginalize out v. It is extremely inefficient for large v due to the high dimensional space.
+    n_x, n_v, n_y = batch_dims
+    k, k_init, kdum = rand.split(rng_key, 3)
+    perf_stats = {}
+    # Tile the x and y sample arrays to match the problem dimensions for full vectorization
+    x_s_t = {x: jnp.repeat(jnp.repeat(jnp.expand_dims(x_s[x], (1, 2)), n_v, axis=1), n_y, axis=2) for x in x_s}
+    y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s}
 
-    lp_y_g_x, stats = est_lp_y_g_x(kv, spm, d, x_s, y_t, n_v)
-    lp_y = logsumexp(lp_y_g_x.flatten(), axis=0) - jnp.log(n_x)
-
-    lp_x_g_y = (lp_x + lp_y_g_x.flatten()) - lp_y
-    xgy_norm = logsumexp(lp_x_g_y)
-    p_x_g_y = jnp.exp(lp_x_g_y - xgy_norm)
-    # Resample to get a distribution of samples according to p(x|y,d)
-    resample_inds = rand.choice(kc, jnp.arange(n_x), (n_x,), True, p_x_g_y)
-    # Fit the posterior distributions
-    new_prior = {}
-    for hyl in spm.hyl_info:
-        resamples = x_s[hyl][resample_inds]
-        new_prior[hyl] = fit_dist_to_samples(spm.hyl_info[hyl], resamples)
-    return new_prior
+    # Generate samples v from p(v|x,d)
+    v_s = spm.sample_new(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
+    # Compute the individual probabilities p(y|v,x,d), then marginalize across v
+    lp_y_g_xv = spm.logp_new(kdum, test_dims, test_conds, y_s_t, x_s_t | v_s, batch_dims)
+    lp_y_g_x = logsumexp(lp_y_g_xv, axis=1)
+    return lp_y_g_x, perf_stats
 
 
 def inference_model(model, hyl_info, observed_data, rng_key, num_samples: int = 10_000, num_chains: int = 4):

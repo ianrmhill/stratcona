@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 import jax.random as rand
 
 from stratcona import engine
-from stratcona.engine.inference import inference_model, custom_inference, custom_mhgibbs_new, inf_is_new
+from stratcona.engine.inference import inference_model, custom_mhgibbs_new, inf_is_new
 from stratcona.engine.bed import pred_bed_apr25, eig
 from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement, TestDef
 
@@ -50,12 +50,6 @@ class AnalysisManager:
         if auto_update_prior:
             self.relmdl.hyl_beliefs = new_prior
 
-    def do_inference_custom(self, observations, test: ReliabilityTest = None, n_x=1000, n_v=1000):
-        rng = self._derive_key()
-        test_info = test if test is not None else self.test
-        new_prior = custom_inference(rng, self.relmdl, test_info, observations, n_x, n_v)
-        self.relmdl.hyl_beliefs = new_prior
-
     def do_inference_mhgibbs(self, observations, test: ReliabilityTest = None, num_chains=10, n_v=100, beta=0.5):
         rng = self._derive_key()
         test_info = test if test is not None else self.test
@@ -73,14 +67,16 @@ class AnalysisManager:
     def evaluate_reliability(self, predictor, num_samples=300_000, plot_results=False):
         rng = self._derive_key()
         pred_site = f'field_{predictor}'
-        samples = self.relmdl.sample(rng, self.field_test, (num_samples,), keep_sites=[pred_site])
+        samples = self.relmdl.sample_new(rng, self.field_test.dims, self.field_test.conds, (num_samples,),
+                                         keep_sites=(pred_site,), compute_predictors=True)
 
         lifespan = self.relreq.type(samples[pred_site], self.relreq.quantile)
 
-        if lifespan >= self.relreq.target_lifespan:
-            print(f'Target lifespan of {self.relreq.target_lifespan} met! Predicted: {lifespan}.')
-        else:
-            print(f'Target lifespan of {self.relreq.target_lifespan} not met! Predicted: {lifespan}.')
+        if type(lifespan) != list:
+            if lifespan >= self.relreq.target_lifespan:
+                print(f'Target lifespan of {self.relreq.target_lifespan} met! Predicted: {lifespan}.')
+            else:
+                print(f'Target lifespan of {self.relreq.target_lifespan} not met! Predicted: {lifespan}.')
 
         if plot_results:
             # TODO: May be better to plot the CDF as opposed to the PDF for this visualization
@@ -94,6 +90,8 @@ class AnalysisManager:
             p.legend()
             p.set_xlabel('Failure Time (years)', fontsize='medium')
             p.set_ylabel('Probability Density')
+
+        return lifespan
 
     def determine_best_test_apr25(self, n_d, n_y, n_v, n_x, exp_sampler, u_funcs=engine.bed.eig):
         rng = self._derive_key()
