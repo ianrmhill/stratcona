@@ -118,8 +118,8 @@ def htol_demo():
     mb.add_hyperlatent('l_a_chp', dist.Normal, {'loc': 1.6, 'scale': 0.0001}, var_tf)
     mb.add_hyperlatent('l_a_lot', dist.Normal, {'loc': 2.5, 'scale': 0.0001}, var_tf)
     mb.add_hyperlatent('eaa_nom', dist.Normal, {'loc': 7, 'scale': 0.0001}, pos_scale_tf)
-    #mb.add_latent('l_a', nom='l_a_nom', chp='l_a_chp', lot='l_a_lot')
-    mb.add_latent('l_a', nom='l_a_nom')
+    mb.add_latent('l_a', nom='l_a_nom', chp='l_a_chp', lot='l_a_lot')
+    #mb.add_latent('l_a', nom='l_a_nom')
     mb.add_latent('eaa', nom='eaa_nom')
 
     mb.add_intermediate('degn', dvth_mv)
@@ -334,7 +334,7 @@ def htol_demo():
         n_y_d, n_v_d, n_x_d = 200, 400, 200
         #for i in range(len(test_space)):
         for i in range(3):
-            k, kf, kd = rand.split(k)
+            k, kf, kd = rand.split(k, 3)
             d = test_space[i]
             sampler = lambda _: d
             u_d_comp_f, perf_stats_f = stratcona.engine.bed.pred_bed_apr25(kf, sampler, 1, n_y_f, n_v_f, n_x_f, amf.relmdl,

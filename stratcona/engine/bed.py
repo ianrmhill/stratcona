@@ -207,7 +207,17 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
     # the aleatoric uncertainty v
     batch_dims = (n_x, n_v, n_y)
     y_noise = spm.obs_noise
-    lp_y_g_x, v_marg_alg_stats = int_out_v(kv, spm, batch_dims, d_dims, d_conds, x_s, y_s, y_noise)
+    # Have to subdivide computation to avoid gigantic memory allocations
+    y_size = 10
+    split_size = int(next(iter(y_s.values())).shape[0] / y_size)
+    if n_v > 1 and split_size > 1:
+        lp_y_g_x = jnp.zeros((n_x, n_y))
+        y_s_splits = {y: jnp.split(y_s[y], split_size) for y in y_s}
+        for i in range(split_size):
+            split = {y: y_s_splits[y][i] for y in y_s}
+            lp_y_g_x = lp_y_g_x.at[:, i*y_size:(i*y_size + y_size)].set(int_out_v(kv, spm, (n_x, n_v, y_size), d_dims, d_conds, x_s, split, y_noise)[0])
+    else:
+        lp_y_g_x, v_marg_alg_stats = int_out_v(kv, spm, batch_dims, d_dims, d_conds, x_s, y_s, y_noise)
 
     # Marginalize across epistemic uncertainty axis 'x'
     lp_y = logsumexp(lp_y_g_x, axis=0, keepdims=True) - jnp.log(n_x)

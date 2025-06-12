@@ -321,7 +321,6 @@ def idfbcamp_qualification():
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
     if run_bed_analysis:
-        # TODO: Add some other derived IG quantities
         def p_u_func(ig, qx_hdcr_width):
             eig = jnp.sum(ig) / ig.size
             vig = jnp.sum(((ig - eig) ** 2) / ig.size)
