@@ -242,6 +242,11 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
                 metrics[m] = qx_hdcr_width(z_s[f'field_{predictor}'], w_z, 0.9, n_bins=100)
+            case 'test_duration':
+                ew = jnp.zeros((len(d_dims), n_y))
+                for i, e in enumerate(d_dims):
+                    ew = ew.at[i].set(jnp.max(y_s[f'{e.name}_lttf'], axis=(1, 2, 3)))
+                metrics[m] = jnp.max(ew, axis=0)
             case 'p_y':
                 # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
                 #       according to p(y)
@@ -274,7 +279,8 @@ def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, fie
     bar = Bar('Evaluating possible designs', max=n_d)
     us = []
     for _ in range(n_d):
-        u = eval_u_of_d(k, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds, predictor)
+        k, kud = rand.split(k)
+        u = eval_u_of_d(kud, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds, predictor)
         us.append({'design': d, 'utility': u})
         #print(f"\nEwidth: {u['e_qx_hdcr_width'].block_until_ready()}\n")
         bar.next()

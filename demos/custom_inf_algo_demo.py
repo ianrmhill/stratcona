@@ -324,6 +324,71 @@ def loglin_deg_multilevel():
     print(am.relmdl.hyl_beliefs)
 
 
+def em_multilevel():
+    mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
+    boltz_ev = 8.617e-5
+    num_devices = 5
+    # Wire area in nm^2
+    mb.add_params(vth_typ=0.32, i_base=2.8, wire_area=1.024 * 1000 * 1000, k=boltz_ev)
+
+    # Express wire current density as a function of the number of transistors and the voltage applied
+    def j_n(n_fins, vdd, vth_typ, i_base):
+        return n_fins * i_base * ((vdd - vth_typ) ** 2)
+
+    # The classic model for electromigration failure estimates, DOI: 10.1109/T-ED.1969.16754
+    def l_blacks(jn_wire, temp, em_n, em_eaa, wire_area, k):
+        return jnp.log(wire_area) - (em_n * jnp.log(jn_wire)) + (em_eaa / (k * temp)) - jnp.log(10 * 3600)
+
+    # Now correspond the degradation mechanisms to the output values
+    mb.add_intermediate('jn_wire', j_n)
+    mb.add_intermediate('l_fail', l_blacks)
+    mb.add_params(lttf_var=0.1)
+    mb.add_observed('lttf', dists.Normal, {'loc': 'l_fail', 'scale': 'lttf_var'}, num_devices)
+
+    var_tf = ComposeTransform([SoftplusTransform(), AffineTransform(0, 0.001)])
+    mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 13, 'scale': 0.0001}, AffineTransform(0, 0.1))
+    mb.add_hyperlatent('n_dev', dists.Normal, {'loc': 16, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('n_chp', dists.Normal, {'loc': 18, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 40, 'scale': 0.0001}, AffineTransform(0, 0.01))
+    mb.add_latent('em_n', 'n_nom', 'n_dev', 'n_chp')
+    mb.add_latent('em_eaa', 'eaa_nom')
+
+    # Add the chip-level failure time
+    def fail_time(lttf):
+        return jnp.exp(jnp.min(lttf))
+    mb.add_fail_criterion('lifespan', fail_time)
+
+    # Add the total test duration required to get all 5 lines to fail, how to measure time
+    def max_l_ttf(lttf):
+        return jnp.max(lttf)
+    mb.add_fail_criterion('duration', max_l_ttf)
+
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=927428374)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('htol', {'htol': {'lot': 1, 'chp': 5}}, {'htol': {'vdd': 0.95, 'temp': 400, 'n_fins': 240}})
+    am.set_test_definition(d)
+    k = rand.key(83434)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'htol': {'lttf': y_s['htol_lttf']}}
+    print(y)
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3}, 'n_chp': {'loc': 15, 'scale': 3},
+                             'eaa_nom': {'loc': 40, 'scale': 1}}
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=5_000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3}, 'n_chp': {'loc': 15, 'scale': 3},
+                             'eaa_nom': {'loc': 40, 'scale': 1}}
+    jax.clear_caches()
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
 def demo_custom_inference():
     """
     This demo demos the effectiveness of the custom inference algorithm.
@@ -572,4 +637,4 @@ def nbti_single_level_var():
 
 
 if __name__ == '__main__':
-    loglin_deg_multilevel()
+    em_multilevel()

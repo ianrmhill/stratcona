@@ -334,12 +334,12 @@ def htol_demo():
         n_y_d, n_v_d, n_x_d = 200, 400, 200
         #for i in range(len(test_space)):
         for i in range(3):
-            k, kbed = rand.split(k)
+            k, kf, kd = rand.split(k)
             d = test_space[i]
             sampler = lambda _: d
-            u_d_comp_f, perf_stats_f = stratcona.engine.bed.pred_bed_apr25(kbed, sampler, 1, n_y_f, n_v_f, n_x_f, amf.relmdl,
+            u_d_comp_f, perf_stats_f = stratcona.engine.bed.pred_bed_apr25(kf, sampler, 1, n_y_f, n_v_f, n_x_f, amf.relmdl,
                                                                            p_u_func, amf.field_test, 'ftime')
-            u_d_comp_d, perf_stats_d = stratcona.engine.bed.pred_bed_apr25(kbed, sampler, 1, n_y_d, n_v_d, n_x_d, amd.relmdl,
+            u_d_comp_d, perf_stats_d = stratcona.engine.bed.pred_bed_apr25(kd, sampler, 1, n_y_d, n_v_d, n_x_d, amd.relmdl,
                                                                            p_u_func, amd.field_test, 'ftime')
             if len(test_space[i].conds.keys()) == 1:
                 dims = next(iter(d.dims))
