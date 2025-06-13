@@ -324,6 +324,7 @@ def loglin_deg_multilevel():
     print(am.relmdl.hyl_beliefs)
 
 
+# Working!!!
 def em_multilevel():
     mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
     boltz_ev = 8.617e-5

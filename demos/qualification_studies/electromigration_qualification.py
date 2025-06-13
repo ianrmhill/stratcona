@@ -191,7 +191,7 @@ def electromigration_qualification():
                     'etime': etime, 'maxtime': maxtime}
 
         dataset = login_to_database()
-        n_y, n_v, n_x = 100, 500, 100
+        n_y, n_v, n_x = 30, 100, 200
         batches = 1 # 8
         d_batch_size = 7
         d_samplers = [stratcona.assistants.iter_sampler(test_list[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]

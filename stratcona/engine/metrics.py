@@ -96,7 +96,7 @@ def qx_hdcr(samples: jnp.ndarray, x: int | float, num_bins: int = 1000):
     return region
 
 
-def qx_hdcr_l(samples: jnp.ndarray, x: int | float, num_bins: int = 1000):
+def qx_hdcr_l(samples: jnp.ndarray, x: int | float, num_bins: int = 200):
     """
     The highest density interval can be useful for situations in which we aren't worried about liability of edge cases
     with poor reliability and prefer to find a general estimate of the likely lifespan for a product.

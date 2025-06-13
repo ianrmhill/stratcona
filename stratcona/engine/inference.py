@@ -25,7 +25,7 @@ from stratcona.assistants.dist_translate import npyro_to_scipy
 from stratcona.modelling.relmodel import TestDef, ExpDims
 
 
-#@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
+@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
 def is_inner(rng_key, spm, batch_dims, test_dims, test_conds, y_t, y_noise):
     kx, kv, kdum = rand.split(rng_key, 3)
     x_s = spm.sample_new(kx, test_dims, test_conds, (batch_dims[0],), spm.hyls)
@@ -240,6 +240,10 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
     k, k_init, kdum = rand.split(rng_key, 3)
     perf_stats = {}
 
+    # Add dim to y_s if needed
+    if len(next(iter(y_s.values())).shape) != 4:
+        y_s = {y: jnp.expand_dims(y_s[y], axis=0) for y in y_s}
+
     # Adjust the variance of y_s_t to compensate for measurement noise
     y_ns = {}
     for e in test_dims:
@@ -316,13 +320,13 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
                     resample_inds = choice(krs, inds, (n_v,), True, jnp.exp(resample_probs))
                     v_rs[lvl] |= {v: reindex(v_s_init[v], resample_inds) for v in e_ltnts}
 
-                if lvl == 'lot':
-                    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * e.lot) for v in e_ltnts]
-                elif lvl == 'chp':
-                    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * e.chp * e.lot) for v in e_ltnts]
-                else:
-                    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
-                perf_stats[f'{e.name}_{lvl}_rs_diversity'] = sum(v_diversity) / len(e_ltnts)
+                #if lvl == 'lot':
+                #    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * e.lot) for v in e_ltnts]
+                #elif lvl == 'chp':
+                #    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * e.chp * e.lot) for v in e_ltnts]
+                #else:
+                #    v_diversity = [count_unique(v_rs[lvl][v]) / (n_x * n_v * n_y * v_rs[lvl][v].shape[3] * e.chp * e.lot) for v in e_ltnts]
+                #perf_stats[f'{e.name}_{lvl}_rs_diversity'] = sum(v_diversity) / len(e_ltnts)
 
     # Debug stuff
     if True:

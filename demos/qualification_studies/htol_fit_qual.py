@@ -331,7 +331,7 @@ def htol_demo():
     if run_test_design_analysis:
         dataset = login_to_database()
         n_y_f, n_v_f, n_x_f = 1_000, 1, 1_000
-        n_y_d, n_v_d, n_x_d = 200, 400, 200
+        n_y_d, n_v_d, n_x_d = 50, 250, 500
         #for i in range(len(test_space)):
         for i in range(3):
             k, kf, kd = rand.split(k, 3)

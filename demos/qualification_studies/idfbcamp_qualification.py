@@ -21,7 +21,9 @@ import certifi
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
+import seaborn as sb
 from matplotlib import pyplot as plt
+import pandas as pd
 
 import os
 import sys
@@ -61,12 +63,13 @@ def try_database_upload(dataset, formatted_data):
 
 def idfbcamp_qualification():
     analyze_prior = False
-    run_bed_analysis = True
+    run_bed_analysis = False
+    examine_qual_data = True
+    viz_exp_data = False
     run_inference = False
     run_posterior_analysis = False
-    simulated_data_mode = 'model'
-    dataset = login_to_database()
 
+    dataset = login_to_database()
     '''
     ===== 1) Determine qualification objectives =====
     For this final case study we are not planning on selling the product, thus are more interested in simply gaining an
@@ -362,59 +365,225 @@ def idfbcamp_qualification():
                 json.dump(simplified, f)
             try_database_upload(dataset, simplified)
 
-        selected_test = None
-    else:
-        selected_test = None
+    if examine_qual_data:
+        ds = []
+        for i in range(50):
+            with open(f'../ccdata/bed_qual_y5k_x50k_batch{i}.json', 'r') as f:
+                batch = json.load(f)
+            for d in [k for k in batch.keys() if k[0] in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']]:
+                ds.append(batch[d])
 
-    inftest = stratcona.TestDef('sim', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}},
-                                {'b1': {'vdd': 1, 'temp': 403, 'time': 530}, 'b2': {'vdd': 0.9, 'temp': 363, 'time': 730}})
-    #inftest = stratcona.TestDef('sim', {'b1': {'lot': 1, 'chp': 4}}, {'b1': {'vdd': 1, 'temp': 403, 'time': 530}})
-    amp.set_test_definition(inftest)
-    amn.set_test_definition(inftest)
+        # Normalize the mean and variance of HDCR width to match EIG
+        widths = jnp.array([d['e-hdcr-width-p'] for d in ds])
+        eigs = jnp.array([d['eig-p'] + d['eig-n'] for d in ds])
+        w_m, w_v = jnp.mean(widths), jnp.std(widths)
+        eig_m, eig_v = jnp.mean(eigs), jnp.std(eigs)
+
+        for d in ds:
+            d['w-score'] = (((w_m - d['e-hdcr-width-p']) / w_v) * eig_v) + eig_m
+            d['u'] = (d['eig-p'] + d['eig-n']) + d['w-score']
+
+        u_max, eig_max, w_max = 0, 0, 0
+        i_u_max, i_eig_max, i_w_max = -1, -1, -1
+        for i, d in enumerate(ds):
+            if d['u'] > u_max:
+                u_max = d['u']
+                i_u_max = i
+            if d['eig-p'] + d['eig-n'] > eig_max:
+                eig_max = d['eig-p'] + d['eig-n']
+                i_eig_max = i
+            if d['w-score'] > w_max:
+                w_max = d['w-score']
+                i_w_max = i
+        print(ds[i_u_max])
+        high_us = [d for d in ds if d['u'] > u_max * 0.99]
+
+        slice_time, slice_vdd, slice_temp = 730, 1.0, 403.15
+        slice = [d for d in ds if d['t1'] == slice_time and d['t2'] == slice_time
+                 and d['c1'] == slice_temp and d['c2'] == slice_temp]
+        # and e['v1'] == slice_vdd and e['v2'] == slice_vdd]
+        t1 = t2 = [303.15, 328.15, 353.15, 378.15, 403.15]
+        v1 = v2 = [0.8, 0.85, 0.9, 0.95, 1.0]
+        u = jnp.array([d['u'] for d in slice]).reshape((5, 5))
+
+        fig, ax = plt.subplots()
+        ax.contourf(v1, v2, u)
+        ax.set_ylabel('v1')
+        ax.set_xlabel('v2')
+        plt.show()
 
     '''
     ===== 5) Conduct the selected test =====
     '''
-    real_data = False
-    if real_data:
-        infp_data = 0
-        infn_data = 0
-    else:
-        simp = amp.sim_test_meas_new()
-        simn = amn.sim_test_meas_new()
-        infp_data = {}
-        infp_data['b1'] = {key[3:]: simp[key] for key in simp if 'b1_' in key}
-        infp_data['b2'] = {key[3:]: simp[key] for key in simp if 'b2_' in key}
-        #print(infp_data)
-        infn_data = {}
-        infn_data['b1'] = {key[3:]: simn[key] for key in simn if 'b1_' in key}
-        infn_data['b2'] = {key[3:]: simn[key] for key in simn if 'b2_' in key}
-        #print(infn_data)
+    # This file is the real data!!!
+    with open('../bed_data/idfbcamp_qual_for_inf.json', 'r') as f:
+        obs_data = json.load(f)
+
+    obstest = stratcona.TestDef('dopt', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}},
+                                {'b1': {'vdd': 1.0, 'temp': 130 + CELSIUS_TO_KELVIN, 'time': 730},
+                                'b2': {'vdd': 0.8, 'temp': 130 + CELSIUS_TO_KELVIN, 'time': 730}})
+    amp.set_test_definition(obstest)
+    amn.set_test_definition(obstest)
+
+    bti_init, hci_init = 487.61908, 472.61542
+    for b in obs_data:
+        for obs in obs_data[b]:
+            if obs in ['nbti_ro_sensor', 'pbti_ro_sensor']:
+                obs_data[b][obs] = jnp.array(obs_data[b][obs])
+                obs_data[b][obs] = bti_init + (obs_data[b][obs] * bti_init)
+            elif obs in ['phci_ro_sensor', 'nhci_ro_sensor']:
+                obs_data[b][obs] = jnp.array(obs_data[b][obs])
+                obs_data[b][obs] = hci_init + (obs_data[b][obs] * hci_init)
+            elif obs in ['nbti_voff_sensor', 'phci_voff_sensor']:
+                obs_data[b][obs] = jnp.array(obs_data[b][obs])
+                obs_data[b][obs] = obs_data[b][obs] * -5
+            elif obs in ['pbti_voff_sensor', 'nhci_voff_sensor']:
+                obs_data[b][obs] = jnp.array(obs_data[b][obs])
+                obs_data[b][obs] = obs_data[b][obs] * -5
+
+    if viz_exp_data:
+        resn = amn.sim_test_meas_new()
+        resp = amp.sim_test_meas_new()
+
+        df1 = pd.DataFrame([(k, float(v)) for k, arr in obs_data['b1'].items() for v in arr.flatten()],
+                          columns=["param", "measured"])
+        df2 = pd.DataFrame([(k, float(v)) for k, arr in obs_data['b2'].items() for v in arr.flatten()],
+                          columns=["param", "measured"])
+        resa = resn | resp
+        dfs = pd.DataFrame([(k, float(v)) for k, arr in resa.items() for v in arr.flatten()],
+                          columns=["param", "measured"])
+
+        colors = ['cornflowerblue', 'mediumorchid', 'turquoise', 'hotpink',
+                   'mediumblue', 'darkviolet', 'lightseagreen', 'deeppink']
+        fig, p = plt.subplots(4, 1)
+
+        df_vth_b1 = df1.loc[df1['param'].isin(['pbti_voff_sensor', 'nhci_voff_sensor', 'nbti_voff_sensor', 'phci_voff_sensor'])]
+        df_vth_b1 = pd.concat((df_vth_b1, dfs.loc[dfs['param'].isin(['b1_pbti_voff_sensor', 'b1_nhci_voff_sensor', 'b1_nbti_voff_sensor', 'b1_phci_voff_sensor'])]))
+        sb.stripplot(df_vth_b1, x='param', y='measured', hue='param', ax=p[0], alpha=0.8, palette=colors)
+
+        df_vth_b2 = df2.loc[df2['param'].isin(['pbti_voff_sensor', 'nhci_voff_sensor', 'nbti_voff_sensor', 'phci_voff_sensor'])]
+        df_vth_b2 = pd.concat((df_vth_b2, dfs.loc[dfs['param'].isin(['b2_pbti_voff_sensor', 'b2_nhci_voff_sensor', 'b2_nbti_voff_sensor', 'b2_phci_voff_sensor'])]))
+        sb.stripplot(df_vth_b2, x='param', y='measured', hue='param', ax=p[1], alpha=0.8, palette=colors)
+
+        df_ro_b1 = df1.loc[df1['param'].isin(['pbti_ro_sensor', 'nhci_ro_sensor', 'nbti_ro_sensor', 'phci_ro_sensor'])]
+        df_ro_b1 = pd.concat((df_ro_b1, dfs.loc[dfs['param'].isin(['b1_pbti_ro_sensor', 'b1_nhci_ro_sensor', 'b1_nbti_ro_sensor', 'b1_phci_ro_sensor'])]))
+        sb.stripplot(df_ro_b1, x='param', y='measured', hue='param', ax=p[2], alpha=0.8, palette=colors)
+
+        df_ro_b2 = df2.loc[df2['param'].isin(['pbti_ro_sensor', 'nhci_ro_sensor', 'nbti_ro_sensor', 'phci_ro_sensor'])]
+        df_ro_b2 = pd.concat((df_ro_b2, dfs.loc[dfs['param'].isin(['b2_pbti_ro_sensor', 'b2_nhci_ro_sensor', 'b2_nbti_ro_sensor', 'b2_phci_ro_sensor'])]))
+        sb.stripplot(df_ro_b2, x='param', y='measured', hue='param', ax=p[3], alpha=0.8, palette=colors)
+
+        plt.show()
 
     '''
     ===== 6) Perform model inference =====
     Update our model based on the experimental data. First need to extract the failure times from the measurements of
     fail states.
     '''
+    pri_p = amp.relmdl.hyl_beliefs
+    pri_n = amn.relmdl.hyl_beliefs
     if run_inference:
-        old = amp.relmdl.hyl_beliefs
-        amp.do_inference_is(infp_data, n_x=100_000)
-        print(amp.relmdl.hyl_beliefs)
-        amp.relmdl.hyl_beliefs = old
-        amp.do_inference(infp_data)
-        print(amp.relmdl.hyl_beliefs)
+        amp.do_inference(obs_data)
+        print(f'Old p: {pri_p}')
+        print(f'New p: {amp.relmdl.hyl_beliefs}')
+        pst_p = amp.relmdl.hyl_beliefs
 
-        #amn.do_inference_is(infn_data)
-        #print(amn.relmdl.hyl_beliefs)
+        with open('../bed_data/idfbcamp_pst_hyls_p.json', 'w') as f:
+            flt_p = {}
+            for hyl in pst_p:
+                flt_p[hyl] = {prm: float(pst_p[hyl][prm]) for prm in pst_p[hyl]}
+            json.dump(flt_p, f)
+
+        amn.do_inference(obs_data)
+        print(f'Old n: {pri_n}')
+        print(f'New n: {amn.relmdl.hyl_beliefs}')
+        pst_n = amn.relmdl.hyl_beliefs
+
+        with open('../bed_data/idfbcamp_pst_hyls_n.json', 'w') as f:
+            flt_n = {}
+            for hyl in pst_n:
+                flt_n[hyl] = {prm: float(pst_n[hyl][prm]) for prm in pst_n[hyl]}
+            json.dump(flt_n, f)
+
+        jax.clear_caches()
 
     '''
     ===== 7) Prediction and confidence evaluation =====
     Check whether we meet the long-term reliability target and with sufficient confidence.
     '''
     if run_posterior_analysis:
-        amp.evaluate_reliability('chip_fail', plot_results=True)
-        if SHOW_PLOTS:
-            plt.show()
+        if True:
+            with open('../bed_data/idfbcamp_pst_hyls_p.json', 'r') as f:
+                pst_p = json.load(f)
+            with open('../bed_data/idfbcamp_pst_hyls_n.json', 'r') as f:
+                pst_n = json.load(f)
+
+        amn.relmdl.hyl_beliefs = pst_n
+        amp.relmdl.hyl_beliefs = pst_p
+        jax.clear_caches()
+
+        amp.relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_hdcr_l, 90, 87_600)
+        n_hyl = 1_000_000
+
+        def lp_fn(vals, site, key, test):
+            return amn.relmdl.logp_new(rng_key=key, test_dims=test.dims, test_conds=test.conds, site_vals={site: vals},
+                                       conditional=None, batch_dims=(len(vals),))
+        def lp_fp(vals, site, key, test):
+            return amp.relmdl.logp_new(rng_key=key, test_dims=test.dims, test_conds=test.conds, site_vals={site: vals},
+                                       conditional=None, batch_dims=(len(vals),))
+
+        k1, k2 = rand.split(amn._derive_key(), 2)
+        n_hyls = ('pbti_a0_nom', 'pbti_eaa_nom', 'pbti_alpha_nom', 'pbti_n_nom',
+                  'nhci_a0_nom', 'nhci_u_nom', 'nhci_alpha_nom', 'nhci_beta_nom')
+        p_hyls = ('nbti_a0_nom', 'nbti_eaa_nom', 'nbti_alpha_nom', 'nbti_n_nom',
+                  'phci_a0_nom', 'phci_u_nom', 'phci_alpha_nom', 'phci_beta_nom')
+        hyln = amn.relmdl.sample_new(k1, amn.test.dims, amn.test.conds, (n_hyl,), n_hyls)
+        hylp = amp.relmdl.sample_new(k2, amp.test.dims, amp.test.conds, (n_hyl,), p_hyls)
+
+        pst_entropy, pri_entropy = {}, {}
+        for hyl in n_hyls:
+            pst_entropy[hyl] = stratcona.engine.bed.entropy(
+                hyln[hyl], partial(lp_fn, site=hyl, test=amn.test, key=k1),
+                limiting_density_range=(-838.8608, 838.8607))
+        for hyl in p_hyls:
+            pst_entropy[hyl] = stratcona.engine.bed.entropy(
+                hylp[hyl], partial(lp_fp, site=hyl, test=amp.test, key=k1),
+                limiting_density_range=(-838.8608, 838.8607))
+
+        pst_h_tot = sum(pst_entropy.values())
+        pst_life = amp.evaluate_reliability('lifespan', num_samples=1_000_000)
+
+        # Now compute prior entropy and lifespan distribution for comparison
+        amn.relmdl.hyl_beliefs = pri_n
+        amp.relmdl.hyl_beliefs = pri_p
+        jax.clear_caches()
+
+        k1, k2 = rand.split(amn._derive_key(), 2)
+        hyln = amn.relmdl.sample_new(k1, amn.test.dims, amn.test.conds, (n_hyl,), n_hyls)
+        hylp = amp.relmdl.sample_new(k2, amp.test.dims, amp.test.conds, (n_hyl,), p_hyls)
+
+        for hyl in n_hyls:
+            pri_entropy[hyl] = stratcona.engine.bed.entropy(
+                hyln[hyl], partial(lp_fn, site=hyl, test=amn.test, key=k1),
+                limiting_density_range=(-838.8608, 838.8607))
+        for hyl in p_hyls:
+            pri_entropy[hyl] = stratcona.engine.bed.entropy(
+                hylp[hyl], partial(lp_fp, site=hyl, test=amp.test, key=k1),
+                limiting_density_range=(-838.8608, 838.8607))
+
+        pri_h_tot = sum(pri_entropy.values())
+        pri_life = amp.evaluate_reliability('lifespan', num_samples=1_000_000)
+
+
+        # Now a comparison of the two
+        info_gain = pri_h_tot - pst_h_tot
+
+        print(f'Prior Q90%-HDCR: {pri_life}')
+        print(f'Post Q90%-HDCR: {pst_life}')
+        print(f'Prior entropy: {pri_h_tot}')
+        print(f'Post entropy: {pst_h_tot}')
+        print(f'Info gain: {info_gain} nats')
+
 
     '''
     ===== 8) Metrics reporting =====
