@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-import time as t
+import time
 from itertools import product
 from functools import partial
 from multiprocess import Pool
@@ -68,6 +68,7 @@ def idfbcamp_qualification():
     viz_exp_data = False
     run_inference = False
     run_posterior_analysis = False
+    render_models = False
 
     dataset = login_to_database()
     '''
@@ -236,7 +237,7 @@ def idfbcamp_qualification():
                       'phci_a0': phci_a0, 'phci_u': phci_u, 'phci_alpha': phci_alpha, 'phci_beta': phci_beta, 'tempref': tempref}
         def residue(time, **kwargs):
             return jnp.abs(threshold - pmos_worst_deg(time, **kwargs))
-        t_life = stratcona.engine.minimization.minimize_jax(residue, func_args, (1, 1e7), precision=1e-4, log_gold=True)
+        t_life = stratcona.engine.minimization.minimize_jax(residue, func_args, (1, 1e9), precision=1e-4, log_gold=True)
         return t_life
 
     mbp.add_params(threshold=0.325 * 1.1)
@@ -288,14 +289,16 @@ def idfbcamp_qualification():
         fig.tight_layout()
         plt.show()
 
-    # Try generating some predictive lifespans
-    kx, kz = rand.split(rand.key(7342))
-    n_x, n_z = 4, 5
-    fd_dims, fd_conds = amp.field_test.dims, amp.field_test.conds
-    x_s = amp.relmdl.sample_new(kx, fd_dims, fd_conds, batch_dims=(n_x, n_z), keep_sites=amp.relmdl.hyls)
-    z_s = amp.relmdl.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=amp.relmdl.predictors,
-                                conditionals=x_s, compute_predictors=True)
-    print(f'Generated lifespans: {z_s}\n')
+        # Try generating some predictive lifespans
+        kx, kz = rand.split(rand.key(7342))
+        n_x, n_z = 4, 5
+        fd_dims, fd_conds = amp.field_test.dims, amp.field_test.conds
+        x_s = amp.relmdl.sample_new(kx, fd_dims, fd_conds, batch_dims=(n_x, n_z), keep_sites=amp.relmdl.hyls)
+        z_s = amp.relmdl.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=amp.relmdl.predictors,
+                                    conditionals=x_s, compute_predictors=True)
+        print(f'Generated lifespans: {z_s}\n')
+
+
 
     '''
     ===== 3) Resource limitation analysis =====
@@ -304,8 +307,9 @@ def idfbcamp_qualification():
     available time of up to 730 hours (1 month), the room temp to 130C bounds of the test system, and 0.8V to 0.95V
     supported range of the chips.
     
-    There are two sets of two chips, so with 5 temps, 5 volts, 4 times, there are 100 options per board, and thus 10_000
-    possible test configurations to consider.
+    There are two sets of two chips, so with 5 temps, 5 volts, 4 times, there are 100 options per board, 2 boards,
+    combination with replacement, and thus 5_500 possible test configurations to consider. The full 10_000 permutations
+    are here for simplicity.
     '''
     temps = [t + CELSIUS_TO_KELVIN for t in [30, 55, 80, 105, 130]]
     volts = [0.8, 0.85, 0.9, 0.95, 1.0]
@@ -399,17 +403,32 @@ def idfbcamp_qualification():
         high_us = [d for d in ds if d['u'] > u_max * 0.99]
 
         slice_time, slice_vdd, slice_temp = 730, 1.0, 403.15
-        slice = [d for d in ds if d['t1'] == slice_time and d['t2'] == slice_time
-                 and d['c1'] == slice_temp and d['c2'] == slice_temp]
+        slice = [d for d in ds if d['t1'] == slice_time and d['v1'] == slice_vdd
+                 and d['c1'] == slice_temp and d['t2'] == slice_time]
         # and e['v1'] == slice_vdd and e['v2'] == slice_vdd]
-        t1 = t2 = [303.15, 328.15, 353.15, 378.15, 403.15]
-        v1 = v2 = [0.8, 0.85, 0.9, 0.95, 1.0]
-        u = jnp.array([d['u'] for d in slice]).reshape((5, 5))
+        t1l = t2l = [303.15, 328.15, 353.15, 378.15, 403.15]
+        v1l = v2l = [0.8, 0.85, 0.9, 0.95, 1.0]
+        ul = jnp.array([d['u'] for d in slice]).reshape((5, 5))
 
-        fig, ax = plt.subplots()
-        ax.contourf(v1, v2, u)
-        ax.set_ylabel('v1')
-        ax.set_xlabel('v2')
+        t1 = t2 = jnp.repeat(jnp.array([303.15, 328.15, 353.15, 378.15, 403.15]), 5)
+        v1 = v2 = jnp.tile(jnp.array([0.8, 0.85, 0.9, 0.95, 1.0]), 5)
+        u = jnp.array([d['u'] for d in slice])
+
+        # Construct the 2D utility plot
+        sb.set_context('notebook')
+        sb.set_theme(style='ticks', font='Times New Roman')
+        fig, p = plt.subplots()
+        #p.contourf(v2l, t2l, ul)
+        points = p.scatter(v2, t2, c=u, cmap='cividis', linestyle='', marker='.', s=2000,
+                           label='Discrete test designs')
+        fig.colorbar(points, ax=p, orientation='vertical', label='Estimated utility')
+        p.scatter(1.0, 403.15, linestyle='', linewidths=100, marker='x', color='lightseagreen', s=400,
+                  label='Stress point of second board')
+        p.set_xlabel('$T_2$')
+        p.set_ylabel('$V_{DD_2}$')
+        p.annotate('Stress point of first board', (0.99, 400), (0.9, 390),
+                   arrowprops={'arrowstyle': 'simple', 'color': 'black'})
+        #p.legend()
         plt.show()
 
     '''
@@ -483,7 +502,9 @@ def idfbcamp_qualification():
     pri_p = amp.relmdl.hyl_beliefs
     pri_n = amn.relmdl.hyl_beliefs
     if run_inference:
+        start_time = time.time()
         amp.do_inference(obs_data)
+        print(f'P inference time taken: {time.time() - start_time}')
         print(f'Old p: {pri_p}')
         print(f'New p: {amp.relmdl.hyl_beliefs}')
         pst_p = amp.relmdl.hyl_beliefs
@@ -494,7 +515,9 @@ def idfbcamp_qualification():
                 flt_p[hyl] = {prm: float(pst_p[hyl][prm]) for prm in pst_p[hyl]}
             json.dump(flt_p, f)
 
+        start_time = time.time()
         amn.do_inference(obs_data)
+        print(f'N inference time taken: {time.time() - start_time}')
         print(f'Old n: {pri_n}')
         print(f'New n: {amn.relmdl.hyl_beliefs}')
         pst_n = amn.relmdl.hyl_beliefs
@@ -520,10 +543,12 @@ def idfbcamp_qualification():
 
         amn.relmdl.hyl_beliefs = pst_n
         amp.relmdl.hyl_beliefs = pst_p
+        amn.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
+        amp.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
         jax.clear_caches()
 
         amp.relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_hdcr_l, 90, 87_600)
-        n_hyl = 1_000_000
+        samplecount = 100_000
 
         def lp_fn(vals, site, key, test):
             return amn.relmdl.logp_new(rng_key=key, test_dims=test.dims, test_conds=test.conds, site_vals={site: vals},
@@ -532,25 +557,29 @@ def idfbcamp_qualification():
             return amp.relmdl.logp_new(rng_key=key, test_dims=test.dims, test_conds=test.conds, site_vals={site: vals},
                                        conditional=None, batch_dims=(len(vals),))
 
-        k1, k2 = rand.split(amn._derive_key(), 2)
+        k1, k2, k3 = rand.split(amn._derive_key(), 3)
         n_hyls = ('pbti_a0_nom', 'pbti_eaa_nom', 'pbti_alpha_nom', 'pbti_n_nom',
                   'nhci_a0_nom', 'nhci_u_nom', 'nhci_alpha_nom', 'nhci_beta_nom')
         p_hyls = ('nbti_a0_nom', 'nbti_eaa_nom', 'nbti_alpha_nom', 'nbti_n_nom',
                   'phci_a0_nom', 'phci_u_nom', 'phci_alpha_nom', 'phci_beta_nom')
-        hyln = amn.relmdl.sample_new(k1, amn.test.dims, amn.test.conds, (n_hyl,), n_hyls)
-        hylp = amp.relmdl.sample_new(k2, amp.test.dims, amp.test.conds, (n_hyl,), p_hyls)
+        hyln_pst = amn.relmdl.sample_new(k1, amn.test.dims, amn.test.conds, (samplecount,), n_hyls)
+        hylp_pst = amp.relmdl.sample_new(k2, amp.test.dims, amp.test.conds, (samplecount,), p_hyls)
+        pst_pred = amp.relmdl.sample_new(k3, amp.field_test.dims, amp.field_test.conds, (1_000_000,),
+                                         ('field_lifespan',), compute_predictors=True)
 
         pst_entropy, pri_entropy = {}, {}
         for hyl in n_hyls:
             pst_entropy[hyl] = stratcona.engine.bed.entropy(
-                hyln[hyl], partial(lp_fn, site=hyl, test=amn.test, key=k1),
+                hyln_pst[hyl], partial(lp_fn, site=hyl, test=amn.test, key=k1),
                 limiting_density_range=(-838.8608, 838.8607))
         for hyl in p_hyls:
             pst_entropy[hyl] = stratcona.engine.bed.entropy(
-                hylp[hyl], partial(lp_fp, site=hyl, test=amp.test, key=k1),
+                hylp_pst[hyl], partial(lp_fp, site=hyl, test=amp.test, key=k1),
                 limiting_density_range=(-838.8608, 838.8607))
 
         pst_h_tot = sum(pst_entropy.values())
+        pst_h_n = sum([pst_entropy[hyl] for hyl in n_hyls])
+        pst_h_p = sum([pst_entropy[hyl] for hyl in p_hyls])
         pst_life = amp.evaluate_reliability('lifespan', num_samples=1_000_000)
 
         # Now compute prior entropy and lifespan distribution for comparison
@@ -558,33 +587,113 @@ def idfbcamp_qualification():
         amp.relmdl.hyl_beliefs = pri_p
         jax.clear_caches()
 
-        k1, k2 = rand.split(amn._derive_key(), 2)
-        hyln = amn.relmdl.sample_new(k1, amn.test.dims, amn.test.conds, (n_hyl,), n_hyls)
-        hylp = amp.relmdl.sample_new(k2, amp.test.dims, amp.test.conds, (n_hyl,), p_hyls)
+        k1, k2, k3 = rand.split(amn._derive_key(), 3)
+        hyln_pri = amn.relmdl.sample_new(k1, amn.test.dims, amn.test.conds, (samplecount,), n_hyls)
+        hylp_pri = amp.relmdl.sample_new(k2, amp.test.dims, amp.test.conds, (samplecount,), p_hyls)
+        pri_pred = amp.relmdl.sample_new(k3, amp.field_test.dims, amp.field_test.conds, (1_000_000,),
+                                         ('field_lifespan',), compute_predictors=True)
 
         for hyl in n_hyls:
             pri_entropy[hyl] = stratcona.engine.bed.entropy(
-                hyln[hyl], partial(lp_fn, site=hyl, test=amn.test, key=k1),
+                hyln_pri[hyl], partial(lp_fn, site=hyl, test=amn.test, key=k1),
                 limiting_density_range=(-838.8608, 838.8607))
         for hyl in p_hyls:
             pri_entropy[hyl] = stratcona.engine.bed.entropy(
-                hylp[hyl], partial(lp_fp, site=hyl, test=amp.test, key=k1),
+                hylp_pri[hyl], partial(lp_fp, site=hyl, test=amp.test, key=k1),
                 limiting_density_range=(-838.8608, 838.8607))
 
         pri_h_tot = sum(pri_entropy.values())
+        pri_h_n = sum([pri_entropy[hyl] for hyl in n_hyls])
+        pri_h_p = sum([pri_entropy[hyl] for hyl in p_hyls])
         pri_life = amp.evaluate_reliability('lifespan', num_samples=1_000_000)
 
-
         # Now a comparison of the two
+        hyl_ig = {hyl: pri_entropy[hyl] - pst_entropy[hyl] for hyl in pri_entropy}
         info_gain = pri_h_tot - pst_h_tot
 
         print(f'Prior Q90%-HDCR: {pri_life}')
         print(f'Post Q90%-HDCR: {pst_life}')
         print(f'Prior entropy: {pri_h_tot}')
-        print(f'Post entropy: {pst_h_tot}')
-        print(f'Info gain: {info_gain} nats')
+        print(f'Post entropy: {pst_h_tot}, n: {pst_h_n}, p: {pst_h_p}')
+        print(f'Info gain: {info_gain} nats, n: {pri_h_n - pst_h_n}, p: {pri_h_p - pst_h_p}')
 
+        ### Generate the hyper-latent distribution plots ###
+        sb.set_context('notebook')
+        sb.set_theme(style='ticks', font='Times New Roman')
 
+        fig, p = plt.subplots(1, 1)
+        display_map = {'nbti_a0_nom': "$NBTI_{A_0}$", 'nbti_eaa_nom': "$NBTI_{E_{aa}}$", 'nbti_alpha_nom': "$NBTI_{\\alpha}$", 'nbti_n_nom': "$NBTI_{n}$",
+                       'pbti_a0_nom': "$PBTI_{A_0}$", 'pbti_eaa_nom': "$PBTI_{E_{aa}}$", 'pbti_alpha_nom': "$PBTI_{\\alpha}$", 'pbti_n_nom': "$PBTI_{n}$",
+                       'phci_a0_nom': "$pHCI_{A_0}$", 'phci_u_nom': "$pHCI_{u}$", 'phci_alpha_nom': "$pHCI_{\\alpha}$", 'phci_beta_nom': "$pHCI_{\\beta}$",
+                       'nhci_a0_nom': "$nHCI_{A_0}$", 'nhci_u_nom': "$nHCI_{u}$", 'nhci_alpha_nom': "$nHCI_{\\alpha}$", 'nhci_beta_nom': "$nHCI_{\\beta}$"}
+        df_list = []
+        pri_samples = hyln_pri | hylp_pri
+        pst_samples = hyln_pst | hylp_pst
+        for hyl in display_map:
+            hyl_df = pd.DataFrame(pri_samples[hyl], columns=['val'])
+            hyl_df['hyl'] = display_map[hyl]
+            hyl_df['pri-pst'] = 'pri'
+            df_list.append(hyl_df)
+        for hyl in display_map:
+            hyl_df = pd.DataFrame(pst_samples[hyl], columns=['val'])
+            hyl_df['hyl'] = display_map[hyl]
+            hyl_df['pri-pst'] = 'pst'
+            df_list.append(hyl_df)
+        df_violin = pd.concat(df_list)
+
+        sb.violinplot(df_violin, x='val', y='hyl', ax=p, split=True, density_norm='count', #width=1.0,
+                      hue='pri-pst', inner='quart', palette=['skyblue', 'darkblue'], linewidth=1.25)
+        for fill in p.collections:
+            fill.set_alpha(0.85)
+
+        plt.rcParams['mathtext.fontset'] = 'custom'
+        plt.rcParams['mathtext.rm'] = 'Times New Roman'
+        plt.rcParams['mathtext.it'] = 'Times New Roman'
+        plt.rcParams['font.family'] = 'Times New Roman'
+        # Add text annotations showing LDDP entropy
+        pos = range(len(display_map))
+        for tick, label, hyl in zip(pos, p.get_yticklabels(), display_map):
+            p.text(-2, pos[tick] - 0.11,
+                   f"$H_{{\\varphi-prior}}={round(float(pri_entropy[hyl]), 2)}$",
+                   horizontalalignment='center', size='medium', color='black')
+            p.text(-2, pos[tick] + 0.26,
+                   f'$H_{{\\varphi-posterior}}={round(float(pst_entropy[hyl]), 2)}$',
+                   horizontalalignment='center', size='medium', color='black')
+            p.text(21, pos[tick] + 0.26,
+                   f'$Reduction={round(float(hyl_ig[hyl]), 2)} \\;\\; nats$',
+                   horizontalalignment='center', size='medium', color='black')
+        p.legend().remove()
+        p.tick_params(axis='y', which='major', labelsize=10, labelfontfamily='Times New Roman')
+        p.set_xlabel('Value distribution', fontsize='medium')
+        p.set_xlim(-5, 25)
+        p.set_ylabel('Hyper-latent variable', fontsize='medium')
+
+        # Now for the predictive distribution plot
+        fig, p = plt.subplots(1, 1)
+
+        p.axvspan(float(jnp.log(pri_life[0][0])), float(jnp.log(pri_life[0][1])), color='lightseagreen', linestyle='dashed', alpha=0.2,
+                  label='Prior predicted Q90%-HDCR')
+        p.axvspan(float(jnp.log(pst_life[0][0])), float(jnp.log(pst_life[0][1])), color='darkgreen', linestyle='dashed', alpha=0.3,
+                  label='Posterior predicted Q90%-HDCR')
+
+        p.hist(jnp.log(pri_pred['field_lifespan']).flatten(), 150, density=True, alpha=0.9, color='skyblue', histtype='stepfilled',
+                  label='Prior predicted lifespan distribution')
+        p.hist(jnp.log(pst_pred['field_lifespan']).flatten(), 150, density=True, alpha=0.7, color='darkblue', histtype='stepfilled',
+                  label='Posterior predicted lifespan distribution')
+
+        p.set_xlim(3, 20)
+        p.set_xticks([], [])
+        p.set_xlabel('Test Chip Lifespan (log scale A.U.)')
+        p.set_ylabel('Probability Density')
+        p.legend(loc='upper right')
+
+        plt.show()
+
+    if render_models:
+        numpyro.render_model(amn.relmdl.spm, model_args=(amn.test.dims, amn.test.conds, pri_n, amn.relmdl.param_vals),
+                             filename='../renders/idfbcamp_n.png')
+        numpyro.render_model(amp.relmdl.spm, model_args=(amp.test.dims, amp.test.conds, pri_p, amp.relmdl.param_vals,),
+                             filename='../renders/idfbcamp_p.png')
     '''
     ===== 8) Metrics reporting =====
     Generate the regulatory and consumer metrics we can use to market and/or certify the product.
