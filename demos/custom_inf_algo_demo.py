@@ -11,6 +11,10 @@ import jax
 import jax.numpy as jnp
 import jax.random as rand
 
+import numpy as np
+import scipy.stats as stats
+from matplotlib.lines import Line2D
+
 import time
 from functools import partial
 import json
@@ -29,6 +33,78 @@ import stratcona
 
 BOLTZ_EV = 8.617e-5
 CELSIUS_TO_KELVIN = 273.15
+
+
+def good_accuracy_evidence_plot():
+    sb.set_theme(style='ticks', font='Times New Roman')
+    sb.set_context('talk')
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['mathtext.rm'] = 'Times New Roman'
+    plt.rcParams['mathtext.it'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman'
+
+    fig, p = plt.subplots(1, 1)
+    # Manual entry of dist params since all examples are in separate functions
+
+    # Simple high dev count
+    pri_x, pri_xs = [1.2, 0.9 * 4], [0.9, 0.2]
+    vmrg_x, vmrg_xs = [1.283052, 0.014250912 * 4], [1.0176388, 0.11077845]
+    nuts_x, nuts_xs = [1.2872009, 0.013736788 * 4], [0.9986814, 0.1121715]
+    x = np.linspace(-2, 4, 100)
+    plt.plot(x, stats.norm.pdf(x, pri_x[0], pri_x[1]), color='skyblue', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, pri_xs[0], pri_xs[1]), color='skyblue', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, vmrg_x[0], vmrg_x[1]), color='darkorange', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, vmrg_xs[0], vmrg_xs[1]), color='darkorange', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, nuts_x[0], nuts_x[1]), color='darkblue', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, nuts_xs[0], nuts_xs[1]), color='darkblue', lw=2, linestyle='solid')
+
+    # Loglin deg multilevel
+    pri_an, pri_ac, pri_al, pri_eaa = [14.5 - 15, 0.5], [2, 0.5], [2, 0.5], [7 - 8, 0.3]
+    vmrg_an, vmrg_ac, vmrg_al, vmrg_eaa = [14.586182 - 15, 0.40437663], [1.8554711, 0.11505531], [2.2565696, 0.42952752], [7.0471063 - 8, 0.14664122]
+    nuts_an, nuts_ac, nuts_al, nuts_eaa = [14.48159 - 15, 0.43556726], [1.7074873, 0.12949342], [2.2722185, 0.41605797], [7.017724 - 8, 0.15348393]
+    x = np.linspace(-2, 4, 100)
+    plt.plot(x, stats.norm.pdf(x, pri_an[0], pri_an[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_ac[0], pri_ac[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_al[0], pri_al[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_eaa[0], pri_eaa[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_an[0], vmrg_an[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_ac[0], vmrg_ac[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_al[0], vmrg_al[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_eaa[0], vmrg_eaa[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_an[0], nuts_an[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_ac[0], nuts_ac[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_al[0], nuts_al[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_eaa[0], nuts_eaa[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+
+    # Linear dev var
+    pri_mn, pri_bn, pri_bd = [1.2 - 2, 3], [4.8 - 2, 0.5], [7.8 - 7.5, 0.4]
+    vmrg_mn, vmrg_bn, vmrg_bd = [1.3336744 - 2, 0.03609566], [4.786585 - 2, 0.18442212], [8.010033 - 7.5, 0.3549363]
+    nuts_mn, nuts_bn, nuts_bd = [1.328055 - 2, 0.03680061], [4.834529 - 2, 0.20270407], [7.934951 - 7.5, 0.3646965]
+    x = np.linspace(-2, 4, 100)
+    plt.plot(x, stats.norm.pdf(x, pri_mn[0], pri_mn[1]), color='skyblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_bn[0], pri_bn[1]), color='skyblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_bd[0], pri_bd[1]), color='skyblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_mn[0], vmrg_mn[1]), color='darkorange', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_bn[0], vmrg_bn[1]), color='darkorange', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_bd[0], vmrg_bd[1]), color='darkorange', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_mn[0], nuts_mn[1]), color='darkblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_bn[0], nuts_bn[1]), color='darkblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_bd[0], nuts_bd[1]), color='darkblue', lw=2, linestyle=(0, (5, 1)))
+
+    p.set_xlim(-2, 4)
+    p.set_xlabel('Value')
+    p.set_ylabel('Probability Density')
+
+    p.annotate('Per-sample variance variable bias', (1.8, 3.5), (0.3, 9), fontsize='small',
+               arrowprops={'arrowstyle': 'simple', 'color': 'black'})
+
+    legend_elements = [Line2D([0], [0], color='skyblue', lw=3, label='Prior'),
+                       Line2D([0], [0], color='darkorange', lw=3, label='V Marginalize'),
+                       Line2D([0], [0], color='darkblue', lw=3, label='NUTS')]
+    p.legend(handles=legend_elements, loc='upper right', fontsize='small')
+    fig.subplots_adjust(bottom=0.3)
+
+    plt.show()
 
 
 # Working!!!
@@ -63,6 +139,68 @@ def simple_high_dev_count():
     jax.clear_caches()
     am.do_inference(y)
     print(am.relmdl.hyl_beliefs)
+
+
+def viz_algorithm_bias():
+    # Define the simple model
+    mb = stratcona.SPMBuilder('barebones')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('x', dists.Normal, {'loc': 2.3, 'scale': 0.0001})
+    mb.add_hyperlatent('xs', dists.Normal, {'loc': 1, 'scale': 0.0001}, var_tf)
+    mb.add_latent('v', nom='x', dev='xs')
+    mb.add_params(ys=0.01)
+    mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 100)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=87744877)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('bare', {'e': {'lot': 1, 'chp': 1}}, {'e': {}})
+    am.set_test_definition(d)
+    k = rand.key(82392)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'y': y_s['e_y']}}
+    print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
+
+    sb.set_theme(style='ticks', font='Times New Roman')
+    sb.set_context('talk')
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['mathtext.rm'] = 'Times New Roman'
+    plt.rcParams['mathtext.it'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman'
+    fig, p = plt.subplots(1, 1)
+    x = np.linspace(0, 2, 200)
+    p.plot(x, stats.norm.pdf(x, 1.0, 0.2), color='skyblue', lw=2, linestyle='solid', label='Prior')
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    epslist = {0.003: 'lightpink', 0.01: 'hotpink', 0.03: 'orchid', 0.1: 'mediumorchid', 0.3: 'rebeccapurple'}
+    for ys in epslist.keys():
+        am.relmdl.hyl_beliefs = {'x': {'loc': 2.3, 'scale': 0.2}, 'xs': {'loc': 1.0, 'scale': 0.2}}
+        am.relmdl.param_vals['ys'] = ys
+        jax.clear_caches()
+
+        perf = am.do_inference_is(y, n_x=50_000)
+        print(perf)
+        print(am.relmdl.hyl_beliefs)
+        xsu, xsv = am.relmdl.hyl_beliefs['xs']['loc'], am.relmdl.hyl_beliefs['xs']['scale']
+        p.plot(x, stats.norm.pdf(x, xsu, xsv), color=epslist[ys], lw=2, linestyle='solid',
+               label=f"Posterior - $ε_y$:$ε_{{true}}$ = {round(ys*100, 2)}")
+
+    #am.relmdl.hyl_beliefs = {'x': {'loc': 2.3, 'scale': 0.2}, 'xs': {'loc': 0.9, 'scale': 0.2}}
+    #am.relmdl.param_vals['ys'] = ys
+    #jax.clear_caches()
+
+    #perf = am.do_inference(y)
+    #xsu, xsv = am.relmdl.hyl_beliefs['xs']['loc'], am.relmdl.hyl_beliefs['xs']['scale']
+    #p.plot(x, stats.norm.pdf(x, xsu, xsv), color='darkblue', lw=2, linestyle='solid', label=f"Posterior - NUTS")
+    p.axvline(1.0, 0, 1, label='True mean σ')
+
+    p.set_xlim(0, 2)
+    p.set_xlabel('Value Distribution')
+    p.set_ylabel('Probability Density')
+    p.legend(loc='upper right')
+    fig.subplots_adjust(bottom=0.2)
+
+    plt.show()
+
 
 
 # Working!!!
@@ -180,7 +318,6 @@ def linear_dev_var():
     print(am.relmdl.hyl_beliefs)
 
 
-# Working!!!
 def loglin_multilevel_var():
     # Introduces lognormal hyls, transforms, and more complex behaviour
     boltz_ev = 8.617e-5
@@ -217,7 +354,7 @@ def loglin_multilevel_var():
     am.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 13, 'scale': 1.5}, 'eaa_nom': {'loc': 7, 'scale': 0.3},
                              'l_a_chp': {'loc': 5, 'scale': 2}, 'l_a_lot': {'loc': 5, 'scale': 2}}
     jax.clear_caches()
-    perf = am.do_inference_is(y, n_x=4_000)
+    perf = am.do_inference_is(y, n_x=40_000)
     print(perf)
     print(am.relmdl.hyl_beliefs)
 
@@ -638,4 +775,4 @@ def nbti_single_level_var():
 
 
 if __name__ == '__main__':
-    em_multilevel()
+    viz_algorithm_bias()

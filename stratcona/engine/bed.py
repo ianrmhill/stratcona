@@ -252,6 +252,12 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
                 metrics[m] = qx_hdcr_width(z_s[f'field_{predictor}'], w_z, 0.9, n_bins=100)
+            case 'l_qx_hdcr_width':
+                n_z = n_v
+                x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
+                z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
+                                     conditionals=x_s_tz, compute_predictors=True)
+                metrics[m] = qx_hdcr_width(jnp.log(z_s[f'field_{predictor}']), w_z, 0.9, n_bins=200)
             case 'test_duration':
                 ew = jnp.zeros((len(d_dims), n_y))
                 for i, e in enumerate(d_dims):
