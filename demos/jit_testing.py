@@ -14,6 +14,7 @@ from functools import partial
 import timeit
 import time
 import json
+import struct
 
 import seaborn
 import matplotlib.pyplot as plt
@@ -56,7 +57,7 @@ def jax_while():
 ### DATABASE CONNECTION HANDLING ###
 
 DB_NAME = 'stratcona'
-COLL_NAME = 'sandbox'
+COLL_NAME = 'idfbcamp-qual'
 
 def login_to_database():
     tls_ca = certifi.where()
@@ -84,6 +85,54 @@ def database_storage():
     dataset = login_to_database()
     test_data = {'f1': 4.1, 'f2': 'hello again', 'time': dt.datetime.now(tz=dt.UTC)}
     try_database_upload(dataset, test_data)
+
+
+def examine_qual_data():
+    ds = []
+    for i in range(50):
+        with open(f'data/bed_qual_y5k_x50k_batch{i}.json', 'r') as f:
+            batch = json.load(f)
+        for d in [k for k in batch.keys() if k[0] in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']]:
+            ds.append(batch[d])
+
+    # Normalize the mean and variance of HDCR width to match EIG
+    widths = jnp.array([d['e-hdcr-width-p'] for d in ds])
+    eigs = jnp.array([d['eig-p'] + d['eig-n'] for d in ds])
+    w_m, w_v = jnp.mean(widths), jnp.std(widths)
+    eig_m, eig_v = jnp.mean(eigs), jnp.std(eigs)
+
+    for d in ds:
+        d['w-score'] = (((w_m - d['e-hdcr-width-p']) / w_v) * eig_v) + eig_m
+        d['u'] = (d['eig-p'] + d['eig-n']) + d['w-score']
+
+    u_max, eig_max, w_max = 0, 0, 0
+    i_u_max, i_eig_max, i_w_max = -1, -1, -1
+    for i, d in enumerate(ds):
+        if d['u'] > u_max:
+            u_max = d['u']
+            i_u_max = i
+        if d['eig-p'] + d['eig-n'] > eig_max:
+            eig_max = d['eig-p'] + d['eig-n']
+            i_eig_max = i
+        if d['w-score'] > w_max:
+            w_max = d['w-score']
+            i_w_max = i
+    print(ds[i_u_max])
+    high_us = [d for d in ds if d['u'] > u_max * 0.99]
+
+    slice_time, slice_vdd, slice_temp = 730, 1.0, 403.15
+    slice = [d for d in ds if d['t1'] == slice_time and d['t2'] == slice_time
+             and d['c1'] == slice_temp and d['c2'] == slice_temp]
+                 #and e['v1'] == slice_vdd and e['v2'] == slice_vdd]
+    t1 = t2 = [303.15, 328.15, 353.15, 378.15, 403.15]
+    v1 = v2 = [0.8, 0.85, 0.9, 0.95, 1.0]
+    u = jnp.array([d['u'] for d in slice]).reshape((5, 5))
+
+    fig, ax = plt.subplots()
+    ax.contourf(v1, v2, u)
+    ax.set_ylabel('v1')
+    ax.set_xlabel('v2')
+    plt.show()
 
 
 def examine_data():
@@ -260,5 +309,28 @@ def main():
     #print(f'Jitted: {best_perf}s')
 
 
+def tig_calc():
+    k = rand.key(2362736)
+    k, k1 = rand.split(k)
+
+    x1 = dists.Normal(0, 2.71)
+    s1 = x1.sample(k1, (1_000_000,))
+    m1 = jnp.where(s1 > 0, 1, 0)
+    print(f'Percent over 0: {100 * (jnp.count_nonzero(m1) / 1_000_000)}%')
+    lp1 = x1.log_prob
+    h1 = stratcona.engine.bed.entropy(s1, lp1, limiting_density_range=(-838.8608, 838.8607))
+    print(f'H32: {h1} nats')
+
+    k, k1 = rand.split(k)
+    x1 = dists.Normal(3, 2.3408)
+    #x1 = dists.Normal(1, 0.7803)
+    s1 = x1.sample(k1, (1_000_000,))
+    m1 = jnp.where(s1 > 0, 1, 0)
+    print(f'Percent over 0: {100 * (jnp.count_nonzero(m1) / 1_000_000)}%')
+    lp1 = x1.log_prob
+    h1 = stratcona.engine.bed.entropy(s1, lp1, limiting_density_range=(-838.8608, 838.8607))
+    print(f'H32: {h1} nats')
+
+
 if __name__ == '__main__':
-    examine_data()
+    tig_calc()

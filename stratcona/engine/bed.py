@@ -25,8 +25,8 @@ from stratcona.engine.inference import int_out_v
 NATS_TO_BITS = jnp.log2(jnp.e)
 # Machine precision is defaulted to 32 bits since most instruments don't have 64 bit precision and/or noise floors. Less
 # precise but smaller entropy values makes things nicer to deal with.
-CARDINALITY_MANTISSA_32BIT = float(2 ** 23)
-CARDINALITY_MANTISSA_64BIT = float(2 ** 53)
+CARDINALITY_MANTISSA_32BIT = float(2 ** 24)
+CARDINALITY_MANTISSA_64BIT = float(2 ** 54)
 # Marginal probability below which a sample observed 'y' will be excluded from EIG computation
 LOW_PROB_CUTOFF = 1e-20
 # Gap between trace samples to reduce memory and performance impact
