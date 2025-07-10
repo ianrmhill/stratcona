@@ -40,8 +40,7 @@ def convert(vals):
 # Helper function to convert likelihoods to alpha values that result in clear plots
 def likelihood_to_alpha(probs, max_alpha=0.5):
     min_alpha = 0.1
-    alphas = min_alpha + ((probs / jnp.max(probs)) * (max_alpha - min_alpha))
-    return alphas
+    return min_alpha + ((probs / jnp.max(probs)) * (max_alpha - min_alpha))
 
 
 # Weibull weibull_cdf
@@ -81,7 +80,7 @@ def weibull_inference():
     mb_w.add_observed('ttf', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'}, num_devs)
     mb_w.add_predictor_stochastic('lifespan', dists.Weibull, {'concentration': 'k_pos', 'scale': 'sc_pos'})
 
-    am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633836, rel_req=relreq)
+    am_w = stratcona.AnalysisManager(mb_w.build_model(), rng_seed=92633835, rel_req=relreq)
 
     # Simulate some Weibull distributed failure data
     am_w.set_test_definition(test_130)
@@ -197,9 +196,9 @@ def weibull_inference():
     p.add_collection(col, autolim=False)
 
     # Plot the underlying Weibull distributions for the three lots
-    p.plot(x, sim_dists[0], color='darkorange', linestyle='--', linewidth=2, label=f'Lot 1')
-    p.plot(x, sim_dists[1], color='sienna', linestyle='--', linewidth=2, label=f'Lot 2')
-    p.plot(x, sim_dists[2], color='gold', linestyle='--', linewidth=2, label=f'Lot 3')
+    p.plot(x, sim_dists[0], color='darkorange', linestyle='--', linewidth=2, label='Lot 1')
+    p.plot(x, sim_dists[1], color='sienna', linestyle='--', linewidth=2, label='Lot 2')
+    p.plot(x, sim_dists[2], color='gold', linestyle='--', linewidth=2, label='Lot 3')
 
     # Plot the fitted curve
     p.plot(x, fit_fails, color='darkblue', linewidth=2)

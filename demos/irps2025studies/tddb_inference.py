@@ -5,6 +5,7 @@ from pprint import pprint
 
 import numpyro as npyro
 import numpyro.distributions as dists
+# Device count has to be set before importing jax
 npyro.set_host_device_count(4)
 
 import jax
@@ -14,15 +15,9 @@ import jax.random as rand
 import time
 from functools import partial
 from scipy.optimize import curve_fit
-from numpy.linalg import cholesky
-import reliability
-import pandas as pd
 
 import seaborn as sb
 from matplotlib import pyplot as plt
-
-import gerabaldi
-from gerabaldi.models import *
 
 import os
 import sys
@@ -65,13 +60,10 @@ def tddb_inference():
 
     def e_model_ttf(temp, a_o, e_aa, k):
         ttf_hours = 1e-5 * a_o * jnp.exp(e_aa / (k * temp))
-        ttf_years = ttf_hours / 8760
-        return ttf_years
+        return ttf_hours / 8760
 
-    #mb_e.add_params(a_o_nom=3.8, a_o_dev=0.07, a_o_chp=0.01, a_o_lot=0.01)
     mb_e.add_params(a_o_nom=3.8, a_o_dev=0.02, a_o_chp=0.001, a_o_lot=0.004)
     mb_e.add_latent('a_o', nom='a_o_nom', dev='a_o_dev', chp='a_o_chp', lot='a_o_lot')
-    #mb_e.add_params(e_aa_nom=0.70, e_aa_dev=0.02, e_aa_chp=0.01, e_aa_lot=0.01)
     mb_e.add_params(e_aa_nom=0.70, e_aa_dev=0.01, e_aa_chp=0.001, e_aa_lot=0.004)
     mb_e.add_latent('e_aa', nom='e_aa_nom', dev='e_aa_dev', chp='e_aa_chp', lot='e_aa_lot')
 
@@ -102,8 +94,7 @@ def tddb_inference():
         tau_o = t_o * jnp.exp((-(e_b * 0.001) / k) * ((1 / temp) - (1 / 300)))
         g = g_o * (1 + (((delta * 0.1) / k) * ((1 / temp) - (1 / 300))))
         ttf_hours = 1e6 * tau_o * jnp.exp(g / e_ox)
-        ttf_years = ttf_hours / 8760
-        return ttf_years
+        return ttf_hours / 8760
 
     mb_inv_e.add_params(t_o_nom=4.3, t_o_dev=0.4, t_o_chp=0.25, t_o_lot=0.23)
     mb_inv_e.add_latent('t_o', nom='t_o_nom', dev='t_o_dev', chp='t_o_chp', lot='t_o_lot')
@@ -145,8 +136,7 @@ def tddb_inference():
 
     def p_model_ttf(temp, t_o, n, a, b, vg):
         ttf_hours = 1e0 * t_o * (vg ** -n) * jnp.exp(((a * 1000) / temp) + ((b * 100000) / (temp ** 2)))
-        ttf_years = ttf_hours / 8760
-        return ttf_years
+        return ttf_hours / 8760
 
     mb_p.add_params(t_o_nom=1.54, t_o_dev=0.2, t_o_chp=0.16, t_o_lot=0.15)
     mb_p.add_latent('t_o', nom='t_o_nom', dev='t_o_dev', chp='t_o_chp', lot='t_o_lot')
@@ -182,30 +172,6 @@ def tddb_inference():
         print(f"Means of {k}: low s: {means[k]['el_s']}, med s: {means[k]['em_s']}, hi s: {means[k]['eh_s']}, low l: {means[k]['el_l']}, med l: {means[k]['em_l']}, hi l: {means[k]['eh_l']}")
         print(f"Variances of {k}: low s: {vars[k]['el_s']}, med s: {vars[k]['em_s']}, hi s: {vars[k]['eh_s']}, low l: {vars[k]['el_l']}, med l: {vars[k]['em_l']}, hi l: {vars[k]['eh_l']}")
 
-    # Determine the probability of the small test data sample under the simulation model, too low for plotting though
-    #nom_ttfs = {'el': 4.3, 'em': 2.1, 'eh': 1.2}
-    #sample_sites, val_map = [], {}
-    #for temp in ['el', 'em', 'eh']:
-    #    for ltnt in ['a_o', 'e_aa']:
-    #        for lyr in ['dev', 'chp', 'lot']:
-    #            if lyr == 'dev':
-    #                sample_sites.append(f'{temp}_ttf_{ltnt}_{lyr}_ls')
-    #                val_map[f'{temp}_ttf_{ltnt}_{lyr}_ls'] = 0.0
-    #            else:
-    #                sample_sites.append(f'{temp}_{ltnt}_{lyr}_ls')
-    #                val_map[f'{temp}_{ltnt}_{lyr}_ls'] = 0.0
-    #    sample_sites.append(f'{temp}_ttf')
-    #    val_map[f'{temp}_ttf'] = nom_ttfs[temp]
-
-    #am_e.set_test_definition(test_s)
-    #sim_tr = am_e.sim_test_measurements(rtrn_tr=False)
-    #k1, k2 = rand.split(rand.key(7932854))
-    #nom_vals = {key: jnp.full_like(sim_tr[key], val_map[key]) for key in sample_sites}
-    #mean_prob = jnp.exp(am_e.relmdl.logp(k1, test_s, nom_vals, sim_tr))
-    #sim_vals = {key: sim_tr[key] for key in sample_sites}
-    #sim_prob = jnp.exp(am_e.relmdl.logp(k2, test_s, sim_vals, sim_tr))
-    #normd_probs = sim_prob / mean_prob
-
     ### Plot the simulated data ###
     sb.set_theme(style='ticks', font='Times New Roman')
     sb.set_context('notebook')
@@ -238,29 +204,19 @@ def tddb_inference():
         p[i].set_xlabel('Time to Failure (years)')
         p[i].set_xscale('log')
     fig.subplots_adjust(hspace=10)
-    #plt.show()
 
     ### Define the Power Law SPM for inference ###
     mb = stratcona.SPMBuilder(mdl_name='Power-Model')
 
-    #t_0_nom_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.0001)])
     mb.add_hyperlatent('t_o_nom', dists.LogNormal, {'loc': 2.34, 'scale': 1.9}, transform=dists.transforms.AffineTransform(0, 0.0001))
-    #t_0_var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.00001)])
     mb.add_hyperlatent('t_o_var', dists.LogNormal, {'loc': 2.5, 'scale': 1.4}, transform=dists.transforms.AffineTransform(0, 0.00001))
-
     mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 2.5, 'scale': 0.01})
-    #n_var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
-    #mb.add_hyperlatent('n_var', dists.Normal, {'loc': 2.5, 'scale': 1.3}, transform=n_var_tf)
-
     mb.add_hyperlatent('a_nom', dists.Normal, {'loc': 6.4, 'scale': 0.4})
     n_var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
     mb.add_hyperlatent('a_var', dists.Normal, {'loc': 1.5, 'scale': 1.3}, transform=n_var_tf)
-
     mb.add_hyperlatent('b_nom', dists.Normal, {'loc': 2.9, 'scale': 0.4})
-    n_var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
     mb.add_hyperlatent('b_var', dists.Normal, {'loc': 1.5, 'scale': 1.3}, transform=n_var_tf)
 
-    #ttf_hours = 1e0 * t_o * (vg ** -n) * jnp.exp(((a * 1000) / temp) + ((b * 100000) / (temp ** 2)))
     mb.add_latent('t_o', nom='t_o_nom', dev='t_o_var', chp=None, lot=None)
     mb.add_latent('n', nom='n_nom', dev=None, chp=None, lot=None)
     mb.add_latent('a', nom='a_nom', dev='a_var', chp=None, lot=None)
@@ -284,27 +240,25 @@ def tddb_inference():
     prm_samples = am.relmdl.sample(k1, test, (num_curves,), keep_sites=['t_o_nom', 'n_nom', 'a_nom', 'b_nom'])
     pri_sample_probs = jnp.exp(am.relmdl.logp(k2, test, prm_samples, None, (num_curves,)))
     pri_sample_probs = pri_sample_probs / (jnp.max(pri_sample_probs) * 2)
-    spm_temps = jnp.full((num_curves, 13,), jnp.linspace(300, 420, 13)).T
+    spm_temps = jnp.full((num_curves, 13), jnp.linspace(300, 420, 13)).T
     pri_spm_vals = p_model_ttf(spm_temps, prm_samples['t_o_nom'], prm_samples['n_nom'], prm_samples['a_nom'], prm_samples['b_nom'], 1.1)
     pri_spm_vals = pri_spm_vals.T
 
     ### Generate predictive distribution at field use for prior ###
     am.set_field_use_conditions({'temp': 330, 'vg': 1.1})
     am.relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_lbci_l, 95, 10)
-    pri_lbci = am.evaluate_reliability('ttf_ttf_base')
     am.relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_hdcr_l, 95, 10)
-    pri_hdcr = am.evaluate_reliability('ttf_ttf_base')
     am.test = am.field_test
     pri_dist = am.sim_test_meas_new(num=(300_000,))
     pri_dist = pri_dist['field_ttf'].flatten()
 
     ### Evaluate the prior interpretable entropy ###
-    ENTROPY_SAMPLES = 30_000
+    entropy_samples = 30_000
     def lp_f(vals, site, key, test):
         return am.relmdl.logp(rng_key=key, test=test, site_vals={site: vals}, conditional=None, dims=(len(vals),))
     k1, k2, k3, k4 = rand.split(rand.key(84357345763), 4)
     hyls = ('t_o_nom', 't_o_var', 'n_nom', 'a_nom', 'a_var', 'b_nom', 'b_var')
-    hyl_samples = am.relmdl.sample_new(k1, am.test.dims, am.test.conds, (ENTROPY_SAMPLES,), keep_sites=hyls)
+    hyl_samples = am.relmdl.sample_new(k1, am.test.dims, am.test.conds, (entropy_samples,), keep_sites=hyls)
     pri_entropy = {}
     for hyl in hyls:
         pri_entropy[hyl] = stratcona.engine.bed.entropy(
@@ -314,12 +268,7 @@ def tddb_inference():
     ### Inference the SPM ###
     am.set_test_definition(test_s)
     start_time = time.time()
-
     am.do_inference(ttfs['s']['e'])
-    #am.relmdl.hyl_beliefs['t_o_nom']['loc'] = 4
-    #am.relmdl.hyl_beliefs['t_o_var']['loc'] = 1.5
-    #am.relmdl.hyl_beliefs['t_o_var']['scale'] = 0.5
-
     print(f'Inference time taken: {time.time() - start_time}')
     pprint(am.relmdl.hyl_beliefs)
     jax.clear_caches()
@@ -332,8 +281,6 @@ def tddb_inference():
     ttf_m = p_model_ttf(temp=tm, t_o=t_o_infd, n=n_infd, a=a_infd, b=b_infd, vg=1.1)
     ttf_h = p_model_ttf(temp=th, t_o=t_o_infd, n=n_infd, a=a_infd, b=b_infd, vg=1.1)
 
-    mean_temps = jnp.linspace(300, 420, 13)
-    mean_infd = p_model_ttf(temp=mean_temps, t_o=t_o_infd, n=n_infd, a=a_infd, b=b_infd, vg=1.1)
     print(f'Inference model predicted MTTF: 105C={ttf_l}, 125C={ttf_m}, 145C={ttf_h}')
 
     # Sample curves from the posterior predictive
@@ -345,7 +292,7 @@ def tddb_inference():
     spm_vals, spm_temps = spm_vals.T, spm_temps.T
 
     ### Evaluate the posterior entropy ###
-    hyl_samples = am.relmdl.sample_new(k3, am.test.dims, am.test.conds, (ENTROPY_SAMPLES,), keep_sites=hyls)
+    hyl_samples = am.relmdl.sample_new(k3, am.test.dims, am.test.conds, (entropy_samples,), keep_sites=hyls)
     pst_entropy = {}
     for hyl in hyls:
         pst_entropy[hyl] = stratcona.engine.bed.entropy(
@@ -363,10 +310,8 @@ def tddb_inference():
 
     # Fit the models with MLE, generate confidence intervals
     fits = {'s': {}, 'l': {}}
-    #for mdl in ['e', 'ie', 'p']:
     for mdl in ['e', 'p']:
         fits['s'][mdl], fits['l'][mdl] = {}, {}
-        #for sim in ['e', 'ie', 'p']:
         for sim in ['e']:
             s_fails = jnp.concatenate((convert(ttfs['s'][sim]['el']), convert(ttfs['s'][sim]['em']), convert(ttfs['s'][sim]['eh'])))
             l_fails = jnp.concatenate((convert(ttfs['l'][sim]['el']), convert(ttfs['l'][sim]['em']), convert(ttfs['l'][sim]['eh'])))
@@ -385,15 +330,6 @@ def tddb_inference():
     x_temps = jnp.linspace(300, 420, 13)
     y_ttfs['s']['e'] = funcs['e'](x_temps, *fits['s']['e']['e'][0])
     y_ttfs['l']['e'] = funcs['e'](x_temps, *fits['l']['e']['e'][0])
-    fit_prms = fits['s']['e']['e']
-    e_sampler = dists.MultivariateStudentT(8, fit_prms[0], cholesky(fit_prms[1]))
-    rng_key = rand.key(23492)
-    #print(e_sampler.sample(rng_key, (10,)))
-
-    #y_ttfs['s']['ie'] = funcs['ie'](x_temps, *fits['s']['ie']['e'][0])
-    #y_ttfs['l']['ie'] = funcs['ie'](x_temps, *fits['l']['ie']['e'][0])
-    #y_ttfs['s']['p'] = funcs['p'](x_temps, *fits['s']['p']['e'][0])
-    #y_ttfs['l']['p'] = funcs['p'](x_temps, *fits['l']['p']['e'][0])
 
     sb.set_context('notebook')
     fig, p = plt.subplots(1, 1)
@@ -404,7 +340,6 @@ def tddb_inference():
         p.plot(spm_temps[i], pri_spm_vals[i], color='skyblue', linestyle='-', alpha=float(pri_sample_probs[i]), label=lbl)
         lbl = 'Posterior predictive distribution' if i == 0 else None
         p.plot(spm_temps[i], spm_vals[i], color='darkblue', linestyle='-', alpha=float(sample_probs[i]), label=lbl)
-    #p.plot(mean_temps, mean_infd, color='navy')
 
     # Plot the large set of simulated data points to give an idea of variability
     l_fails = jnp.concatenate((convert(ttfs['l']['e']['el']), convert(ttfs['l']['e']['em']), convert(ttfs['l']['e']['eh'])))
@@ -421,7 +356,6 @@ def tddb_inference():
     for i, k in enumerate(['e']):
         lbl = 'Power law model fit' if k == 'p' else 'Frequentist MLE fit to test data'
         p.plot(x_temps, y_ttfs['s'][k], color=mdl_clrs[i], linestyle='--', linewidth=2, label=lbl)
-        #p.plot(x_temps, y_ttfs['l'][k], color=mdl_clrs[i], linestyle='--', linewidth=2)
 
     p.set_xlabel('Temperature (K)')
     p.set_xlim(300, 420)
@@ -473,23 +407,24 @@ def tddb_inference():
 
     sb.set_context('notebook')
     fig, p = plt.subplots(1, 1)
-    #p.grid()
     p.set_xlim(0, 11.513)
     p.set_xlabel('Failure Time (years)')
     p.set_xticks(ticks=[0, 2.303, 4.605, 6.908, 9.21, 11.513],
-                 labels=["1", "10", "10^2", "10^3", "10^4", "10^5"])
+                 labels=['1', '10', '10^2', '10^3', '10^4', '10^5'])
     p.set_ylabel('Probability Density (At field use - 330K)')
     p.set_yticks([])
 
-    p.hist(jnp.log(true_dist[true_dist >= 0.01]), 500, density=True, alpha=0.9, color='goldenrod', histtype='stepfilled', label='Simulated true lifespan')
-    p.hist(jnp.log(pri_dist[pri_dist >= 0.01]), 500, density=True, alpha=0.8, color='skyblue', histtype='stepfilled', label='Prior predicted lifespan')
-    p.hist(jnp.log(post_dist[post_dist >= 0.01]), 500, density=True, alpha=0.75, color='darkblue', histtype='stepfilled', label='Posterior predicted lifespan')
+    p.hist(jnp.log(true_dist[true_dist >= 0.01]), 500, density=True, alpha=0.9, color='goldenrod',
+           histtype='stepfilled', label='Simulated true lifespan')
+    p.hist(jnp.log(pri_dist[pri_dist >= 0.01]), 500, density=True, alpha=0.8, color='skyblue',
+           histtype='stepfilled', label='Prior predicted lifespan')
+    p.hist(jnp.log(post_dist[post_dist >= 0.01]), 500, density=True, alpha=0.75, color='darkblue',
+           histtype='stepfilled', label='Posterior predicted lifespan')
 
-    p.axvline(float(jnp.log(mle_pred_mean)), 0, 1, color='deeppink', linestyle='dashed', label=f'MLE fit predicted mean: {round(float(mle_pred_mean), 2)}')
+    p.axvline(float(jnp.log(mle_pred_mean)), 0, 1, color='deeppink', linestyle='dashed',
+              label=f'MLE fit predicted mean: {round(float(mle_pred_mean), 2)}')
     p.axvspan(float(jnp.log(lf_lower)), float(jnp.log(lf_upper)), color='deeppink', linestyle='dashed', alpha=0.2,
-              #label=f'MLE 95% CI: [{round(float(lf_lower), 2)}, {round(float(lf_upper), 2)}]')
-              label = f'MLE 95% CI max: {round(float(lf_upper), 2)}')
-
+              label=f'MLE 95% CI: [{round(float(lf_lower), 2)}, {round(float(lf_upper), 2)}]')
     p.axvline(float(jnp.log(post_lbci)), 0, 1, color='darkviolet', linestyle='dashed',
               label=f'Q95%-LBCI: {round(float(post_lbci), 2)}')
     label_made = False
@@ -499,21 +434,6 @@ def tddb_inference():
             label_made = True
         p.axvspan(float(jnp.log(interval[0])), float(jnp.log(interval[1])), color='darkgreen', linestyle='dashed', alpha=0.2,
                   label=label)
-
-    # Special legend handling if needed
-    #hndl, lbls = p.get_legend_handles_labels()
-    #lgnd1 = pltlines.Line2D([0], [0], color='black', linestyle='--')
-    #lgnd2 = pltlines.Line2D([0], [0], color='black', linestyle='', marker='.')
-    #hndl.insert(0, lgnd1)
-    #lbls.insert(0, 'Lot simulation distributions')
-    #hndl.insert(0, lgnd2)
-    #lbls.insert(0, 'Simulated data, coloured by lot')
-
-    ## Add the custom legend
-    #leg = p.legend(hndl, lbls, loc='lower right')
-    #for lbl in leg.legend_handles:
-    #    lbl.set_alpha(1)
-
     p.legend(loc='upper right')
 
     plt.show()
