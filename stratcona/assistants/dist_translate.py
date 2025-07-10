@@ -1,11 +1,11 @@
-# Copyright (c) 2023 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 import numpyro.distributions as npyro_dists
 import jax.numpy as jnp
 import scipy.stats.distributions as scipy_dists
 
-def npyro_to_scipy(dist_type, target_lib='scipy'):
+def npyro_to_scipy(dist_type):
     fit_kwargs = {}
     unity = lambda x: x
 
@@ -36,7 +36,10 @@ def npyro_to_scipy(dist_type, target_lib='scipy'):
 
 
 def convert_to_categorical(dist, prms, num_samples: int = 30_000):
+    """
+    Fits a categorical distribution to some discrete
+    """
     # Count the number of occurrences of each value then normalize to get the posterior probabilities
-    np_dist = npyro_to_numpy(dist)
-    sampled = getattr(jnp.random, np_dist)(**prms, size=num_samples)
-    return np.bincount(sampled) / num_samples
+    sdist = npyro_to_scipy(dist)[0]
+    sampled = sdist.sample(**prms, size=num_samples)
+    return jnp.bincount(sampled) / num_samples

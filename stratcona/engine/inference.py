@@ -6,19 +6,11 @@ import jax.numpy as jnp
 import jax.random as rand
 from jax.scipy.special import logsumexp
 
-from multiprocess import Pool
 from progress.bar import Bar
 from functools import partial
 from math import prod
-import numpy as np
-
-# TEMP
-import seaborn
-import matplotlib.pyplot as plt
-import pandas as pd
 
 from numpyro.infer import NUTS, MCMC
-import numpyro.distributions as dists
 from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
 
 from stratcona.assistants.dist_translate import npyro_to_scipy
@@ -45,7 +37,6 @@ def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
     batch_dims = (int(n_x / num_chunks), n_v, 1)
 
     bar = Bar('Sampling', max=num_chunks)
-    #is_batch = jax.jit(partial(is_inner, spm=spm, batch_dims=batch_dims, test_dims=d.dims, test_conds=d.conds, y_t=y_t, y_noise=y_noise))
     is_batch = partial(is_inner, spm=spm, batch_dims=batch_dims, test_dims=d.dims, test_conds=d.conds, y_t=y_t, y_noise=y_noise)
     for i in range(num_chunks):
         k, ki = rand.split(k)
@@ -63,11 +54,6 @@ def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
     # Resample evaluated x_s according to posterior probabilities
     lw_n = lp_ygx_store - logsumexp(lp_ygx_store)
     print(f'Num good x samples: {jnp.count_nonzero(jnp.where(jnp.greater(lw_n, jnp.log(1 / n_x)), 1, 0))}')
-    # TEMP
-    #df = pd.DataFrame({'lp': lw_n - max(lw_n), 'x': x_s_store['nbti_a0_nom'], 'y': x_s_store['nbti_a0_dev']})
-    #seaborn.scatterplot(df, x='x', y='y', palette='viridis', hue='lp', hue_norm=(-10, 0))
-    #plt.grid()
-    #plt.show()
 
     inds_arr = jnp.arange(n_x)
     inds = rand.choice(krs, inds_arr, (n_x,), True, jnp.exp(lw_n))
@@ -78,127 +64,6 @@ def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
         new_pri[hyl] = fit_dist_to_samples(spm.hyl_info[hyl], x_rs[hyl])
     perf_stats = {'rs_dvrs_v': rs_dvrs, 'rs_dvrs_x': count_unique(inds) / len(inds)}
     return new_pri, perf_stats
-
-
-@partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims', 'g_hyl'])
-def mhgibbs_inner_loop(rng_key, spm, test_dims, test_conds, x_s, y_t, y_noise, beta, lp_x, lp_prev, batch_dims, g_hyl):
-    k2, k3, k4 = rand.split(rng_key, 3)
-    # Determine a new set of samples xp_s by random walk of one hyper-latent
-    # Take a random step in some direction
-    walks = dists.Normal(0.0, beta).sample(k2, x_s[g_hyl].shape)
-    new_s = spm.hyl_info[g_hyl]['transform_inv'](x_s[g_hyl]) + walks
-    xp_s_hyl = spm.hyl_info[g_hyl]['transform'](new_s)
-    xp_s = x_s.copy()
-    xp_s[g_hyl] = xp_s_hyl
-
-    # Evaluate the posterior probability of the new samples
-    lp_y_g_xp, stats_p = int_out_v(k3, spm, batch_dims, test_dims, test_conds, xp_s, y_t, y_noise)
-    lp_xp_likely = lp_x + lp_y_g_xp.flatten()
-
-    # Accept or reject the new samples
-    p_accept = jnp.exp(lp_xp_likely - lp_prev)
-    a_s = dists.Uniform(0, 1).sample(k4, (batch_dims[0],))
-    accepted = jnp.where(jnp.greater(p_accept, a_s), True, False)
-    lp_new = jnp.where(accepted, lp_xp_likely, lp_prev)
-    x_new = x_s.copy()
-    x_new[g_hyl] = jnp.where(accepted, xp_s[g_hyl], x_s[g_hyl])
-    # Ongoing performance statistics
-    ap = jnp.count_nonzero(accepted) / batch_dims[0]
-    return x_new, lp_new, ap
-
-
-def custom_mhgibbs_new(rng_key, spm, d, y, y_noise, num_chains, n_v, beta=0.5):
-    n_x = num_chains
-    chain_len, warmup_len = 2200, 200
-    k, kx, kv = rand.split(rng_key, 3)
-    y_t = {}
-    for exp in y:
-        y_t |= {f'{exp}_{y_e}': jnp.expand_dims(y[exp][y_e], 0) for y_e in y[exp]}
-    x_s = spm.sample_new(kx, d.dims, d.conds, (n_x,), spm.hyls)
-    lp_x = spm.logp_new(kx, d.dims, d.conds, x_s, None, (n_x,))
-    # Compute the posterior probability of each sample in x_s
-    batch_dims = (n_x, n_v, 1)
-    lp_y_g_x, stats = int_out_v(kv, spm, batch_dims, d.dims, d.conds, x_s, y_t, y_noise)
-    lp_lkly = lp_x + lp_y_g_x.flatten()
-
-    accept_percent = 0.0
-    x_s_store = {hyl: jnp.array((), jnp.float32) for hyl in spm.hyls}
-    bar = Bar('Sampling', max=chain_len)
-    for i in range(chain_len):
-        k, kc, ki = rand.split(k, 3)
-        # Uniformly choose one of the hyper-latent variables
-        g_hyl = spm.hyls[rand.choice(kc, jnp.arange(len(spm.hyls)))]
-        x_s, lp_lkly, ap = mhgibbs_inner_loop(ki, spm, d.dims, d.conds, x_s, y_t, y_noise, beta, lp_x, lp_lkly, batch_dims, g_hyl)
-        # Add to final set of samples if warmup complete
-        if i >= warmup_len:
-            for hyl in spm.hyls:
-                x_s_store[hyl] = jnp.append(x_s_store[hyl], x_s[hyl])
-        accept_percent = ((accept_percent * i) + ap) / (i + 1)
-        bar.next()
-
-    bar.finish()
-    # Fit the posterior distributions
-    new_prior = {}
-    for hyl in spm.hyl_info:
-        new_prior[hyl] = fit_dist_to_samples(spm.hyl_info[hyl], x_s_store[hyl])
-    perf_stats = {'accept_percent': accept_percent}
-    return new_prior, perf_stats
-
-
-def custom_mhgibbs_resampled_v(rng_key, spm, d, y, num_chains, n_v, beta=0.5):
-    n_x = num_chains
-    chain_len, warmup_len = 2200, 200
-    k, kx, kv = rand.split(rng_key, 3)
-    y_t = {}
-    for exp in y:
-        y_t |= {f'{exp}_{y_e}': jnp.expand_dims(y[exp][y_e], 0) for y_e in y[exp]}
-    x_s = spm.sample(kx, d, num_samples=(n_x,), keep_sites=spm.hyls)
-    lp_x = spm.logp(kx, d, site_vals=x_s, conditional=None, dims=(n_x,))
-    # Compute the posterior probability of each sample in x_s
-    lp_y_g_x, stats = est_lp_y_g_x(kv, spm, d, x_s, y_t, n_v)
-    lp_x_likely = lp_x + lp_y_g_x.flatten()
-
-    accept_percent = 0.0
-    x_s_store = {hyl: jnp.array((), jnp.float32) for hyl in spm.hyls}
-    bar = Bar('Sampling', max=chain_len)
-    for i in range(chain_len):
-        k, k1, k2, k3, k4 = rand.split(k, 5)
-        # Determine a new set of samples xp_s by random walk of one hyper-latent
-        # Uniformly choose one of the hyper-latent variables
-        i_hyl = rand.choice(k1, jnp.arange(len(spm.hyls)))
-        # Take a random step in some direction
-        walks = dists.Normal(0.0, beta).sample(k2, x_s[spm.hyls[i_hyl]].shape)
-        new_s = spm.hyl_info[spm.hyls[i_hyl]]['transform_inv'](x_s[spm.hyls[i_hyl]]) + walks
-        xp_s_hyl = spm.hyl_info[spm.hyls[i_hyl]]['transform'](new_s)
-        xp_s = x_s.copy()
-        xp_s[spm.hyls[i_hyl]] = xp_s_hyl
-
-        # Evaluate the posterior probability of the new samples
-        lp_y_g_xp, stats_p = est_lp_y_g_x(k3, spm, d, xp_s, y_t, n_v)
-        lp_xp_likely = lp_x + lp_y_g_xp.flatten()
-
-        # Accept or reject the new samples
-        p_accept = jnp.exp(lp_xp_likely - lp_x_likely)
-        a_s = dists.Uniform(0, 1).sample(k4, (n_x,))
-        accepted = jnp.where(jnp.greater(p_accept, a_s), True, False)
-        lp_x_likely = jnp.where(accepted, lp_xp_likely, lp_x_likely)
-        for hyl in spm.hyls:
-            x_s[hyl] = x_s[hyl] if spm.hyls[i_hyl] != hyl else jnp.where(accepted, xp_s[hyl], x_s[hyl])
-            # Add to final set of samples if warmup complete
-            if i >= warmup_len:
-                x_s_store[hyl] = jnp.append(x_s_store[hyl], x_s[hyl])
-        # Ongoing performance statistics
-        accept_percent = ((accept_percent * i) + (jnp.count_nonzero(accepted) / n_x)) / (i + 1)
-        bar.next()
-    bar.finish()
-
-    # Fit the posterior distributions
-    as_np = np.array(x_s_store['a0_nom'])
-    new_prior = {}
-    for hyl in spm.hyl_info:
-        new_prior[hyl] = fit_dist_to_samples(spm.hyl_info[hyl], x_s_store[hyl])
-    perf_stats = {'accept_percent': accept_percent}
-    return new_prior, perf_stats
 
 
 def batch_choice(n_extra_dims):
@@ -347,9 +212,11 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
     return lp_y_g_x, perf_stats
 
 
-def int_out_v_naive(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
-    # This algorithm implements basic importance sampling from the target distribution (in this case p(v|x,d)) to
-    # marginalize out v. It is extremely inefficient for large v due to the high dimensional space.
+def marginalize_v_naive(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
+    """
+    This algorithm implements basic importance sampling from the target distribution (in this case p(v|x,d)) to
+    marginalize out v. It is extremely inefficient when V is high dimensional.
+    """
     n_x, n_v, n_y = batch_dims
     k, k_init, kdum = rand.split(rng_key, 3)
     perf_stats = {}
@@ -402,32 +269,3 @@ def fit_dist_to_samples(hyl_info, samples):
         for prm in hyl_info['fixed']:
             npyro_prms[prm] = hyl_info['fixed'][prm]
     return npyro_prms
-
-
-def check_fit_quality(variable_name, data, dist_type, dist_params):
-    """
-    Given a dataset and a fitted distribution, we can evaluate whether the fit is decent by using a relative check. If
-    any other distribution gives a better fit, let the user know that a different distribution may be a better choice
-    to represent the variable PDF.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
-
-    """
-    kde = jax.scipy.stats.gaussian_kde(data)
-    # Now check the fits against each other
-    x = jnp.linspace(jnp.min(data), jnp.max(data), 100)
-
-    # Error types: sum of square errors, RSS/SSE, Wasserstein, Kolmogorov-Smirnov (KS), or Energy
-    # One nice Bayesian way that aligns with objectives: quantiles matching estimation (QME)
-
-    # Plotting sanity checks
-    #f, p = plt.subplots(figsize=(8, 2))
-    #p.hist(data, bins=100, density=True, color='grey')
-    #p.plot(x, kde(x), color='blue')
-    #params = dist_params.values()
-    #p.plot(x, dist_type.pdf(x, *params), color='green')
-    #plt.show()
