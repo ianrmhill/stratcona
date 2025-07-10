@@ -180,6 +180,8 @@ class ReliabilityModel():
         keys = jnp.reshape(rand.split(rng_key, size), dims)
         return wrapped(keys, site_vals, conditional)
 
+    # FIXME: If compiled, hyl_beliefs get frozen since they are baked into the state! The self hash does not account
+    #        for the hyper-latent values. Possible solution: call jax.clear_caches() whenever hyl_beliefs or param_vals change
     @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'keep_sites', 'full_trace', 'compute_predictors'])
     def sample_new(self, rng_key: rand.key, test_dims: frozenset[ExpDims], test_conds: dict, batch_dims: tuple = (),
                    keep_sites: tuple = None, conditionals: dict = None, full_trace=False, compute_predictors=False):

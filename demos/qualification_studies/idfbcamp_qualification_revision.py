@@ -36,7 +36,7 @@ BOLTZ_EV = 8.617e-5
 CELSIUS_TO_KELVIN = 273.15
 SHOW_PLOTS = False
 DB_NAME = 'stratcona'
-COLL_NAME = 'idfbcamp-qual'
+COLL_NAME = 'idfbcamp-qual-rev2'
 
 
 def login_to_database():
@@ -63,8 +63,8 @@ def try_database_upload(dataset, formatted_data):
 
 def idfbcamp_qualification():
     analyze_prior = False
-    run_bed_analysis = False
-    examine_qual_data = True
+    run_bed_analysis = True
+    examine_qual_data = False
     viz_exp_data = False
     run_inference = False
     run_posterior_analysis = False
@@ -94,9 +94,9 @@ def idfbcamp_qualification():
         return (nbti_a0 * 0.01) * jnp.exp((nbti_eaa * -0.01) / (k * temp)) * ((vdd * v_adj) ** nbti_alpha) * ((time * t_adj) ** (nbti_n * 0.1))
     # Priors for a0_nom, a0_dev, a0_chp, eaa_nom, eaa_dev, alpha_nom, n_nom are all from IRPS inference case study posteriors
     # We exclude variations for some hyper-latents due to the data to model complexity discrepancy.
-    mbp.add_hyperlatent('nbti_a0_nom', dists.Normal, {'loc': 3.6, 'scale': 1.2})
+    mbp.add_hyperlatent('nbti_a0_nom', dists.Normal, {'loc': 6.0, 'scale': 1.2})
     mbp.add_hyperlatent('nbti_eaa_nom', dists.Normal, {'loc': 6.2, 'scale': 0.3})
-    mbp.add_hyperlatent('nbti_alpha_nom', dists.Normal, {'loc': 3.5, 'scale': 0.4})
+    mbp.add_hyperlatent('nbti_alpha_nom', dists.Normal, {'loc': 2.8, 'scale': 2.0})
     mbp.add_hyperlatent('nbti_n_nom', dists.Normal, {'loc': 2, 'scale': 0.4})
     mbp.add_latent('nbti_a0', 'nbti_a0_nom')
     mbp.add_latent('nbti_eaa', 'nbti_eaa_nom')
@@ -107,9 +107,9 @@ def idfbcamp_qualification():
         return (pbti_a0 * 0.01) * jnp.exp((pbti_eaa * -0.01) / (k * temp)) * ((vdd * v_adj) ** pbti_alpha) * ((time * t_adj) ** (pbti_n * 0.1))
     # Priors here are adapted from the NBTI priors but accounting for the observed trends reported in the sensor papers:
     # Lower HTOL degradation, higher voltage dependence, longer time constant
-    mbn.add_hyperlatent('pbti_a0_nom', dists.Normal, {'loc': 1.5, 'scale': 0.8})
+    mbn.add_hyperlatent('pbti_a0_nom', dists.Normal, {'loc': 4.0, 'scale': 0.8})
     mbn.add_hyperlatent('pbti_eaa_nom', dists.Normal, {'loc': 6.2, 'scale': 0.3})
-    mbn.add_hyperlatent('pbti_alpha_nom', dists.Normal, {'loc': 4.2, 'scale': 0.5})
+    mbn.add_hyperlatent('pbti_alpha_nom', dists.Normal, {'loc': 3.1, 'scale': 2.0})
     mbn.add_hyperlatent('pbti_n_nom', dists.Normal, {'loc': 1.5, 'scale': 0.4})
     mbn.add_latent('pbti_a0', 'pbti_a0_nom')
     mbn.add_latent('pbti_eaa', 'pbti_eaa_nom')
@@ -122,7 +122,7 @@ def idfbcamp_qualification():
         return (phci_a0 * 0.001) * (vdd ** phci_u) * (time ** ((phci_alpha * 0.1) + ((phci_beta * 0.0001) * (temp - tempref))))
     # Priors taken from the P. Zhang et al. paper, adjusted slightly to try and match observed sensor behaviour
     mbp.add_hyperlatent('phci_a0_nom', dists.Normal, {'loc': 15, 'scale': 7})
-    mbp.add_hyperlatent('phci_u_nom', dists.Normal, {'loc': 4.5, 'scale': 1})
+    mbp.add_hyperlatent('phci_u_nom', dists.Normal, {'loc': 7, 'scale': 2.8})
     mbp.add_hyperlatent('phci_alpha_nom', dists.Normal, {'loc': 1.2, 'scale': 0.3})
     mbp.add_hyperlatent('phci_beta_nom', dists.Normal, {'loc': 6, 'scale': 2.5})
     mbp.add_latent('phci_a0', 'phci_a0_nom')
@@ -133,7 +133,7 @@ def idfbcamp_qualification():
     def nhci_vth(time, vdd, temp, nhci_a0, nhci_u, nhci_alpha, nhci_beta, tempref):
         return (nhci_a0 * 0.001) * (vdd ** nhci_u) * (time ** ((nhci_alpha * 0.1) + ((nhci_beta * 0.0001) * (temp - tempref))))
     mbn.add_hyperlatent('nhci_a0_nom', dists.Normal, {'loc': 11, 'scale': 7})
-    mbn.add_hyperlatent('nhci_u_nom', dists.Normal, {'loc': 4.5, 'scale': 1})
+    mbn.add_hyperlatent('nhci_u_nom', dists.Normal, {'loc': 7, 'scale': 2.8})
     mbn.add_hyperlatent('nhci_alpha_nom', dists.Normal, {'loc': 1.2, 'scale': 0.3})
     mbn.add_hyperlatent('nhci_beta_nom', dists.Normal, {'loc': 6, 'scale': 2.5})
     mbn.add_latent('nhci_a0', 'nhci_a0_nom')
@@ -164,8 +164,8 @@ def idfbcamp_qualification():
     mbn.add_intermediate('nhci_strs_vth', nhci_strs_vth)
 
     # Novel ring oscillator sensor readings
-    mbp.add_params(bti_ro_cl=0.63, hci_ro_cl=0.65, num_stages=51, k_avg=13.6, vdd_meas=0.8, ro_meas_stddev=2.0)
-    mbn.add_params(bti_ro_cl=0.63, hci_ro_cl=0.65, num_stages=51, k_avg=13.6, vdd_meas=0.8, ro_meas_stddev=2.0)
+    mbp.add_params(bti_ro_cl=0.63, hci_ro_cl=0.65, num_stages=51, k_avg=13.6, vdd_meas=0.8, ro_meas_stddev=3.0)
+    mbn.add_params(bti_ro_cl=0.63, hci_ro_cl=0.65, num_stages=51, k_avg=13.6, vdd_meas=0.8, ro_meas_stddev=3.0)
     # Following the RO inverter propagation delay analysis from MIT lecture: http://web.mit.edu/6.012/www/SP07-L13.pdf
     # The approximate per-stage delay is (1/2 * Q_L) / I_D for NMOS and PMOS with slightly different I_D, take their
     # average for typical delay. I_D is based on saturation mode as transistors haven't fully turned on yet, Q_L is
@@ -194,8 +194,8 @@ def idfbcamp_qualification():
     mbn.add_observed('nhci_ro_sensor', dists.Normal, {'loc': 'nhci_ro_freq', 'scale': 'ro_meas_stddev'}, 5)
 
     # Offset voltage sensor readings
-    mbp.add_params(namp_gain=5.4, pamp_gain=5.2, gm=0.022, ro=200, adc_stddev=0.015)
-    mbn.add_params(namp_gain=5.4, pamp_gain=5.2, gm=0.022, ro=200, adc_stddev=0.015)
+    mbp.add_params(namp_gain=10.0, pamp_gain=8.1, gm=0.022, ro=200, adc_stddev=0.035)
+    mbn.add_params(namp_gain=10.0, pamp_gain=8.1, gm=0.022, ro=200, adc_stddev=0.035)
     def nbti_vamp_out(nbti_strs_vth, namp_gain, vtp_typ, gm, ro):
         return namp_gain * (0.5 * (nbti_strs_vth - vtp_typ) * gm * (0.5 * ro))
     mbp.add_intermediate('nbti_vamp_out', nbti_vamp_out)
@@ -315,10 +315,13 @@ def idfbcamp_qualification():
     volts = [0.8, 0.85, 0.9, 0.95, 1.0]
     times = [130, 330, 530, 730]
 
-    permute_conds = product(temps, temps, volts, volts, times, times)
-    test_conds_list = [{'b1': {'temp': c1, 'vdd': v1, 'time': t1}, 'b2': {'temp': c2, 'vdd': v2, 'time': t2}} for c1, c2, v1, v2, t1, t2 in permute_conds]
-    possible_tests = [stratcona.TestDef('', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}}, conds) for conds in test_conds_list]
+    #permute_conds = product(temps, temps, volts, volts, times, times)
+    #test_conds_list = [{'b1': {'temp': c1, 'vdd': v1, 'time': t1}, 'b2': {'temp': c2, 'vdd': v2, 'time': t2}} for c1, c2, v1, v2, t1, t2 in permute_conds]
+    #possible_tests = [stratcona.TestDef('', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}}, conds) for conds in test_conds_list]
 
+    permute_conds = product(temps, volts)
+    test_conds_list = [{'b1': {'temp': 130 + CELSIUS_TO_KELVIN, 'vdd': 1.0, 'time': 730}, 'b2': {'temp': c2, 'vdd': v2, 'time': 730}} for c2, v2 in permute_conds]
+    possible_tests = [stratcona.TestDef('', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}}, conds) for conds in test_conds_list]
     '''
     ===== 4) Accelerated test design analysis =====
     First the RIG must be determined, which depends on both the reliability target metric and the model being used. The
@@ -328,12 +331,12 @@ def idfbcamp_qualification():
     Once we have BED statistics on all the possible tests we perform our risk analysis to determine which one to use.
     '''
     if run_bed_analysis:
-        def p_u_func(ig, qx_hdcr_width):
+        def p_u_func(ig, l_qx_hdcr_width):
             eig = jnp.sum(ig) / ig.size
             vig = jnp.sum(((ig - eig) ** 2) / ig.size)
             mig = jnp.min(ig)
-            pred_width = jnp.sum(qx_hdcr_width) / qx_hdcr_width.size
-            return {'eig': eig, 'vig': vig, 'mig': mig, 'e_qx_hdcr_width': pred_width}
+            pred_width = jnp.sum(l_qx_hdcr_width) / l_qx_hdcr_width.size
+            return {'eig': eig, 'vig': vig, 'mig': mig, 'e_l_qx_hdcr_width': pred_width}
         def n_u_func(ig):
             eig = jnp.sum(ig) / ig.size
             vig = jnp.sum(((ig - eig) ** 2) / ig.size)
@@ -341,13 +344,15 @@ def idfbcamp_qualification():
             return {'eig': eig, 'vig': vig, 'mig': mig}
 
         batches = 5
-        d_batch_size = 10
+        d_batch_size = 5
+        n_y = 5_000
+        n_x = 10_000
         exp_samplers_p = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
         exp_samplers_n = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
         keys = rand.split(amp._derive_key(), batches)
-        eval_d_batch_p = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=1_000, n_v=1, n_x=10_000, spm=amp.relmdl,
+        eval_d_batch_p = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=n_y, n_v=1, n_x=n_x, spm=amp.relmdl,
                                  utility=p_u_func, field_d=amp.field_test)
-        eval_d_batch_n = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=1_000, n_v=1, n_x=10_000, spm=amn.relmdl,
+        eval_d_batch_n = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=n_y, n_v=1, n_x=n_x, spm=amn.relmdl,
                                  utility=n_u_func, field_d=amn.field_test)
 
         # Run the experimental design analysis in batched segments to allow for checkpointing
@@ -355,7 +360,7 @@ def idfbcamp_qualification():
             res_p, perf_p = eval_d_batch_p(keys[i], exp_samplers_p[i])
             res_n, perf_n = eval_d_batch_n(keys[i], exp_samplers_n[i])
             simplified = {'batch': i, 'batch-size': d_batch_size, 'submit-time': str(dt.datetime.now(tz=dt.UTC)),
-                          'n-y': 1_000, 'n-x': 10_000}
+                          'n-y': n_y, 'n-x': n_x}
             for j in range(d_batch_size):
                 simplified[f'{str(i)}-{str(j)}'] = {
                     'c1': float(res_p[j]['design'].conds['b1']['temp']), 'c2': float(res_p[j]['design'].conds['b2']['temp']),
@@ -364,7 +369,7 @@ def idfbcamp_qualification():
                     'eig-p': float(res_p[j]['utility']['eig']), 'eig-n': float(res_n[j]['utility']['eig']),
                     'vig-p': float(res_p[j]['utility']['vig']), 'vig-n': float(res_n[j]['utility']['vig']),
                     'mig-p': float(res_p[j]['utility']['mig']), 'mig-n': float(res_n[j]['utility']['mig']),
-                    'e-hdcr-width-p': float(res_p[j]['utility']['e_qx_hdcr_width'])}
+                    'e-l-hdcr-width-p': float(res_p[j]['utility']['e_l_qx_hdcr_width'])}
             with open(f'../bed_data/idfbcamp_bed_evals_batch{i}.json', 'w') as f:
                 json.dump(simplified, f)
             try_database_upload(dataset, simplified)
@@ -424,8 +429,8 @@ def idfbcamp_qualification():
         fig.colorbar(points, ax=p, orientation='vertical', label='Estimated utility')
         p.scatter(1.0, 403.15, linestyle='', linewidths=100, marker='x', color='lightseagreen', s=400,
                   label='Stress point of second board')
-        p.set_xlabel('$T_2$')
-        p.set_ylabel('$V_{DD_2}$')
+        p.set_ylabel('$T_2$')
+        p.set_xlabel('$V_{DD_2}$')
         p.annotate('Stress point of first board', (0.99, 400), (0.9, 390),
                    arrowprops={'arrowstyle': 'simple', 'color': 'black'})
         #p.legend()
@@ -501,6 +506,7 @@ def idfbcamp_qualification():
     '''
     pri_p = amp.relmdl.hyl_beliefs
     pri_n = amn.relmdl.hyl_beliefs
+
     if run_inference:
         start_time = time.time()
         amp.do_inference(obs_data)
@@ -682,8 +688,8 @@ def idfbcamp_qualification():
                   label='Posterior predicted lifespan distribution')
 
         p.set_xlim(3, 20)
-        p.set_xticks([], [])
-        p.set_xlabel('Test Chip Lifespan (log scale A.U.)')
+        #p.set_xticks([], [])
+        #p.set_xlabel('Test Chip Lifespan (log scale A.U.)')
         p.set_ylabel('Probability Density')
         p.legend(loc='upper right')
 

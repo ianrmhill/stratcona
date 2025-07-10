@@ -237,7 +237,7 @@ class SPMBuilder():
 
                                 # Next, define the observed or predictor variable measured in the experiment
                                 args = {arg: val for arg, val in {**ltnts[e][obs], **meds[e][obs], **conds[e], **hyls_and_prms}.items() if arg in obs_info.requires}
-                                measd = measured[e][obs] if measured is not None else None
+                                measd = measured[e][obs] if obs in self.observes and measured is not None else None
                                 if type(obs_info) is _CStochastic:
                                     dist_args = {arg: args[val] for arg, val in obs_info.prms.items()}
                                     observes[e][obs] = npyro.sample(f'{e}_{obs}', obs_info.dist(**dist_args), obs=measd)

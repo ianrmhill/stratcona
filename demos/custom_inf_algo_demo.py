@@ -3,11 +3,17 @@
 
 import numpyro as npyro
 import numpyro.distributions as dists
+from numpyro.distributions.transforms import ComposeTransform, AffineTransform, SoftplusTransform
 # Device count has to be set before importing jax
 npyro.set_host_device_count(4)
 
+import jax
 import jax.numpy as jnp
 import jax.random as rand
+
+import numpy as np
+import scipy.stats as stats
+from matplotlib.lines import Line2D
 
 import time
 from functools import partial
@@ -29,6 +35,79 @@ BOLTZ_EV = 8.617e-5
 CELSIUS_TO_KELVIN = 273.15
 
 
+def good_accuracy_evidence_plot():
+    sb.set_theme(style='ticks', font='Times New Roman')
+    sb.set_context('talk')
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['mathtext.rm'] = 'Times New Roman'
+    plt.rcParams['mathtext.it'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman'
+
+    fig, p = plt.subplots(1, 1)
+    # Manual entry of dist params since all examples are in separate functions
+
+    # Simple high dev count
+    pri_x, pri_xs = [1.2, 0.9 * 4], [0.9, 0.2]
+    vmrg_x, vmrg_xs = [1.283052, 0.014250912 * 4], [1.0176388, 0.11077845]
+    nuts_x, nuts_xs = [1.2872009, 0.013736788 * 4], [0.9986814, 0.1121715]
+    x = np.linspace(-2, 4, 100)
+    plt.plot(x, stats.norm.pdf(x, pri_x[0], pri_x[1]), color='skyblue', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, pri_xs[0], pri_xs[1]), color='skyblue', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, vmrg_x[0], vmrg_x[1]), color='darkorange', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, vmrg_xs[0], vmrg_xs[1]), color='darkorange', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, nuts_x[0], nuts_x[1]), color='darkblue', lw=2, linestyle='solid')
+    plt.plot(x, stats.norm.pdf(x, nuts_xs[0], nuts_xs[1]), color='darkblue', lw=2, linestyle='solid')
+
+    # Loglin deg multilevel
+    pri_an, pri_ac, pri_al, pri_eaa = [14.5 - 15, 0.5], [2, 0.5], [2, 0.5], [7 - 8, 0.3]
+    vmrg_an, vmrg_ac, vmrg_al, vmrg_eaa = [14.586182 - 15, 0.40437663], [1.8554711, 0.11505531], [2.2565696, 0.42952752], [7.0471063 - 8, 0.14664122]
+    nuts_an, nuts_ac, nuts_al, nuts_eaa = [14.48159 - 15, 0.43556726], [1.7074873, 0.12949342], [2.2722185, 0.41605797], [7.017724 - 8, 0.15348393]
+    x = np.linspace(-2, 4, 100)
+    plt.plot(x, stats.norm.pdf(x, pri_an[0], pri_an[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_ac[0], pri_ac[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_al[0], pri_al[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_eaa[0], pri_eaa[1]), color='skyblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_an[0], vmrg_an[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_ac[0], vmrg_ac[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_al[0], vmrg_al[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_eaa[0], vmrg_eaa[1]), color='darkorange', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_an[0], nuts_an[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_ac[0], nuts_ac[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_al[0], nuts_al[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_eaa[0], nuts_eaa[1]), color='darkblue', lw=2, linestyle=(0, (1, 1)))
+
+    # Linear dev var
+    pri_mn, pri_bn, pri_bd = [1.2 - 2, 3], [4.8 - 2, 0.5], [7.8 - 7.5, 0.4]
+    vmrg_mn, vmrg_bn, vmrg_bd = [1.3336744 - 2, 0.03609566], [4.786585 - 2, 0.18442212], [8.010033 - 7.5, 0.3549363]
+    nuts_mn, nuts_bn, nuts_bd = [1.328055 - 2, 0.03680061], [4.834529 - 2, 0.20270407], [7.934951 - 7.5, 0.3646965]
+    x = np.linspace(-2, 4, 100)
+    plt.plot(x, stats.norm.pdf(x, pri_mn[0], pri_mn[1]), color='skyblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_bn[0], pri_bn[1]), color='skyblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, pri_bd[0], pri_bd[1]), color='skyblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_mn[0], vmrg_mn[1]), color='darkorange', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_bn[0], vmrg_bn[1]), color='darkorange', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, vmrg_bd[0], vmrg_bd[1]), color='darkorange', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_mn[0], nuts_mn[1]), color='darkblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_bn[0], nuts_bn[1]), color='darkblue', lw=2, linestyle=(0, (5, 1)))
+    plt.plot(x, stats.norm.pdf(x, nuts_bd[0], nuts_bd[1]), color='darkblue', lw=2, linestyle=(0, (5, 1)))
+
+    p.set_xlim(-2, 4)
+    p.set_xlabel('Value')
+    p.set_ylabel('Probability Density')
+
+    p.annotate('Per-sample variance variable bias', (1.8, 3.5), (0.3, 9), fontsize='small',
+               arrowprops={'arrowstyle': 'simple', 'color': 'black'})
+
+    legend_elements = [Line2D([0], [0], color='skyblue', lw=3, label='Prior'),
+                       Line2D([0], [0], color='darkorange', lw=3, label='V Marginalize'),
+                       Line2D([0], [0], color='darkblue', lw=3, label='NUTS')]
+    p.legend(handles=legend_elements, loc='upper right', fontsize='small')
+    fig.subplots_adjust(bottom=0.3)
+
+    plt.show()
+
+
+# Working!!!
 def simple_high_dev_count():
     # Define the simple model
     mb = stratcona.SPMBuilder('barebones')
@@ -50,16 +129,81 @@ def simple_high_dev_count():
 
     # Perform inference using custom importance sampling with the v resampling procedure
     am.relmdl.hyl_beliefs = {'x': {'loc': 1.2, 'scale': 0.2}, 'xs': {'loc': 0.9, 'scale': 0.2}}
+    jax.clear_caches()
     perf = am.do_inference_is(y, n_x=1000)
     print(perf)
     print(am.relmdl.hyl_beliefs)
 
     # Now compare to HMC
     am.relmdl.hyl_beliefs = {'x': {'loc': 1.2, 'scale': 0.2}, 'xs': {'loc': 0.9, 'scale': 0.2}}
+    jax.clear_caches()
     am.do_inference(y)
     print(am.relmdl.hyl_beliefs)
 
 
+def viz_algorithm_bias():
+    # Define the simple model
+    mb = stratcona.SPMBuilder('barebones')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('x', dists.Normal, {'loc': 2.3, 'scale': 0.0001})
+    mb.add_hyperlatent('xs', dists.Normal, {'loc': 1, 'scale': 0.0001}, var_tf)
+    mb.add_latent('v', nom='x', dev='xs')
+    mb.add_params(ys=0.01)
+    mb.add_observed('y', dists.Normal, {'loc': 'v', 'scale': 'ys'}, 100)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=87744877)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('bare', {'e': {'lot': 1, 'chp': 1}}, {'e': {}})
+    am.set_test_definition(d)
+    k = rand.key(82392)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'y': y_s['e_y']}}
+    print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
+
+    sb.set_theme(style='ticks', font='Times New Roman')
+    sb.set_context('talk')
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['mathtext.rm'] = 'Times New Roman'
+    plt.rcParams['mathtext.it'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman'
+    fig, p = plt.subplots(1, 1)
+    x = np.linspace(0, 2, 200)
+    p.plot(x, stats.norm.pdf(x, 1.0, 0.2), color='skyblue', lw=2, linestyle='solid', label='Prior')
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    epslist = {0.003: 'lightpink', 0.01: 'hotpink', 0.03: 'orchid', 0.1: 'mediumorchid', 0.3: 'rebeccapurple'}
+    for ys in epslist.keys():
+        am.relmdl.hyl_beliefs = {'x': {'loc': 2.3, 'scale': 0.2}, 'xs': {'loc': 1.0, 'scale': 0.2}}
+        am.relmdl.param_vals['ys'] = ys
+        jax.clear_caches()
+
+        perf = am.do_inference_is(y, n_x=50_000)
+        print(perf)
+        print(am.relmdl.hyl_beliefs)
+        xsu, xsv = am.relmdl.hyl_beliefs['xs']['loc'], am.relmdl.hyl_beliefs['xs']['scale']
+        p.plot(x, stats.norm.pdf(x, xsu, xsv), color=epslist[ys], lw=2, linestyle='solid',
+               label=f"Posterior - $ε_y$:$ε_{{true}}$ = {round(ys*100, 2)}")
+
+    #am.relmdl.hyl_beliefs = {'x': {'loc': 2.3, 'scale': 0.2}, 'xs': {'loc': 0.9, 'scale': 0.2}}
+    #am.relmdl.param_vals['ys'] = ys
+    #jax.clear_caches()
+
+    #perf = am.do_inference(y)
+    #xsu, xsv = am.relmdl.hyl_beliefs['xs']['loc'], am.relmdl.hyl_beliefs['xs']['scale']
+    #p.plot(x, stats.norm.pdf(x, xsu, xsv), color='darkblue', lw=2, linestyle='solid', label=f"Posterior - NUTS")
+    p.axvline(1.0, 0, 1, label='True mean σ')
+
+    p.set_xlim(0, 2)
+    p.set_xlabel('Value Distribution')
+    p.set_ylabel('Probability Density')
+    p.legend(loc='upper right')
+    fig.subplots_adjust(bottom=0.2)
+
+    plt.show()
+
+
+
+# Working!!!
 def simple_chip_level():
     # Define the simple model
     mb = stratcona.SPMBuilder('barebones')
@@ -83,17 +227,20 @@ def simple_chip_level():
     # Perform inference using custom importance sampling with the v resampling procedure
     am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1},
                              'xsd': {'loc': 4, 'scale': 2}, 'xsc': {'loc': 4, 'scale': 2}}
-    perf = am.do_inference_is(y, n_x=10_000, n_v=1_000)
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=3_000, n_v=500)
     print(perf)
     print(am.relmdl.hyl_beliefs)
 
     # Now compare to HMC
     am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1},
                              'xsd': {'loc': 4, 'scale': 2}, 'xsc': {'loc': 4, 'scale': 2}}
+    jax.clear_caches()
     am.do_inference(y)
     print(am.relmdl.hyl_beliefs)
 
 
+# Working!!!
 def simple_all_level():
     # Define the simple model
     mb = stratcona.SPMBuilder('barebones')
@@ -118,13 +265,264 @@ def simple_all_level():
     # Perform inference using custom importance sampling with the v resampling procedure
     am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1}, 'xsd': {'loc': 4, 'scale': 1},
                              'xsc': {'loc': 5, 'scale': 1}, 'xsl': {'loc': 4, 'scale': 1}}
-    perf = am.do_inference_is(y, n_x=10_000, n_v=500)
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=3_000, n_v=500)
     print(perf)
     print(am.relmdl.hyl_beliefs)
 
     # Now compare to HMC
     am.relmdl.hyl_beliefs = {'x': {'loc': 6, 'scale': 1}, 'xsd': {'loc': 4, 'scale': 1},
                              'xsc': {'loc': 5, 'scale': 1}, 'xsl': {'loc': 4, 'scale': 1}}
+    jax.clear_caches()
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
+# Working!!!
+def linear_dev_var():
+    mb = stratcona.SPMBuilder('linear')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('mn', dists.Normal, {'loc': 1.3, 'scale': 0.0001})
+    mb.add_hyperlatent('bn', dists.Normal, {'loc': 5, 'scale': 0.0001})
+    mb.add_hyperlatent('bd', dists.Normal, {'loc': 8, 'scale': 0.0001}, var_tf)
+    mb.add_latent('m', nom='mn')
+    mb.add_latent('b', nom='bn', dev='bd')
+    def linear(m, b, x): return (m * x) + b
+    mb.add_intermediate('yn', linear)
+    mb.add_params(ys=0.1)
+    mb.add_observed('y', dists.Normal, {'loc': 'yn', 'scale': 'ys'}, 10)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=64234)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('multi_x',
+                          {'p1': {'lot': 1, 'chp': 1}, 'p2': {'lot': 1, 'chp': 1}, 'p3': {'lot': 1, 'chp': 1}},
+                          {'p1': {'x': 0}, 'p2': {'x': 4}, 'p3': {'x': 9}})
+    am.set_test_definition(d)
+    k = rand.key(3737)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'p1': {'y': y_s['p1_y']}, 'p2': {'y': y_s['p2_y']}, 'p3': {'y': y_s['p3_y']}}
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'mn': {'loc': 1.2, 'scale': 0.3},
+                             'bn': {'loc': 4.8, 'scale': 0.5}, 'bd': {'loc': 7.8, 'scale': 0.4}}
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=10_000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'mn': {'loc': 1.2, 'scale': 0.3},
+                             'bn': {'loc': 4.8, 'scale': 0.5}, 'bd': {'loc': 7.8, 'scale': 0.4}}
+    jax.clear_caches()
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
+def loglin_multilevel_var():
+    # Introduces lognormal hyls, transforms, and more complex behaviour
+    boltz_ev = 8.617e-5
+    # Define the model we will use to fit degradation
+    mb = stratcona.SPMBuilder(mdl_name='Arrhenius')
+    # Log-scale Arrhenius model
+    def l_arrhenius_t(l_a, eaa, temp):
+        temp_coeff = (-eaa) / (boltz_ev * temp)
+        return jnp.log(1e9) + l_a + temp_coeff
+
+    mb.add_hyperlatent('l_a_nom', dists.Normal, {'loc': 14, 'scale': 0.0001})
+    pos_scale_tf = ComposeTransform([SoftplusTransform(), AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('l_a_chp', dists.Normal, {'loc': 3, 'scale': 0.0001}, pos_scale_tf)
+    mb.add_hyperlatent('l_a_lot', dists.Normal, {'loc': 4, 'scale': 0.0001}, pos_scale_tf)
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 7, 'scale': 0.0001}, pos_scale_tf)
+
+    mb.add_latent('l_a', 'l_a_nom', chp='l_a_chp', lot='l_a_lot')
+    mb.add_latent('eaa', 'eaa_nom')
+    mb.add_intermediate('fitn', l_arrhenius_t)
+    mb.add_params(fitv=0.2)
+    mb.add_observed('fit', dists.Normal, {'loc': 'fitn', 'scale': 'fitv'}, 1)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=52372)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('multi_temp',
+                          {'t1': {'lot': 5, 'chp': 5}, 't2': {'lot': 5, 'chp': 5}, 't3': {'lot': 5, 'chp': 5}},
+                          {'t1': {'temp': 300}, 't2': {'temp': 350}, 't3': {'temp': 400}})
+    am.set_test_definition(d)
+    k = rand.key(83434)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'t1': {'fit': y_s['t1_fit']}, 't2': {'fit': y_s['t2_fit']}, 't3': {'fit': y_s['t3_fit']}}
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 13, 'scale': 1.5}, 'eaa_nom': {'loc': 7, 'scale': 0.3},
+                             'l_a_chp': {'loc': 5, 'scale': 2}, 'l_a_lot': {'loc': 5, 'scale': 2}}
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=40_000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 13, 'scale': 1.5}, 'eaa_nom': {'loc': 7, 'scale': 0.3},
+                             'l_a_chp': {'loc': 5, 'scale': 2}, 'l_a_lot': {'loc': 5, 'scale': 2}}
+    jax.clear_caches()
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
+# Working!!!
+def loglin_bernoulli_obs_no_var():
+    # Introduces lognormal hyls, transforms, and more complex behaviour
+    boltz_ev = 8.617e-5
+    # Define the model we will use to fit degradation
+    mb = stratcona.SPMBuilder(mdl_name='Arrhenius')
+
+    # Log-scale Arrhenius model
+    def l_arrhenius_t(l_a, eaa, temp):
+        temp_coeff = (-eaa) / (boltz_ev * temp)
+        return jnp.log(1e9) + l_a + temp_coeff
+
+    def fail_prob(l_fit, t):
+        return jax.nn.sigmoid(l_fit - jnp.log(1e9) + jnp.log(t))
+
+    mb.add_hyperlatent('l_a_nom', dists.Normal, {'loc': 14, 'scale': 0.0001})
+    pos_scale_tf = ComposeTransform([SoftplusTransform(), AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 7, 'scale': 0.0001}, pos_scale_tf)
+
+    mb.add_latent('l_a', 'l_a_nom')
+    mb.add_latent('eaa', 'eaa_nom')
+    mb.add_intermediate('l_fit', l_arrhenius_t)
+    mb.add_intermediate('pfail', fail_prob)
+    mb.add_observed('failed', dists.Bernoulli, {'probs': 'pfail'}, 1)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=6248742)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('multi_temp',
+                          {'t1': {'lot': 2, 'chp': 2}, 't2': {'lot': 2, 'chp': 2}, 't3': {'lot': 2, 'chp': 2}},
+                          {'t1': {'temp': 300, 't': 1000}, 't2': {'temp': 350, 't': 1000},
+                           't3': {'temp': 400, 't': 1000}})
+    am.set_test_definition(d)
+    k = rand.key(83434)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'t1': {'failed': y_s['t1_failed']}, 't2': {'failed': y_s['t2_failed']}, 't3': {'failed': y_s['t3_failed']}}
+    print(y)
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 13.5, 'scale': 1}, 'eaa_nom': {'loc': 7, 'scale': 0.3}}
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=1_000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+
+# Working!!!
+def loglin_deg_multilevel():
+    boltz_ev = 8.617e-5
+    # Model provided in JEDEC's JEP122H as generally used NBTI degradation model, equation 5.3.1,
+    # log(1000) term to convert to mV
+    def dvth_mv(l_a, eaa, temp, t, n):
+        #return jnp.log(1000) + l_a + ((-eaa) / (boltz_ev * temp)) + jnp.log(t ** n)
+        return jnp.exp(jnp.log(1000) + l_a + ((-eaa) / (boltz_ev * temp)) + jnp.log(t ** n))
+
+    mb = stratcona.SPMBuilder(mdl_name='deg-general')
+
+    pos_scale_tf = ComposeTransform([SoftplusTransform(), AffineTransform(0, 0.1)])
+    mb.add_hyperlatent('l_a_nom', dists.Normal, {'loc': 14.5, 'scale': 0.0001})
+    mb.add_hyperlatent('l_a_chp', dists.Normal, {'loc': 1.6, 'scale': 0.0001}, pos_scale_tf)
+    mb.add_hyperlatent('l_a_lot', dists.Normal, {'loc': 2.5, 'scale': 0.0001}, pos_scale_tf)
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 7, 'scale': 0.0001}, pos_scale_tf)
+
+    mb.add_latent('l_a', nom='l_a_nom', chp='l_a_chp', lot='l_a_lot')
+    mb.add_latent('eaa', nom='eaa_nom')
+
+    mb.add_intermediate('degn', dvth_mv)
+    mb.add_params(n=0.3, degv=2)
+    mb.add_observed('deg', dists.Normal, {'loc': 'degn', 'scale': 'degv'}, 1)
+
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=833483473)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('htol', {'htol': {'lot': 3, 'chp': 77}}, {'htol': {'temp': 400, 't': 1000}})
+    am.set_test_definition(d)
+    k = rand.key(83434)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'htol': {'deg': y_s['htol_deg']}}
+    print(y)
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 14.5, 'scale': 0.5}, 'eaa_nom': {'loc': 7, 'scale': 0.3},
+                             'l_a_chp': {'loc': 2, 'scale': 0.5}, 'l_a_lot': {'loc': 2, 'scale': 0.5}}
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=5_000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 14.5, 'scale': 0.5}, 'eaa_nom': {'loc': 7, 'scale': 0.3},
+                             'l_a_chp': {'loc': 2, 'scale': 0.5}, 'l_a_lot': {'loc': 2, 'scale': 0.5}}
+    jax.clear_caches()
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
+# Working!!!
+def em_multilevel():
+    mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
+    boltz_ev = 8.617e-5
+    num_devices = 5
+    # Wire area in nm^2
+    mb.add_params(vth_typ=0.32, i_base=2.8, wire_area=1.024 * 1000 * 1000, k=boltz_ev)
+
+    # Express wire current density as a function of the number of transistors and the voltage applied
+    def j_n(n_fins, vdd, vth_typ, i_base):
+        return n_fins * i_base * ((vdd - vth_typ) ** 2)
+
+    # The classic model for electromigration failure estimates, DOI: 10.1109/T-ED.1969.16754
+    def l_blacks(jn_wire, temp, em_n, em_eaa, wire_area, k):
+        return jnp.log(wire_area) - (em_n * jnp.log(jn_wire)) + (em_eaa / (k * temp)) - jnp.log(10 * 3600)
+
+    # Now correspond the degradation mechanisms to the output values
+    mb.add_intermediate('jn_wire', j_n)
+    mb.add_intermediate('l_fail', l_blacks)
+    mb.add_params(lttf_var=0.1)
+    mb.add_observed('lttf', dists.Normal, {'loc': 'l_fail', 'scale': 'lttf_var'}, num_devices)
+
+    var_tf = ComposeTransform([SoftplusTransform(), AffineTransform(0, 0.001)])
+    mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 13, 'scale': 0.0001}, AffineTransform(0, 0.1))
+    mb.add_hyperlatent('n_dev', dists.Normal, {'loc': 16, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('n_chp', dists.Normal, {'loc': 18, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('eaa_nom', dists.Normal, {'loc': 40, 'scale': 0.0001}, AffineTransform(0, 0.01))
+    mb.add_latent('em_n', 'n_nom', 'n_dev', 'n_chp')
+    mb.add_latent('em_eaa', 'eaa_nom')
+
+    # Add the chip-level failure time
+    def fail_time(lttf):
+        return jnp.exp(jnp.min(lttf))
+    mb.add_fail_criterion('lifespan', fail_time)
+
+    # Add the total test duration required to get all 5 lines to fail, how to measure time
+    def max_l_ttf(lttf):
+        return jnp.max(lttf)
+    mb.add_fail_criterion('duration', max_l_ttf)
+
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=927428374)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('htol', {'htol': {'lot': 1, 'chp': 5}}, {'htol': {'vdd': 0.95, 'temp': 400, 'n_fins': 240}})
+    am.set_test_definition(d)
+    k = rand.key(83434)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'htol': {'lttf': y_s['htol_lttf']}}
+    print(y)
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3}, 'n_chp': {'loc': 15, 'scale': 3},
+                             'eaa_nom': {'loc': 40, 'scale': 1}}
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=5_000)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3}, 'n_chp': {'loc': 15, 'scale': 3},
+                             'eaa_nom': {'loc': 40, 'scale': 1}}
+    jax.clear_caches()
     am.do_inference(y)
     print(am.relmdl.hyl_beliefs)
 
@@ -289,7 +687,7 @@ def demo_custom_nom_only():
     print(am.relmdl.hyl_beliefs)
 
 
-def build_to_idfbcamp():
+def nbti_nominal_only():
     # Define the simple model
     mb = stratcona.SPMBuilder('idfbcamp-pmos')
     var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
@@ -298,14 +696,9 @@ def build_to_idfbcamp():
         return 0.01 * a0 * jnp.exp((eaa * -0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
 
     mb.add_hyperlatent('a0n', dists.Normal, {'loc': 3.3, 'scale': 0.0001})
-    #mb.add_hyperlatent('a0d', dists.Normal, {'loc': 5.6, 'scale': 0.0001}, var_tf)
-    #mb.add_hyperlatent('a0c', dists.Normal, {'loc': 9.2, 'scale': 0.0001}, var_tf)
-    #mb.add_hyperlatent('eaan', dists.Normal, {'loc': 5.9, 'scale': 0.0001})
     mb.add_hyperlatent('alphan', dists.Normal, {'loc': 4.0, 'scale': 0.0001})
     mb.add_hyperlatent('nn', dists.Normal, {'loc': 1.9, 'scale': 0.0001})
-    mb.add_latent('a0', 'a0n', 'a0d', 'a0c')
     mb.add_latent('a0', 'a0n')
-    #mb.add_latent('eaa', 'eaan')
     mb.add_latent('alpha', 'alphan')
     mb.add_latent('n', 'nn')
     mb.add_params(time=530, vdd=0.95, temp=400, k=8.617e-5, eaa=5.9)
@@ -323,12 +716,57 @@ def build_to_idfbcamp():
     print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
 
     # Perform inference using custom importance sampling with the v resampling procedure
-    priors = {'a0n': {'loc': 3.6, 'scale': 1.2}, 'a0d': {'loc': 5.3, 'scale': 3.5}, 'a0c': {'loc': 10.6, 'scale': 3},
-              'eaan': {'loc': 6.2, 'scale': 0.2}, 'alphan': {'loc': 3.5, 'scale': 0.4}, 'nn': {'loc': 2, 'scale': 0.1}}
+    priors = {'a0n': {'loc': 3.6, 'scale': 1.2}, 'alphan': {'loc': 3.5, 'scale': 0.4}, 'nn': {'loc': 2, 'scale': 0.1}}
     am.relmdl.hyl_beliefs = priors
+    jax.clear_caches()
     perf = am.do_inference_is(y, n_x=10_000, n_v=500)
     print(perf)
     print(am.relmdl.hyl_beliefs)
+    jax.clear_caches()
+
+    # Now compare to HMC
+    am.relmdl.hyl_beliefs = priors
+    am.do_inference(y)
+    print(am.relmdl.hyl_beliefs)
+
+
+def nbti_single_level_var():
+    mb = stratcona.SPMBuilder('idfbcamp-pmos')
+    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+
+    def nbti_vth(time, vdd, temp, a0, eaa, alpha, n, k):
+        return 0.01 * a0 * jnp.exp((eaa * -0.01) / (k * temp)) * (vdd ** alpha) * (time ** (n * 0.1))
+
+    mb.add_hyperlatent('a0n', dists.Normal, {'loc': 3.3, 'scale': 0.0001})
+    mb.add_hyperlatent('a0d', dists.Normal, {'loc': 5.6, 'scale': 0.0001}, var_tf)
+    mb.add_hyperlatent('alphan', dists.Normal, {'loc': 4.0, 'scale': 0.0001})
+    mb.add_hyperlatent('nn', dists.Normal, {'loc': 1.9, 'scale': 0.0001})
+    mb.add_latent('a0', 'a0n', 'a0d')
+    mb.add_latent('alpha', 'alphan')
+    mb.add_latent('n', 'nn')
+    mb.add_params(time=530, vdd=0.95, temp=400, k=8.617e-5, eaa=5.9)
+    mb.add_params(ys=0.04)
+    mb.add_intermediate('nbti_vth', nbti_vth)
+    mb.add_observed('y', dists.Normal, {'loc': 'nbti_vth', 'scale': 'ys'}, 4)
+    am = stratcona.AnalysisManager(mb.build_model(), rng_seed=48)
+
+    # Set up the test and sample observations
+    d = stratcona.TestDef('bare', {'e': {'lot': 1, 'chp': 5}}, {'e': {}})
+    am.set_test_definition(d)
+    k = rand.key(6536)
+    y_s = am.relmdl.sample_new(k, d.dims, d.conds, (), am.relmdl.observes)
+    y = {'e': {'y': y_s['e_y']}}
+    print(f'Mean - {jnp.mean(y_s["e_y"])}, dev - {jnp.std(y_s["e_y"])}')
+
+    # Perform inference using custom importance sampling with the v resampling procedure
+    priors = {'a0n': {'loc': 3.6, 'scale': 1.2}, 'a0d': {'loc': 6.3, 'scale': 3.5},
+              'alphan': {'loc': 3.5, 'scale': 0.4}, 'nn': {'loc': 2, 'scale': 0.1}}
+    am.relmdl.hyl_beliefs = priors
+    jax.clear_caches()
+    perf = am.do_inference_is(y, n_x=10_000, n_v=500)
+    print(perf)
+    print(am.relmdl.hyl_beliefs)
+    jax.clear_caches()
 
     # Now compare to HMC
     am.relmdl.hyl_beliefs = priors
@@ -337,4 +775,4 @@ def build_to_idfbcamp():
 
 
 if __name__ == '__main__':
-    build_to_idfbcamp()
+    viz_algorithm_bias()

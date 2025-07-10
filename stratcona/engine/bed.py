@@ -142,7 +142,7 @@ def w_quantile(s, w, q, y_dim=2):
 def h_x_g_y(lw, lp_x):
     """
     Using importance sampling from the prior, H[X|y] = (1/sum[p(x|y)/p(x)]) * sum[(p(x|y)/p(x))*(-lp_x_g_y)].
-    Substituting p(x|y) = p(y|x)p(x) / p(y) and using w = p(x|y) / p(y)
+    Substituting p(x|y) = p(y|x)p(x) / p(y) and using w = p(y|x) / p(y)
     H[X|y] = (1/sum[w]) * sum[w * -log(p(x) * w)]
     """
     lp_x_ty = jnp.expand_dims(lp_x, axis=1)
@@ -196,8 +196,8 @@ def qx_hdcr_width(z, w, q, n_bins):
     return (bin_edges[1, :] - bin_edges[0, :]) * ind
 
 
-@partial(jax.jit, static_argnames=['spm', 'd_dims', 'batch_dims', 'utility', 'fd_dims'])
-def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd_dims, fd_conds):
+@partial(jax.jit, static_argnames=['spm', 'd_dims', 'batch_dims', 'utility', 'fd_dims', 'predictor'])
+def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd_dims, fd_conds, predictor):
     n_y, n_v, n_x = batch_dims
     k, kv, ky, ku, kz, kd = rand.split(k, 6)
     # Sample observations from joint prior y~p(x,v,y|d), keeping y independent of the already sampled x and v values
@@ -207,7 +207,17 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
     # the aleatoric uncertainty v
     batch_dims = (n_x, n_v, n_y)
     y_noise = spm.obs_noise
-    lp_y_g_x, v_marg_alg_stats = int_out_v(kv, spm, batch_dims, d_dims, d_conds, x_s, y_s, y_noise)
+    # Have to map computation to avoid gigantic memory allocations
+    if n_v > 1:
+        marg_v_part = partial(int_out_v, spm=spm, batch_dims=(n_x, n_v, 1), test_dims=d_dims, test_conds=d_conds, x_s=x_s, y_noise=y_noise)
+
+        def v_part(args):
+            return marg_v_part(rng_key=args['k'], y_s=args['y'])[0]
+
+        keys = rand.split(kv, next(iter(y_s.values())).shape[0])
+        lp_y_g_x = jax.lax.map(v_part, {'k': keys, 'y': y_s}, batch_size=2)
+    else:
+        lp_y_g_x, v_marg_alg_stats = int_out_v(kv, spm, batch_dims, d_dims, d_conds, x_s, y_s, y_noise)
 
     # Marginalize across epistemic uncertainty axis 'x'
     lp_y = logsumexp(lp_y_g_x, axis=0, keepdims=True) - jnp.log(n_x)
@@ -235,13 +245,24 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
-                metrics[m] = qx_lbci(z_s['field_lifespan'], w_z, 0.99)
+                metrics[m] = qx_lbci(z_s[f'field_{predictor}'], w_z, 0.99)
             case 'qx_hdcr_width':
                 n_z = n_v
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
                 z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
                                      conditionals=x_s_tz, compute_predictors=True)
-                metrics[m] = qx_hdcr_width(z_s['field_lifespan'], w_z, 0.9, n_bins=100)
+                metrics[m] = qx_hdcr_width(z_s[f'field_{predictor}'], w_z, 0.9, n_bins=100)
+            case 'l_qx_hdcr_width':
+                n_z = n_v
+                x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
+                z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
+                                     conditionals=x_s_tz, compute_predictors=True)
+                metrics[m] = qx_hdcr_width(jnp.log(z_s[f'field_{predictor}']), w_z, 0.9, n_bins=200)
+            case 'test_duration':
+                ew = jnp.zeros((len(d_dims), n_y))
+                for i, e in enumerate(d_dims):
+                    ew = ew.at[i].set(jnp.max(y_s[f'{e.name}_lttf'], axis=(1, 2, 3)))
+                metrics[m] = jnp.max(ew, axis=0)
             case 'p_y':
                 # NOTE: Should almost never need p_y directly since the samples y_s are already distributed
                 #       according to p(y)
@@ -255,7 +276,7 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
     return utility(**metrics)
 
 
-def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, field_d=None):
+def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, field_d=None, predictor='lifespan'):
     k, kd, kx = rand.split(rng_key, 3)
     perf_stats = {}
     # Get the first proposal experiment design, need to sample here to get dummy input to x_s sample and lp_x logp
@@ -274,7 +295,8 @@ def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, fie
     bar = Bar('Evaluating possible designs', max=n_d)
     us = []
     for _ in range(n_d):
-        u = eval_u_of_d(k, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds)
+        k, kud = rand.split(k)
+        u = eval_u_of_d(kud, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds, predictor)
         us.append({'design': d, 'utility': u})
         #print(f"\nEwidth: {u['e_qx_hdcr_width'].block_until_ready()}\n")
         bar.next()
