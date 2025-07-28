@@ -77,9 +77,9 @@ def qx_hdcr(samples: jnp.ndarray, x: int | float, num_bins: int = 1000):
                 region.append((start, start + bin_len))
         else:
             # Multiply bin_len by 1.1 during comparison to avoid rounding of floats from impacting the comparison
-            if i >= len(intervals) - 1 or (intervals[i+1] - intervals[i]) > (1.1 * bin_len):
-                region.append((start, intervals[i] + bin_len))
-                start = None
+            if i >= len(intervals) - 1 or (intervals[i] - intervals[i-1]) > (1.1 * bin_len):
+                region.append((start, intervals[i-1] + bin_len))
+                start = intervals[i]
 
     # Before returning, perform a quick analysis to determine if the settings were reasonable
     # 1. Check that the credible region isn't divided into many little segments due to poor sampling or binning
@@ -135,9 +135,9 @@ def qx_hdcr_l(samples: jnp.ndarray, x: int | float, num_bins: int = 200):
                 region.append((jnp.exp(start), jnp.exp(start + bin_len)))
         else:
             # Multiply bin_len by 1.1 during comparison to avoid rounding of floats from impacting the comparison
-            if i >= len(intervals) - 1 or (intervals[i+1] - intervals[i]) > (1.1 * bin_len):
-                region.append((jnp.exp(start), jnp.exp(intervals[i] + bin_len)))
-                start = None
+            if i >= len(intervals) - 1 or (intervals[i] - intervals[i-1]) > (1.1 * bin_len):
+                region.append((jnp.exp(start), jnp.exp(intervals[i-1] + bin_len)))
+                start = intervals[i]
 
     # Before returning, perform a quick analysis to determine if the settings were reasonable
     # 1. Check that the credible region isn't divided into many little segments due to poor sampling or binning

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-from itertools import product
+from itertools import product, combinations_with_replacement
 from functools import partial
-from multiprocess import Pool
+from copy import deepcopy
 import json
 
 import numpyro
@@ -36,7 +36,7 @@ BOLTZ_EV = 8.617e-5
 CELSIUS_TO_KELVIN = 273.15
 SHOW_PLOTS = False
 DB_NAME = 'stratcona'
-COLL_NAME = 'idfbcamp-qual-rev2'
+COLL_NAME = 'idfbcamp-qual-rev3'
 
 
 def login_to_database():
@@ -63,11 +63,11 @@ def try_database_upload(dataset, formatted_data):
 
 def idfbcamp_qualification():
     analyze_prior = False
-    run_bed_analysis = True
+    run_bed_analysis = False
     examine_qual_data = False
     viz_exp_data = False
     run_inference = False
-    run_posterior_analysis = False
+    run_posterior_analysis = True
     render_models = False
 
     dataset = login_to_database()
@@ -96,7 +96,7 @@ def idfbcamp_qualification():
     # We exclude variations for some hyper-latents due to the data to model complexity discrepancy.
     mbp.add_hyperlatent('nbti_a0_nom', dists.Normal, {'loc': 6.0, 'scale': 1.2})
     mbp.add_hyperlatent('nbti_eaa_nom', dists.Normal, {'loc': 6.2, 'scale': 0.3})
-    mbp.add_hyperlatent('nbti_alpha_nom', dists.Normal, {'loc': 2.8, 'scale': 2.0})
+    mbp.add_hyperlatent('nbti_alpha_nom', dists.Normal, {'loc': 2.6, 'scale': 2.0})
     mbp.add_hyperlatent('nbti_n_nom', dists.Normal, {'loc': 2, 'scale': 0.4})
     mbp.add_latent('nbti_a0', 'nbti_a0_nom')
     mbp.add_latent('nbti_eaa', 'nbti_eaa_nom')
@@ -109,7 +109,7 @@ def idfbcamp_qualification():
     # Lower HTOL degradation, higher voltage dependence, longer time constant
     mbn.add_hyperlatent('pbti_a0_nom', dists.Normal, {'loc': 4.0, 'scale': 0.8})
     mbn.add_hyperlatent('pbti_eaa_nom', dists.Normal, {'loc': 6.2, 'scale': 0.3})
-    mbn.add_hyperlatent('pbti_alpha_nom', dists.Normal, {'loc': 3.1, 'scale': 2.0})
+    mbn.add_hyperlatent('pbti_alpha_nom', dists.Normal, {'loc': 3.0, 'scale': 2.0})
     mbn.add_hyperlatent('pbti_n_nom', dists.Normal, {'loc': 1.5, 'scale': 0.4})
     mbn.add_latent('pbti_a0', 'pbti_a0_nom')
     mbn.add_latent('pbti_eaa', 'pbti_eaa_nom')
@@ -122,7 +122,7 @@ def idfbcamp_qualification():
         return (phci_a0 * 0.001) * (vdd ** phci_u) * (time ** ((phci_alpha * 0.1) + ((phci_beta * 0.0001) * (temp - tempref))))
     # Priors taken from the P. Zhang et al. paper, adjusted slightly to try and match observed sensor behaviour
     mbp.add_hyperlatent('phci_a0_nom', dists.Normal, {'loc': 15, 'scale': 7})
-    mbp.add_hyperlatent('phci_u_nom', dists.Normal, {'loc': 7, 'scale': 2.8})
+    mbp.add_hyperlatent('phci_u_nom', dists.Normal, {'loc': 6.5, 'scale': 2.8})
     mbp.add_hyperlatent('phci_alpha_nom', dists.Normal, {'loc': 1.2, 'scale': 0.3})
     mbp.add_hyperlatent('phci_beta_nom', dists.Normal, {'loc': 6, 'scale': 2.5})
     mbp.add_latent('phci_a0', 'phci_a0_nom')
@@ -133,7 +133,7 @@ def idfbcamp_qualification():
     def nhci_vth(time, vdd, temp, nhci_a0, nhci_u, nhci_alpha, nhci_beta, tempref):
         return (nhci_a0 * 0.001) * (vdd ** nhci_u) * (time ** ((nhci_alpha * 0.1) + ((nhci_beta * 0.0001) * (temp - tempref))))
     mbn.add_hyperlatent('nhci_a0_nom', dists.Normal, {'loc': 11, 'scale': 7})
-    mbn.add_hyperlatent('nhci_u_nom', dists.Normal, {'loc': 7, 'scale': 2.8})
+    mbn.add_hyperlatent('nhci_u_nom', dists.Normal, {'loc': 6.5, 'scale': 2.8})
     mbn.add_hyperlatent('nhci_alpha_nom', dists.Normal, {'loc': 1.2, 'scale': 0.3})
     mbn.add_hyperlatent('nhci_beta_nom', dists.Normal, {'loc': 6, 'scale': 2.5})
     mbn.add_latent('nhci_a0', 'nhci_a0_nom')
@@ -194,8 +194,8 @@ def idfbcamp_qualification():
     mbn.add_observed('nhci_ro_sensor', dists.Normal, {'loc': 'nhci_ro_freq', 'scale': 'ro_meas_stddev'}, 5)
 
     # Offset voltage sensor readings
-    mbp.add_params(namp_gain=10.0, pamp_gain=8.1, gm=0.022, ro=200, adc_stddev=0.035)
-    mbn.add_params(namp_gain=10.0, pamp_gain=8.1, gm=0.022, ro=200, adc_stddev=0.035)
+    mbp.add_params(namp_gain=10.0, pamp_gain=8.1, gm=0.022, ro=200, adc_stddev=0.045)
+    mbn.add_params(namp_gain=10.0, pamp_gain=8.1, gm=0.022, ro=200, adc_stddev=0.045)
     def nbti_vamp_out(nbti_strs_vth, namp_gain, vtp_typ, gm, ro):
         return namp_gain * (0.5 * (nbti_strs_vth - vtp_typ) * gm * (0.5 * ro))
     mbp.add_intermediate('nbti_vamp_out', nbti_vamp_out)
@@ -244,9 +244,9 @@ def idfbcamp_qualification():
     mbp.add_predictor('lifespan', deg_threshold)
 
     # Package all the sensors together
-    amp = stratcona.AnalysisManager(mbp.build_model(), rng_seed=49374575)
+    amp = stratcona.AnalysisManager(mbp.build_model(), rng_seed=49374574)
     amp.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
-    amn = stratcona.AnalysisManager(mbn.build_model(), rng_seed=94372847)
+    amn = stratcona.AnalysisManager(mbn.build_model(), rng_seed=94372846)
     amn.set_field_use_conditions({'time': 10 * 8760, 'vdd': 0.8, 'temp': 330})
 
     # Analyze inverse
@@ -322,6 +322,12 @@ def idfbcamp_qualification():
     permute_conds = product(temps, volts)
     test_conds_list = [{'b1': {'temp': 130 + CELSIUS_TO_KELVIN, 'vdd': 1.0, 'time': 730}, 'b2': {'temp': c2, 'vdd': v2, 'time': 730}} for c2, v2 in permute_conds]
     possible_tests = [stratcona.TestDef('', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}}, conds) for conds in test_conds_list]
+
+    #single_test = product(temps, volts, times)
+    #possible_conds = list(combinations_with_replacement(single_test, 2))
+    #possible_tests = [stratcona.TestDef('', {'b1': {'lot': 1, 'chp': 2}, 'b2': {'lot': 1, 'chp': 2}},
+    #                                    {'b1': {'temp': conds[0][0], 'vdd': conds[0][1], 'time': conds[0][2]},
+    #                                     'b2': {'temp': conds[1][0], 'vdd': conds[1][1], 'time': conds[1][2]}}) for conds in possible_conds]
     '''
     ===== 4) Accelerated test design analysis =====
     First the RIG must be determined, which depends on both the reliability target metric and the model being used. The
@@ -345,8 +351,8 @@ def idfbcamp_qualification():
 
         batches = 5
         d_batch_size = 5
-        n_y = 5_000
-        n_x = 10_000
+        n_y = 10_000
+        n_x = 20_000
         exp_samplers_p = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
         exp_samplers_n = [stratcona.assistants.iter_sampler(possible_tests[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
         keys = rand.split(amp._derive_key(), batches)
@@ -376,20 +382,21 @@ def idfbcamp_qualification():
 
     if examine_qual_data:
         ds = []
-        for i in range(50):
-            with open(f'../ccdata/bed_qual_y5k_x50k_batch{i}.json', 'r') as f:
-                batch = json.load(f)
+        with open(f'../ccdata/idfbcamp-bed-evals-rev2.json', 'r') as f:
+            evals = json.load(f)
+
+        for batch in evals:
             for d in [k for k in batch.keys() if k[0] in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']]:
                 ds.append(batch[d])
 
         # Normalize the mean and variance of HDCR width to match EIG
-        widths = jnp.array([d['e-hdcr-width-p'] for d in ds])
+        widths = jnp.array([d['e-l-hdcr-width-p'] for d in ds])
         eigs = jnp.array([d['eig-p'] + d['eig-n'] for d in ds])
         w_m, w_v = jnp.mean(widths), jnp.std(widths)
         eig_m, eig_v = jnp.mean(eigs), jnp.std(eigs)
 
         for d in ds:
-            d['w-score'] = (((w_m - d['e-hdcr-width-p']) / w_v) * eig_v) + eig_m
+            d['w-score'] = (((w_m - d['e-l-hdcr-width-p']) / w_v) * eig_v) + eig_m
             d['u'] = (d['eig-p'] + d['eig-n']) + d['w-score']
 
         u_max, eig_max, w_max = 0, 0, 0
@@ -408,9 +415,8 @@ def idfbcamp_qualification():
         high_us = [d for d in ds if d['u'] > u_max * 0.99]
 
         slice_time, slice_vdd, slice_temp = 730, 1.0, 403.15
-        slice = [d for d in ds if d['t1'] == slice_time and d['v1'] == slice_vdd
-                 and d['c1'] == slice_temp and d['t2'] == slice_time]
-        # and e['v1'] == slice_vdd and e['v2'] == slice_vdd]
+        slice = [d for d in ds if ((d['v1'] == slice_vdd and d['c1'] == slice_temp) or (d['v2'] == slice_vdd and d['c2'] == slice_temp))
+                 and d['t1'] == slice_time and d['t2'] == slice_time]
         t1l = t2l = [303.15, 328.15, 353.15, 378.15, 403.15]
         v1l = v2l = [0.8, 0.85, 0.9, 0.95, 1.0]
         ul = jnp.array([d['u'] for d in slice]).reshape((5, 5))
@@ -418,6 +424,17 @@ def idfbcamp_qualification():
         t1 = t2 = jnp.repeat(jnp.array([303.15, 328.15, 353.15, 378.15, 403.15]), 5)
         v1 = v2 = jnp.tile(jnp.array([0.8, 0.85, 0.9, 0.95, 1.0]), 5)
         u = jnp.array([d['u'] for d in slice])
+
+        # Statistical analysis of EIG vs. HDCR width
+        eigs, ws = [], []
+        #for d in [d for d in ds if d['v1'] == 0.95 and d['v2'] == 0.8 and d['c1'] == 403.15 and d['c2'] == 403.15]:
+        #for d in [d for d in ds if d['v1'] == 0.95 and d['v2'] == 0.8 and d['t1'] == 530 and d['t2'] == 530]:
+        #for d in [d for d in ds if d['t1'] == 730 and d['t2'] == 530 and d['c1'] == 403.15 and d['c2'] == 403.15]:
+        for d in ds:
+            eigs.append(d['eig-p'] + d['eig-n'])
+            ws.append(d['w-score'])
+        corr = jnp.corrcoef(jnp.array(eigs), jnp.array(ws))
+        print(f'Observed correlation coefficient between EIG and Q90%-HDCR expected width: {corr[0, 1]}')
 
         # Construct the 2D utility plot
         sb.set_context('notebook')
@@ -427,11 +444,14 @@ def idfbcamp_qualification():
         points = p.scatter(v2, t2, c=u, cmap='cividis', linestyle='', marker='.', s=2000,
                            label='Discrete test designs')
         fig.colorbar(points, ax=p, orientation='vertical', label='Estimated utility')
-        p.scatter(1.0, 403.15, linestyle='', linewidths=100, marker='x', color='lightseagreen', s=400,
-                  label='Stress point of second board')
-        p.set_ylabel('$T_2$')
-        p.set_xlabel('$V_{DD_2}$')
-        p.annotate('Stress point of first board', (0.99, 400), (0.9, 390),
+
+        p.set_ylabel('Board 2 - $T$')
+        p.set_xlabel('Board 2 - $V_{DD}$')
+        #p.scatter(1.0, 403.15, linestyle='', linewidths=200, marker='x', color='hotpink', s=300,
+        #          label='Board 1 stress point')
+        p.annotate('Board 1 stress point', (0.99, 400), (0.92, 390),
+                   arrowprops={'arrowstyle': 'simple', 'color': 'black'})
+        p.annotate('$d_{opt}$', (0.81, 400), (0.825, 390),
                    arrowprops={'arrowstyle': 'simple', 'color': 'black'})
         #p.legend()
         plt.show()
@@ -659,39 +679,102 @@ def idfbcamp_qualification():
         # Add text annotations showing LDDP entropy
         pos = range(len(display_map))
         for tick, label, hyl in zip(pos, p.get_yticklabels(), display_map):
-            p.text(-2, pos[tick] - 0.11,
+            p.text(-4, pos[tick] - 0.12,
                    f"$H_{{\\varphi-prior}}={round(float(pri_entropy[hyl]), 2)}$",
                    horizontalalignment='center', size='medium', color='black')
-            p.text(-2, pos[tick] + 0.26,
+            p.text(-4, pos[tick] + 0.26,
                    f'$H_{{\\varphi-posterior}}={round(float(pst_entropy[hyl]), 2)}$',
                    horizontalalignment='center', size='medium', color='black')
             p.text(21, pos[tick] + 0.26,
-                   f'$Reduction={round(float(hyl_ig[hyl]), 2)} \\;\\; nats$',
+                   f'$IG={round(float(hyl_ig[hyl]), 2)} \\;\\; nats$',
                    horizontalalignment='center', size='medium', color='black')
         p.legend().remove()
         p.tick_params(axis='y', which='major', labelsize=10, labelfontfamily='Times New Roman')
         p.set_xlabel('Value distribution', fontsize='medium')
-        p.set_xlim(-5, 25)
+        p.set_xlim(-7, 25)
         p.set_ylabel('Hyper-latent variable', fontsize='medium')
 
         # Now for the predictive distribution plot
         fig, p = plt.subplots(1, 1)
-
-        p.axvspan(float(jnp.log(pri_life[0][0])), float(jnp.log(pri_life[0][1])), color='lightseagreen', linestyle='dashed', alpha=0.2,
-                  label='Prior predicted Q90%-HDCR')
-        p.axvspan(float(jnp.log(pst_life[0][0])), float(jnp.log(pst_life[0][1])), color='darkgreen', linestyle='dashed', alpha=0.3,
-                  label='Posterior predicted Q90%-HDCR')
+        labelled = False
+        for span in pri_life:
+            lbl = 'Prior predicted Q90%-HDCR' if not labelled else None
+            p.axvspan(float(jnp.log(span[0])), float(jnp.log(span[1])), color='lightgreen', linestyle='dashed',
+                      alpha=0.2, label=lbl)
+            labelled = True
+        labelled = False
+        lbl = 'Posterior predicted Q90%-HDCR' if not labelled else None
+        for span in pst_life:
+            p.axvspan(float(jnp.log(span[0])), float(jnp.log(span[1])), color='darkgreen', linestyle='dashed',
+                      alpha=0.3, label=lbl)
+            labelled = True
 
         p.hist(jnp.log(pri_pred['field_lifespan']).flatten(), 150, density=True, alpha=0.9, color='skyblue', histtype='stepfilled',
                   label='Prior predicted lifespan distribution')
         p.hist(jnp.log(pst_pred['field_lifespan']).flatten(), 150, density=True, alpha=0.7, color='darkblue', histtype='stepfilled',
                   label='Posterior predicted lifespan distribution')
 
-        p.set_xlim(3, 20)
-        #p.set_xticks([], [])
-        #p.set_xlabel('Test Chip Lifespan (log scale A.U.)')
+        p.set_xlim(2, 20)
+        ticks = [0.01, 0.1, 1, 10, 100, 1_000, 10_000]
+        tick_map = list(jnp.log(jnp.array([tick * 8760 for tick in ticks])))
+        p.set_xticks(tick_map, ticks)
+        p.set_xlabel('Field Use Lifespan (log years)')
         p.set_ylabel('Probability Density')
         p.legend(loc='upper right')
+
+        # Now the varied use conditions predictions
+        fu1 = stratcona.TestDef('', amp.field_test.dims, deepcopy(amp.field_test.conds))
+        fu2 = stratcona.TestDef('', amp.field_test.dims, deepcopy(amp.field_test.conds))
+        fu3 = stratcona.TestDef('', amp.field_test.dims, deepcopy(amp.field_test.conds))
+        fu2.conds['field']['temp'] = 350
+        fu3.conds['field']['vdd'] = 0.9
+
+        keeps = ('field_nbti_ro_sensor_nbti_strs_vth', 'field_phci_ro_sensor_phci_strs_vth', 'field_phci_ro_sensor_nbti_hci_strs', 'field_phci_ro_sensor_phci_full_strs')
+        k1, k2, k3 = rand.split(amp._derive_key(), 3)
+        use1 = amp.relmdl.sample_new(k1, fu1.dims, fu1.conds, (1_000_000,), keeps)
+        use2 = amp.relmdl.sample_new(k2, fu2.dims, fu2.conds, (1_000_000,), keeps)
+        use3 = amp.relmdl.sample_new(k3, fu2.dims, fu3.conds, (1_000_000,), keeps)
+
+        fig, p = plt.subplots(1, 1)
+        #labelled = False
+        #for span in pri_life:
+        #    lbl = 'Prior predicted Q90%-HDCR' if not labelled else None
+        #    p.axvspan(float(jnp.log(span[0])), float(jnp.log(span[1])), color='lightgreen', linestyle='dashed',
+        #              alpha=0.2, label=lbl)
+        #    labelled = True
+        #labelled = False
+        #lbl = 'Posterior predicted Q90%-HDCR' if not labelled else None
+        #for span in pst_life:
+        #    p.axvspan(float(jnp.log(span[0])), float(jnp.log(span[1])), color='darkgreen', linestyle='dashed',
+        #              alpha=0.3, label=lbl)
+        #    labelled = True
+        m1_bti = use1['field_phci_ro_sensor_nbti_hci_strs'].mean()
+        m1_hci = use1['field_phci_ro_sensor_phci_full_strs'].mean()
+        m2_bti = use2['field_phci_ro_sensor_nbti_hci_strs'].mean()
+        m2_hci = use2['field_phci_ro_sensor_phci_full_strs'].mean()
+        m3_bti = use3['field_phci_ro_sensor_nbti_hci_strs'].mean()
+        m3_hci = use3['field_phci_ro_sensor_phci_full_strs'].mean()
+
+        p.hist(use1['field_nbti_ro_sensor_nbti_strs_vth'].flatten() - 0.325, 300, range=(0, 0.4), density=True, alpha=0.75, color='limegreen', histtype='stepfilled',
+               label=f"Posterior 10-year NBTI stress degradation: $T$: {fu1.conds['field']['temp']}, $V_{{DD}}$: {fu1.conds['field']['vdd']}")
+        p.hist(use2['field_nbti_ro_sensor_nbti_strs_vth'].flatten() - 0.325, 300, range=(0, 0.4), density=True, alpha=0.75, color='palegreen', histtype='stepfilled',
+               label=f"Posterior 10-year NBTI stress degradation: $T$: {fu2.conds['field']['temp']}, $V_{{DD}}$: {fu2.conds['field']['vdd']}")
+        p.hist(use3['field_nbti_ro_sensor_nbti_strs_vth'].flatten() - 0.325, 300, range=(0, 0.4), density=True, alpha=0.75, color='darkgreen', histtype='stepfilled',
+               label=f"Posterior 10-year NBTI stress degradation: $T$: {fu3.conds['field']['temp']}, $V_{{DD}}$: {fu3.conds['field']['vdd']}")
+
+        p.hist(use1['field_phci_ro_sensor_phci_strs_vth'].flatten() - 0.325, 300, range=(0, 0.4), density=True, alpha=0.75, color='hotpink', histtype='stepfilled',
+               label=f"Posterior 10-year p-HCI stress degradation: $T$: {fu1.conds['field']['temp']}, $V_{{DD}}$: {fu1.conds['field']['vdd']}")
+        p.hist(use2['field_phci_ro_sensor_phci_strs_vth'].flatten() - 0.325, 300, range=(0, 0.4), density=True, alpha=0.75, color='pink', histtype='stepfilled',
+               label=f"Posterior 10-year p-HCI stress degradation: $T$: {fu2.conds['field']['temp']}, $V_{{DD}}$: {fu2.conds['field']['vdd']}")
+        p.hist(use3['field_phci_ro_sensor_phci_strs_vth'].flatten() - 0.325, 300, range=(0, 0.4), density=True, alpha=0.75, color='deeppink', histtype='stepfilled',
+               label=f"Posterior 10-year p-HCI stress degradation: $T$: {fu3.conds['field']['temp']}, $V_{{DD}}$: {fu3.conds['field']['vdd']}")
+
+        p.set_xlim(0.0, 0.3)
+        p.set_xlabel('Predicted Degradation (V)')
+        p.set_ylabel('Probability Density')
+        p.set_yticks([], [])
+        p.legend(loc='upper right')
+        fig.subplots_adjust(bottom=0.2)
 
         plt.show()
 
