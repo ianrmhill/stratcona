@@ -3,6 +3,7 @@
 
 import numpyro as npyro
 import numpyro.distributions as dists
+import numpyro.distributions.transforms as tfs
 # Device count has to be set before importing jax
 npyro.set_host_device_count(4)
 
@@ -17,9 +18,6 @@ import pandas as pd
 import seaborn as sb
 from matplotlib import pyplot as plt
 import matplotlib.lines as pltlines
-
-import gerabaldi
-from gerabaldi.models import *
 
 import os
 import sys
@@ -36,8 +34,7 @@ ENTROPY_SAMPLES = 100_000
 # Helper function to convert likelihoods to RGBA alpha values that result in clear plots
 def likelihood_to_alpha(probs, max_alpha=0.5):
     min_alpha = 0.1
-    alphas = min_alpha + ((probs / jnp.max(probs)) * (max_alpha - min_alpha))
-    return alphas
+    return min_alpha + ((probs / jnp.max(probs)) * (max_alpha - min_alpha))
 
 
 def vth_sensor_inference():
@@ -46,11 +43,13 @@ def vth_sensor_inference():
     example avoids overfit to a very small dataset, shows chip-level variability modelling, and visualization of LDDP
     entropy for epistemic uncertainty quantification.
     """
+    use_irps_paper_lddp_range = False
+    lddp_range = (-400, 400) if use_irps_paper_lddp_range else (-838.8608, 838.8607)
 
     ####################################################
     # First load in the experimental data used for inference.
     ####################################################
-    with open('./bti_ro_data.json', 'r') as f:
+    with open('../data/bti_ro_data.json') as f:
         deg_data = json.load(f)
     deg_data['t1000']['nbti_std_ro'] = jnp.array(deg_data['t1000']['nbti_std_ro'])
 
@@ -69,7 +68,7 @@ def vth_sensor_inference():
     mb.add_hyperlatent('alpha_nom', dists.Normal, {'loc': 3.5, 'scale': 0.3})
     mb.add_hyperlatent('n_nom', dists.Normal, {'loc': 2, 'scale': 0.3})
 
-    var_tf = dists.transforms.ComposeTransform([dists.transforms.SoftplusTransform(), dists.transforms.AffineTransform(0, 0.1)])
+    var_tf = tfs.ComposeTransform([tfs.SoftplusTransform(), tfs.AffineTransform(0, 0.1)])
     mb.add_hyperlatent('a0_dev', dists.Normal, {'loc': 6, 'scale': 4}, transform=var_tf)
     mb.add_hyperlatent('e_aa_dev', dists.Normal, {'loc': 6, 'scale': 3}, transform=var_tf)
     mb.add_hyperlatent('a0_chp', dists.Normal, {'loc': 6, 'scale': 4}, transform=var_tf)
@@ -84,7 +83,6 @@ def vth_sensor_inference():
     mb.add_observed('nbti_std_ro', dists.Normal, {'loc': 'vth_shift_t1', 'scale': 'meas_var'}, 4)
 
     am = stratcona.AnalysisManager(mb.build_model(), rng_seed=9861823450)
-
 
     ####################################################
     # Define the HTOL test that the experimental data was collected from
@@ -132,7 +130,7 @@ def vth_sensor_inference():
     for hyl in hyls:
         pri_samples[hyl] = hyl_samples[hyl]
         pri_entropy[hyl] = stratcona.engine.bed.entropy(
-            pri_samples[hyl], partial(lp_f, site=hyl, test=htol_end_test, key=k1), limiting_density_range=(-400, 400))
+            pri_samples[hyl], partial(lp_f, site=hyl, test=htol_end_test, key=k1), limiting_density_range=lddp_range)
 
     ####################################################
     # Inference the model using the experimental test data
@@ -153,7 +151,7 @@ def vth_sensor_inference():
     for hyl in hyls:
         pst_samples[hyl] = hyl_samples[hyl]
         pst_entropy[hyl] = stratcona.engine.bed.entropy(
-            pst_samples[hyl], partial(lp_f, site=hyl, test=htol_end_test, key=k1), limiting_density_range=(-400, 400))
+            pst_samples[hyl], partial(lp_f, site=hyl, test=htol_end_test, key=k1), limiting_density_range=lddp_range)
 
     hyl_ig = {}
     for hyl in hyls:
@@ -178,9 +176,9 @@ def vth_sensor_inference():
     sb.set_theme(style='ticks', font='Times New Roman')
 
     fig, p = plt.subplots(1, 1)
-    display_map = {'a0_nom': "$\\mu_{A_0}$", 'e_aa_nom': "$\\mu_{E_{aa}}$", 'alpha_nom': "$\\alpha$", 'n_nom': "$\\mu_n$",
-                   'a0_dev': "$\\sigma_{A_0}$", 'e_aa_dev': "$\\sigma_{E_{aa}}$", 'alpha_dev': "$\\sigma_{\\alpha}$", 'n_dev': "$\\sigma_{n}$",
-                   'a0_chp': "$\\varsigma_{A_0}$"}
+    display_map = {'a0_nom': '$\\mu_{A_0}$', 'e_aa_nom': '$\\mu_{E_{aa}}$', 'alpha_nom': '$\\alpha$',
+                   'n_nom': '$\\mu_n$', 'a0_dev': '$\\sigma_{A_0}$', 'e_aa_dev': '$\\sigma_{E_{aa}}$',
+                   'alpha_dev': '$\\sigma_{\\alpha}$', 'n_dev': '$\\sigma_{n}$', 'a0_chp': '$\\varsigma_{A_0}$'}
     df_list = []
     hyl_subset = ['a0_nom', 'a0_dev', 'a0_chp', 'e_aa_nom', 'e_aa_dev', 'n_nom']
     for hyl in hyl_subset:
@@ -208,13 +206,13 @@ def vth_sensor_inference():
     pos = range(len(hyls))
     for tick, label, hyl in zip(pos, p.get_yticklabels(), hyl_subset):
         p.text(-2, pos[tick] - 0.11,
-               f"$H_{{prior}}={round(float(pri_entropy[hyl]), 2)}$",
+               f'$H_{{\\varphi-prior}}={round(float(pri_entropy[hyl]), 2)}$',
                horizontalalignment='center', size='medium', color='black')
         p.text(-2, pos[tick] + 0.26,
-               f'$H_{{posterior}}={round(float(pst_entropy[hyl]), 2)}$',
+               f'$H_{{\\varphi-posterior}}={round(float(pst_entropy[hyl]), 2)}$',
                horizontalalignment='center', size='medium', color='black')
-        p.text(13, pos[tick] + 0.26,
-               f'$IG={round(float(hyl_ig[hyl]), 2)} \\;\\; nats$',
+        p.text(12.5, pos[tick] + 0.26,
+               f'$Reduction={round(float(hyl_ig[hyl]), 2)} \\;\\; nats$',
                horizontalalignment='center', size='medium', color='black')
     p.legend().remove()
     p.tick_params(axis='y', which='major', labelsize=13, labelfontfamily='Times New Roman')
@@ -237,7 +235,7 @@ def vth_sensor_inference():
     # Add the measured data that was used for inference
     colours = ['darkorange', 'sienna', 'gold', 'firebrick']
     for chp, clr in enumerate(colours):
-        measd_vals = deg_data['t1000']['nbti_std_ro'][chp]
+        measd_vals = deg_data['t1000']['nbti_std_ro'][:, chp]
         p.plot(jnp.full((len(measd_vals),), 1000), measd_vals, color=clr, linestyle='', marker='.',
                markersize=8, label=None)
 
@@ -253,7 +251,7 @@ def vth_sensor_inference():
     p.set_yticks([])
     p.set_xlabel('Time (hours)', fontsize='medium')
     p.set_ylim(-50, 200)
-    p.set_ylabel("$\Delta V_{th}$ (A.U.)", fontsize='medium')
+    p.set_ylabel('$\\Delta V_{th}$ (A.U.)', fontsize='medium')
 
     plt.show()
 

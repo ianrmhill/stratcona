@@ -1,23 +1,14 @@
 # Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import time as t
-import datetime
-import json
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
 import jax.random as rand
 
-from multiprocessing import Pool
 from progress.bar import Bar
 from functools import partial
-from typing import Callable
 from inspect import signature
-from inspect import Parameter
-
-from matplotlib import pyplot as plt
 
 from stratcona.engine.inference import int_out_v
 
@@ -298,7 +289,6 @@ def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, fie
         k, kud = rand.split(k)
         u = eval_u_of_d(kud, spm, d.dims, d.conds, x_s, (n_y, n_v, n_x), utility, lp_x, h_x, field_d.dims, field_d.conds, predictor)
         us.append({'design': d, 'utility': u})
-        #print(f"\nEwidth: {u['e_qx_hdcr_width'].block_until_ready()}\n")
         bar.next()
         # Now update the test design for the next iteration, the final design (index n_d) is not used
         d = d_sampler(kd)

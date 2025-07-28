@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-from itertools import product
 from functools import partial
 import json
 
@@ -16,9 +15,6 @@ import jax
 import jax.numpy as jnp # noqa: ImportNotAtTopOfFile
 import jax.random as rand
 import numpy as np
-
-import gerabaldi
-from gerabaldi.models import *
 
 import datetime as dt
 import certifi
@@ -82,13 +78,13 @@ def electromigration_qualification():
     objective = stratcona.ReliabilityRequirement(metric=stratcona.engine.metrics.qx_lbci,
                                                  quantile=99.9, target_lifespan=trgt_life)
 
-    '''
+    """
     ===== 2) Test resource constraint identification =====
     To determine the bounds of the possible test design space, need to decide on what costs are acceptable. We'll say
     that the reliability team has been given an allocation of 5 chips to use for this qualification testing.
 
     The maximum and minimum voltages and temperatures that can be used are [0.7, 0.95] and [300, 400] respectively.
-    '''
+    """
     # Since the temperature dependence is already pretty well characterized, the test design space focuses on voltage
     # dependence parameter mean and variability
     test_list, t, volts = [], 400, [0.85, 0.9, 0.95, 1.0, 1.05, 1.1]
