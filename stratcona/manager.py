@@ -8,9 +8,9 @@ from matplotlib import pyplot as plt
 import jax.random as rand
 
 from stratcona import engine
-from stratcona.engine.inference import inference_model, custom_mhgibbs_new, inf_is_new
+from stratcona.engine.inference import inference_model, inf_is_new
 from stratcona.engine.bed import pred_bed_apr25, eig
-from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityTest, ReliabilityRequirement, TestDef
+from stratcona.modelling.relmodel import ReliabilityModel, ReliabilityRequirement, TestDef
 
 
 class AnalysisManager:
@@ -42,7 +42,7 @@ class AnalysisManager:
         rng = self._derive_key()
         return self.relmdl.sample_new(rng, self.test.dims, self.test.conds, num, self.relmdl.observes)
 
-    def do_inference(self, observations, test: ReliabilityTest = None, auto_update_prior=True):
+    def do_inference(self, observations, test: TestDef = None, auto_update_prior=True):
         rng = self._derive_key()
         test_info = test if test is not None else self.test
         inf_mdl = partial(self.relmdl.spm, test_info.dims, test_info.conds, self.relmdl.hyl_beliefs, self.relmdl.param_vals)
@@ -50,7 +50,7 @@ class AnalysisManager:
         if auto_update_prior:
             self.relmdl.hyl_beliefs = new_prior
 
-    def do_inference_mhgibbs(self, observations, test: ReliabilityTest = None, num_chains=10, n_v=100, beta=0.5):
+    def do_inference_mhgibbs(self, observations, test: TestDef = None, num_chains=10, n_v=100, beta=0.5):
         rng = self._derive_key()
         test_info = test if test is not None else self.test
         new_prior, perf_stats = custom_mhgibbs_new(rng, self.relmdl, test_info, observations, self.relmdl.obs_noise, num_chains, n_v, beta)

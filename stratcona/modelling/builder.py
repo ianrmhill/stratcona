@@ -1,36 +1,32 @@
-# Copyright (c) 2024 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
 from graphlib import TopologicalSorter
 from typing import Self
-from copy import deepcopy
 
-import jax.numpy as jnp
 import numpyro as npyro
 import numpyro.distributions as dists
 from numpyro.distributions import TransformedDistribution as TrDist
 from numpyro.distributions.transforms import AffineTransform as AffineTr
 
 from stratcona.modelling.relmodel import ReliabilityModel, ExpDims
-from stratcona.engine.minimization import minimize
 
 
+# Required no-op since all variables require transformation functions, so this is used for "no transform" behaviour
 def unity(x): return x
 
 
-class _HyperLatent():
-    def __init__(self, name, distribution, prior_params, transform=None, fixed_prms=None, scaling=1.0):
+class _HyperLatent:
+    def __init__(self, name, distribution, prior_params, transform=None, fixed_prms=None):
         self.dist = distribution
-        self.is_continuous = self.is_continuous()
+        self.is_continuous = self._is_continuous()
         # Determine the scaling factor applied to the variable, if any
         self.tf = transform if transform is not None else unity
         self.tf_inv = transform._inverse if transform is not None else unity
         self.prms = prior_params
         self.fixed_prms = fixed_prms
         self.site_name = name
-        self.variance_norm_factor = None
-        self.scale_factor = scaling
 
     def compute_prior_entropy(self):
         temp = self.dist(**self.prms)
@@ -40,16 +36,16 @@ class _HyperLatent():
         temp = self.dist(**self.prms)
         return temp.variance
 
-    def is_continuous(self):
+    def _is_continuous(self):
         filtered = lambda o: True if inspect.isclass(o) and issubclass(o, dists.Distribution) else False
         continuous_dists = [d[1] for d in inspect.getmembers(dists.continuous, filtered)]
         return True if self.dist in continuous_dists else False
 
     def __copy__(self):
-        return _HyperLatent(self.site_name, self.dist.copy(), self.prms, self.tf.copy(), self.fixed_prms, self.scale_factor)
+        return _HyperLatent(self.site_name, self.dist.copy(), self.prms, self.tf.copy(), self.fixed_prms)
 
 
-class _Latent():
+class _Latent:
     def __init__(self, name, nom, dev=None, chp=None, lot=None):
         self.site_name = name
         self.nom = nom
@@ -58,14 +54,14 @@ class _Latent():
         self.lot = lot
 
 
-class _Composite():
+class _Composite:
     def __init__(self, name: str, requires: list[str]):
         self.site_name = name
         self.requires = requires
         self.dep_graph = None
         self.deps_sorted = None
 
-    def build_dep_graph(self, dep_vars: dict[str: Self]):
+    def build_dep_graph(self, dep_vars: dict[str, Self]):
         # Constructs a graph as a dictionary of nodes with edges in the format expected by the TopologicalSorter class
         nodes = {self.site_name: self.requires}
         for req in self.requires:
@@ -91,10 +87,9 @@ class _CStochastic(_Composite):
         super().__init__(name, list(self.prms.values()))
 
 
-class SPMBuilder():
+class SPMBuilder:
     def __init__(self, mdl_name: str):
         self.model_name = mdl_name
-
         self.params = {}
         self.hyls = {}
         self.latents = {}
@@ -135,34 +130,6 @@ class SPMBuilder():
     def add_fail_criterion(self, name, compute_func):
         self.fail_criteria[name] = _CDeterministic(name, compute_func)
 
-    # TODO: Update
-    def gen_fail_criterion(self, var_name, fail_bounds, field_use_conds = None):
-        if field_use_conds is None:
-            field_use_conds = {}
-        residues = {}
-        for dep_var in fail_bounds:
-            def residue(time, **kwargs):
-                arg_dict = {'time': time}
-                for arg in kwargs.keys():
-                    if arg in self.dep_args[dep_var]:
-                        arg_dict[arg] = kwargs[arg]
-                for cond in field_use_conds:
-                    if cond != 'time' and cond in self.dep_args[dep_var]:
-                        arg_dict[cond] = field_use_conds[cond]
-                return abs(fail_bounds[dep_var] - self.dependents[dep_var](**arg_dict))
-
-            residues[dep_var] = residue
-
-        # The overall failure time is based on the first failure to occur out of all the device instances included
-        def first_to_fail(**kwargs):
-            times = []
-            for dep in residues:
-                times.append(minimize(residues[dep], kwargs, (np.float64(0.1), np.float64(1e6)), precision=1e-2, log_gold=True))
-            return min(times)
-
-        self.predictors[var_name] = first_to_fail
-        self.pred_args[var_name] = list(self.latents.keys()) + list(self.dependents.keys())
-
     def build_model(self):
         # Figure out the dependency graph for each observable
         for obs in self.observes | self.predictors:
@@ -185,7 +152,8 @@ class SPMBuilder():
             # within a test is statistically independent
             for exp in dims:
                 e = exp.name
-                samples[e], ltnts[e], meds[e], observes[e], fail_criteria[e] = {'lot': {}, 'chp': {}, 'dev': {}}, {}, {}, {}, {}
+                samples[e], ltnts[e], meds[e], observes[e], fail_criteria[e] = {'lot': {}, 'chp': {},
+                                                                                'dev': {}}, {}, {}, {}, {}
 
                 with npyro.plate(f'{e}_lot', exp.lot):
                     for ltnt in [l for l in self.latents if self.latents[l].lot is not None]:
@@ -219,24 +187,32 @@ class SPMBuilder():
                                     chp = samples[e]['chp'][ltnt] if self.latents[ltnt].chp else 0
                                     lot = samples[e]['lot'][ltnt] if self.latents[ltnt].lot else 0
                                     ltnts[e][obs][ltnt] = npyro.deterministic(f'{e}_{obs}_{ltnt}',
-                                                                                nom + dev + chp + lot)
+                                                                              nom + dev + chp + lot)
 
                                 # Compute intermediate variables; only provide the necessary inputs to each function
                                 for med in [n for n in obs_info.deps_sorted if n in self.intermediates]:
-                                    args = {arg: val for arg, val in {**ltnts[e][obs], **meds[e][obs], **conds[e], **hyls_and_prms}.items() if arg in self.intermediates[med].requires}
+                                    args = {arg: val for arg, val in
+                                            {**ltnts[e][obs], **meds[e][obs], **conds[e], **hyls_and_prms}.items() if
+                                            arg in self.intermediates[med].requires}
                                     try:
                                         if type(self.intermediates[med]) is _CStochastic:
                                             dist_args = {arg: args[val] for arg, val in obs_info.prms.items()}
-                                            meds[e][obs][med] = npyro.sample(f'{e}_{obs}_{med}', self.intermediates[med].dist(**dist_args))
+                                            meds[e][obs][med] = npyro.sample(f'{e}_{obs}_{med}',
+                                                                             self.intermediates[med].dist(**dist_args))
                                         else:
-                                            meds[e][obs][med] = npyro.deterministic(f'{e}_{obs}_{med}', self.intermediates[med].compute(**args))
+                                            meds[e][obs][med] = npyro.deterministic(f'{e}_{obs}_{med}',
+                                                                                    self.intermediates[med].compute(
+                                                                                        **args))
                                     except KeyError as e:
                                         if e.args[0] == 'fn':
-                                            raise Exception(f'Intermediate variable {med} compute function does not return!')
+                                            raise Exception(
+                                                f'Intermediate variable {med} compute function does not return!')
                                         raise e
 
                                 # Next, define the observed or predictor variable measured in the experiment
-                                args = {arg: val for arg, val in {**ltnts[e][obs], **meds[e][obs], **conds[e], **hyls_and_prms}.items() if arg in obs_info.requires}
+                                args = {arg: val for arg, val in
+                                        {**ltnts[e][obs], **meds[e][obs], **conds[e], **hyls_and_prms}.items() if
+                                        arg in obs_info.requires}
                                 measd = measured[e][obs] if obs in self.observes and measured is not None else None
                                 if type(obs_info) is _CStochastic:
                                     dist_args = {arg: args[val] for arg, val in obs_info.prms.items()}
@@ -249,16 +225,21 @@ class SPMBuilder():
                         # per observed variable
                         if compute_predictors:
                             for criterion in self.fail_criteria:
-                                args = {arg: val for arg, val in {**observes[e], **conds[e], **hyls_and_prms}.items() if arg in self.fail_criteria[criterion].requires}
-                                fail_criteria[e][criterion] = npyro.deterministic(f'{e}_{criterion}', self.fail_criteria[criterion].compute(**args))
+                                args = {arg: val for arg, val in {**observes[e], **conds[e], **hyls_and_prms}.items() if
+                                        arg in self.fail_criteria[criterion].requires}
+                                fail_criteria[e][criterion] = npyro.deterministic(f'{e}_{criterion}',
+                                                                                  self.fail_criteria[criterion].compute(
+                                                                                      **args))
 
         # Assemble the contextual information for the model needed to work with the defined SPM
         hyl_priors = {hyl: self.hyls[hyl].prms for hyl in self.hyls}
         hyl_info = {hyl: {'dist': self.hyls[hyl].dist, 'fixed': self.hyls[hyl].fixed_prms,
                           'transform': self.hyls[hyl].tf, 'transform_inv': self.hyls[hyl].tf_inv} for hyl in self.hyls}
         ltnt_subsample_site_names = [f'{ltnt}_dev_ls' for ltnt in self.latents if self.latents[ltnt].dev is not None]
-        ltnt_subsample_site_names.extend([f'{ltnt}_chp_ls' for ltnt in self.latents if self.latents[ltnt].chp is not None])
-        ltnt_subsample_site_names.extend([f'{ltnt}_lot_ls' for ltnt in self.latents if self.latents[ltnt].lot is not None])
+        ltnt_subsample_site_names.extend(
+            [f'{ltnt}_chp_ls' for ltnt in self.latents if self.latents[ltnt].chp is not None])
+        ltnt_subsample_site_names.extend(
+            [f'{ltnt}_lot_ls' for ltnt in self.latents if self.latents[ltnt].lot is not None])
         obs_noise = {}
         for obs in self.observes:
             if 'scale' in self.observes[obs].prms and self.observes[obs].prms['scale'] in self.params:

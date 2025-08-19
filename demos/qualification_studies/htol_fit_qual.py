@@ -137,7 +137,7 @@ def htol_demo():
 
         def residue(time, **kwargs):
             return jnp.abs(fail_at_deg_mv - dvth_mv(time, **kwargs))
-        t_life = stratcona.engine.minimization.minimize_jax(residue, func_args, (1, 1e9), precision=1e-4, log_gold=True)
+        t_life = stratcona.engine.minimization.minimize(residue, func_args, (1, 1e9), precision=1e-4, log_gold=True)
         return t_life
     mb.add_predictor('ftime', fail_thresh)
     amd = stratcona.AnalysisManager(mb.build_model(), rng_seed=833483473)

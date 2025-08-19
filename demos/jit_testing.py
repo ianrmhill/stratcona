@@ -34,14 +34,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import stratcona
 from stratcona.modelling.relmodel import TestDef, ExpDims
 from stratcona.engine.inference import int_out_v
-from stratcona.engine.minimization import minimize_jax
+from stratcona.engine.minimization import minimize
 
 
 def minimization():
     def test_parab(x, x_off):
         return (x + x_off) ** 2
 
-    minimum = minimize_jax(test_parab, {'x_off': jnp.array([2, 3, -1])}, (-50.0, 50.0))
+    minimum = minimize(test_parab, {'x_off': jnp.array([2, 3, -1])}, (-50.0, 50.0))
     print(minimum)
 
 

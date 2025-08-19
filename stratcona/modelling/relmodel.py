@@ -13,7 +13,7 @@ from frozendict import frozendict
 from functools import partial
 
 
-class ReliabilityRequirement():
+class ReliabilityRequirement:
     metric: Callable
     quantile: float
     target_lifespan: float
@@ -29,7 +29,7 @@ class ExpDims:
     name: str
     lot: int
     chp: int
-    dev: frozendict[str: int]
+    dev: frozendict[str, int]
 
     def __init__(self, name, lot, chp, **dev):
         object.__setattr__(self, 'name', name)
@@ -49,16 +49,18 @@ class ExpDims:
 
 class TestDef:
     name: str
-    dims: frozenset[ExpDims]
-    conditions: dict[str: dict[str: float | int]]
+    # Note that the tuple implementation means order matters when comparing tests for equality, as the test iteration
+    # order impacts execution paths and so must match between JIT-compiled executions
+    dims: tuple[ExpDims, ...]
+    conds: dict[str, dict[str, float | int]]
 
-    def __init__(self, name: str, dims: dict[str: dict[str: int]] | set[ExpDims],
-                 conditions: dict[str: dict[str: float | int]]):
+    def __init__(self, name: str, dims: dict[str, dict[str, float | int]] | tuple[ExpDims],
+                 conditions: dict[str, dict[str, float | int]]):
         self.name = name
-        if type(dims) == dict:
-            self.dims = frozenset({ExpDims(e, **dims[e]) for e in dims})
+        if type(dims) is dict:
+            self.dims = tuple(ExpDims(e, **dims[e]) for e in dims)
         else:
-            self.dims = frozenset(dims)
+            self.dims = dims
         self.conds = conditions
 
     def __members(self):
@@ -68,23 +70,14 @@ class TestDef:
         return type(self) is type(other) and self.__members() == other.__members()
 
 
-class ReliabilityTest():
-    config: dict[dict[int]]
-    conditions: dict[dict[float]]
-
-    def __init__(self, config, conditions):
-        self.config = config
-        self.conditions = conditions
-
-
-class ReliabilityModel():
+class ReliabilityModel:
     name: str
     spm: Callable
     observes: list[str]
     predictors: list[str]
-    obs_per_chp: dict[int]
+    obs_per_chp: dict[str, int]
     fail_criteria: list[str]
-    hyls: dict[str]
+    hyls: tuple[str]
     hyl_beliefs: dict[dict[str: float]]
     hyl_info: dict[dict]
 
@@ -109,82 +102,20 @@ class ReliabilityModel():
         self.predictors = pred_sites
         self.fail_criteria = fail_sites
 
-        self.i_s_override = False
-        self.y_s_override = False
-        self.i_s_custom = None
-        self.y_s_custom = None
+        self.i_s_override = None
+        self.y_s_override = None
 
-    def validate_model(self):
-        # TODO
-        pass
+    def __setattr__(self, name, value):
+        # Because the SPM function depends on the model itself, the model structure, parameter values, and priors
+        # all get baked into the JIT-compiled function. If the priors or parameter values are changed, the compilation
+        # caches need to be cleared so that the old values, baked into the compiled functions, are not still used
+        if name == 'hyl_beliefs' or name == 'param_vals':
+            jax.clear_caches()
+        super().__setattr__(name, value)
 
-    def sample(self, rng_key: rand.key, test: TestDef, num_samples: tuple = (), keep_sites: list = None,
-                   conditionals: dict = None, full_trace=False, alt_priors=None):
-        # Convert any keep_sites that need more complex node names
-        if keep_sites is not None:
-            sites = []
-            for i, site in enumerate(keep_sites):
-                if site in self.observes or site in self.predictors:
-                    for tst in test.dims:
-                        sites.append(f'{tst}_{site}')
-                elif site in self.ltnts or site in self.ltnt_subsamples:
-                    for tst in test.dims:
-                        if '_dev' in site:
-                            for obs in self.observes:
-                                sites.append(f'{tst}_{obs}_{site}')
-                        else:
-                            sites.append(f'{tst}_{site}')
-                else:
-                    sites.append(site)
-        else:
-            sites = None
-
-        priors = self.hyl_beliefs if alt_priors is None else alt_priors
-
-        def sampler(rng, set_vals):
-            mdl = self.spm if set_vals is None else condition(self.spm, data=set_vals)
-            seeded = seed(mdl, rng)
-            tr = trace(seeded).get_trace(test.dims, test.conds, priors, self.param_vals)
-            samples = {site: tr[site] if full_trace else tr[site]['value'] for site in tr}
-            return dict((k, samples[k]) for k in sites) if sites is not None else samples
-
-        wrapped = sampler
-        size = 1
-        for i, dim in enumerate(num_samples):
-            size *= dim
-            wrapped = jax.vmap(wrapped, 0, 0)
-        keys = jnp.reshape(rand.split(rng_key, size), num_samples)
-
-        return wrapped(keys, conditionals)
-
-    def logp(self, rng_key: rand.key, test: TestDef, site_vals: dict, conditional: dict | None, dims: tuple = (), sum_lps=True):
-
-        def get_log_prob(rng, vals, cond):
-            mdl = self.spm if cond is None else condition(self.spm, data=cond)
-            seeded = seed(mdl, rng)
-            tr = trace(seeded).get_trace(test.dims, test.conds, self.hyl_beliefs, self.param_vals)
-            lp = 0 if sum_lps else {}
-            for site in vals:
-                if sum_lps:
-                    lp += jnp.sum(tr[site]['fn'].log_prob(vals[site]))
-                else:
-                    lp[site] = tr[site]['fn'].log_prob(vals[site])
-            return lp
-
-        wrapped = get_log_prob
-        size = 1
-        for dim in dims:
-            size *= dim
-            wrapped = jax.vmap(wrapped, 0, 0)
-
-        keys = jnp.reshape(rand.split(rng_key, size), dims)
-        return wrapped(keys, site_vals, conditional)
-
-    # FIXME: If compiled, hyl_beliefs get frozen since they are baked into the state! The self hash does not account
-    #        for the hyper-latent values. Possible solution: call jax.clear_caches() whenever hyl_beliefs or param_vals change
     @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'keep_sites', 'full_trace', 'compute_predictors'])
-    def sample_new(self, rng_key: rand.key, test_dims: frozenset[ExpDims], test_conds: dict, batch_dims: tuple = (),
-                   keep_sites: tuple = None, conditionals: dict = None, full_trace=False, compute_predictors=False):
+    def sample(self, rng_key: rand.key, test_dims: tuple[ExpDims], test_conds: dict, batch_dims: tuple = (),
+               keep_sites: tuple = None, conditionals: dict = None, full_trace=False, compute_predictors=False):
         # Convert any keep_sites that need more complex node names
         if keep_sites is not None:
             sites = []
@@ -224,11 +155,11 @@ class ReliabilityModel():
 
         return wrapped(keys, conditionals)
 
-    # Note that jax jit implicitly handles the dict arguments, each unique set of keys for a dict arg leads to a
+    # Note that jax jit implicitly handles the dict arguments. Each unique set of keys for a dict arg leads to a
     # recompilation, so in reality almost all args are at least partially static
     @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'sum_lps'])
-    def logp_new(self, rng_key: rand.key, test_dims: frozenset[ExpDims], test_conds: dict, site_vals: dict,
-                 conditional: dict | None, batch_dims: tuple = (), sum_lps=True):
+    def logprob(self, rng_key: rand.key, test_dims: tuple[ExpDims], test_conds: dict, site_vals: dict,
+                conditional: dict | None, batch_dims: tuple = (), sum_lps=True):
 
         def get_log_prob(rng, vals, cond):
             mdl = self.spm if cond is None else condition(self.spm, data=cond)
