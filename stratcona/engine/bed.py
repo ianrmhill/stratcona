@@ -192,7 +192,7 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
     n_y, n_v, n_x = batch_dims
     k, kv, ky, ku, kz, kd = rand.split(k, 6)
     # Sample observations from joint prior y~p(x,v,y|d), keeping y independent of the already sampled x and v values
-    y_s = spm.sample_new(ky, d_dims, d_conds, batch_dims=(n_y,), keep_sites=spm.observes)
+    y_s = spm.sample(ky, d_dims, d_conds, batch_dims=(n_y,), keep_sites=spm.observes)
 
     # Compute the log likelihoods of each y given x via our specialized resampling algorithm to marginalize across
     # the aleatoric uncertainty v
@@ -234,20 +234,20 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
                 #        appropriate in all circumstances
                 n_z = n_v
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
-                z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
-                                     conditionals=x_s_tz, compute_predictors=True)
+                z_s = spm.sample(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
+                                 conditionals=x_s_tz, compute_predictors=True)
                 metrics[m] = qx_lbci(z_s[f'field_{predictor}'], w_z, 0.99)
             case 'qx_hdcr_width':
                 n_z = n_v
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
-                z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
-                                     conditionals=x_s_tz, compute_predictors=True)
+                z_s = spm.sample(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
+                                 conditionals=x_s_tz, compute_predictors=True)
                 metrics[m] = qx_hdcr_width(z_s[f'field_{predictor}'], w_z, 0.9, n_bins=100)
             case 'l_qx_hdcr_width':
                 n_z = n_v
                 x_s_tz = {x: jnp.repeat(jnp.expand_dims(x_s[x], axis=1), n_z, axis=1) for x in x_s}
-                z_s = spm.sample_new(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
-                                     conditionals=x_s_tz, compute_predictors=True)
+                z_s = spm.sample(kz, fd_dims, fd_conds, (n_x, n_z), keep_sites=spm.predictors,
+                                 conditionals=x_s_tz, compute_predictors=True)
                 metrics[m] = qx_hdcr_width(jnp.log(z_s[f'field_{predictor}']), w_z, 0.9, n_bins=200)
             case 'test_duration':
                 ew = jnp.zeros((len(d_dims), n_y))
@@ -267,16 +267,17 @@ def eval_u_of_d(k, spm, d_dims, d_conds, x_s, batch_dims, utility, lp_x, h_x, fd
     return utility(**metrics)
 
 
-def pred_bed_apr25(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, field_d=None, predictor='lifespan'):
+def pred_bed(rng_key, d_sampler, n_d, n_y, n_v, n_x, spm, utility=eig, field_d=None, predictor='lifespan'):
     k, kd, kx = rand.split(rng_key, 3)
     perf_stats = {}
     # Get the first proposal experiment design, need to sample here to get dummy input to x_s sample and lp_x logp
     d = d_sampler(kd)
-    # We sample all x~p(x) here since hyper-parameters are independent of the test d, the observations y, and the predictors z
-    x_s = spm.sample_new(kx, d.dims, d.conds, batch_dims=(n_x,), keep_sites=spm.hyls)
+    # We sample all x~p(x) here since hyper-parameters are independent of the test d, the observations y, and the
+    # predictors z
+    x_s = spm.sample(kx, d.dims, d.conds, batch_dims=(n_x,), keep_sites=spm.hyls)
     # Compute the prior entropy once, but only if it's needed for EIG estimation
     if 'ig' in signature(utility).parameters:
-        lp_x = spm.logp_new(kx, d.dims, d.conds, site_vals=x_s, conditional=None, batch_dims=(n_x,))
+        lp_x = spm.logprob(kx, d.dims, d.conds, site_vals=x_s, conditional=None, batch_dims=(n_x,))
         # Using importance sampling from prior: H[X] = (1/n_x) * SUM[-lp_x]
         h_x = jnp.sum(-lp_x) / n_x
     else:

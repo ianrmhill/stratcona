@@ -151,9 +151,9 @@ def electromigration_qualification():
         # Examine the prior predictive
         with jax.disable_jit():
             k, k1, k2 = rand.split(rand.key(9292873023), 3)
-            pri_dist = am.relmdl.sample_new(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
+            pri_dist = am.relmdl.sample(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                             keep_sites=('field_lttf',), compute_predictors=True)
-            pri_accel_dist = am.relmdl.sample_new(k2, ta1.dims, ta1.conds, (1_000_000,),
+            pri_accel_dist = am.relmdl.sample(k2, ta1.dims, ta1.conds, (1_000_000,),
                                                   keep_sites=('s1_lttf', 's2_lttf'), compute_predictors=True)
             pri_lifespan = am.evaluate_reliability('lifespan')
 
@@ -175,7 +175,6 @@ def electromigration_qualification():
     '''
     # Reset the prior beliefs to be sure they are correct for the BED analysis phase
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3}, 'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-    jax.clear_caches()
 
     if run_bed_analysis:
         def em_u_func(ig, qx_lbci, test_duration):
@@ -308,41 +307,37 @@ def electromigration_qualification():
     # Reset the prior beliefs to be sure they are correct for the BED analysis phase
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                              'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-    jax.clear_caches()
-    pri_dist = am.relmdl.sample_new(kpri, am.field_test.dims, am.field_test.conds, (1_000_000,),
+    pri_dist = am.relmdl.sample(kpri, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                     keep_sites=('field_lifespan',), compute_predictors=True)
     pri_lifespan = am.evaluate_reliability('lifespan')
 
     # Poor reliability
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 0.0001}, 'n_dev': {'loc': 15, 'scale': 0.0001},
                              'n_chp': {'loc': 15, 'scale': 0.0001}, 'eaa_nom': {'loc': 39, 'scale': 0.0001}}
-    jax.clear_caches()
-    sd1 = am.sim_test_meas_new()
+    sd1 = am.sim_test_meas()
     sd1_inf = {'v1': {'lttf': sd1['v1_lttf']}, 'v2': {'lttf': sd1['v2_lttf']}, 'v3': {'lttf': sd1['v3_lttf']}}
     if viz_sim_models:
-        s1_dist = am.relmdl.sample_new(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
+        s1_dist = am.relmdl.sample(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                         keep_sites=('field_lifespan',), compute_predictors=True)
         s1_lifespan = am.evaluate_reliability('lifespan')
 
     # Barely acceptable reliability
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 0.0001}, 'n_dev': {'loc': 17, 'scale': 0.0001},
                              'n_chp': {'loc': 16, 'scale': 0.0001}, 'eaa_nom': {'loc': 40, 'scale': 0.0001}}
-    jax.clear_caches()
-    sd2 = am.sim_test_meas_new()
+    sd2 = am.sim_test_meas()
     sd2_inf = {'v1': {'lttf': sd2['v1_lttf']}, 'v2': {'lttf': sd2['v2_lttf']}, 'v3': {'lttf': sd2['v3_lttf']}}
     if viz_sim_models:
-        s2_dist = am.relmdl.sample_new(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
+        s2_dist = am.relmdl.sample(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                         keep_sites=('field_lifespan',), compute_predictors=True)
         s2_lifespan = am.evaluate_reliability('lifespan')
 
     # Good reliability
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 12.9, 'scale': 0.0001}, 'n_dev': {'loc': 11, 'scale': 0.0001},
                              'n_chp': {'loc': 12, 'scale': 0.0001}, 'eaa_nom': {'loc': 40, 'scale': 0.0001}}
-    jax.clear_caches()
-    sd3 = am.sim_test_meas_new()
+    sd3 = am.sim_test_meas()
     sd3_inf = {'v1': {'lttf': sd3['v1_lttf']}, 'v2': {'lttf': sd3['v2_lttf']}, 'v3': {'lttf': sd3['v3_lttf']}}
     if viz_sim_models:
-        s3_dist = am.relmdl.sample_new(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
+        s3_dist = am.relmdl.sample(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                         keep_sites=('field_lifespan',), compute_predictors=True)
         s3_lifespan = am.evaluate_reliability('lifespan')
 
@@ -399,12 +394,10 @@ def electromigration_qualification():
         # Reset the prior beliefs
         am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                                  'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-        jax.clear_caches()
         start_time = time.time()
         am.do_inference(sd1_inf)
         print(f'Inference time taken: {time.time() - start_time}')
-        jax.clear_caches()
-    pst1_dist = am.relmdl.sample_new(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
+    pst1_dist = am.relmdl.sample(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                      keep_sites=('field_lifespan',), compute_predictors=True)
     pst1_lifespan = am.evaluate_reliability('lifespan')
 
@@ -412,12 +405,10 @@ def electromigration_qualification():
         # Reset the prior beliefs
         am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                                  'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-        jax.clear_caches()
         start_time = time.time()
         am.do_inference(sd2_inf)
         print(f'Inference time taken: {time.time() - start_time}')
-        jax.clear_caches()
-    pst2_dist = am.relmdl.sample_new(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
+    pst2_dist = am.relmdl.sample(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                      keep_sites=('field_lifespan',), compute_predictors=True)
     pst2_lifespan = am.evaluate_reliability('lifespan')
 
@@ -425,12 +416,10 @@ def electromigration_qualification():
         # Reset the prior beliefs
         am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                                  'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-        jax.clear_caches()
         start_time = time.time()
         am.do_inference(sd3_inf)
         print(f'Inference time taken: {time.time() - start_time}')
-        jax.clear_caches()
-    pst3_dist = am.relmdl.sample_new(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
+    pst3_dist = am.relmdl.sample(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                      keep_sites=('field_lifespan',), compute_predictors=True)
     pst3_lifespan = am.evaluate_reliability('lifespan')
 

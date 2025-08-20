@@ -84,7 +84,7 @@ def weibull_inference():
 
     # Simulate some Weibull distributed failure data
     am_w.set_test_definition(test_130)
-    ttfs = am_w.sim_test_measurements()
+    ttfs = am_w.sim_test_meas(rtrn_tr=True)
     lot_vals = (ttfs['e_k_lot_ls'], ttfs['e_sc_lot_ls'])
     sim_ks, sim_scs = ttfs['e_ttf_k_pos'], ttfs['e_ttf_sc_pos']
 
@@ -250,9 +250,9 @@ def weibull_inference():
                                'sc_lot': {'loc': 15, 'scale': 5}}
 
     # Generate prior samples for plotting the prior predictive distribution
-    prm_samples = am_w.relmdl.sample(k1, test_130_single, (400,))
+    prm_samples = am_w.relmdl.sample(k1, test_130_single.dims, test_130_single.conds, (400,))
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
-    pri_probs = jnp.exp(am_w.relmdl.logp(k2, test_130_single, ltnt_vals, prm_samples, dims=(400,)))
+    pri_probs = jnp.exp(am_w.relmdl.logprob(k2, test_130_single.dims, test_130_single.conds, ltnt_vals, prm_samples, (400,)))
     pri_probs = likelihood_to_alpha(pri_probs, 0.4).flatten()
 
     x = jnp.logspace(-2, 1, 50)
@@ -265,20 +265,19 @@ def weibull_inference():
     post_cond = {'e': {'k_nom': am_w.relmdl.hyl_beliefs['k_nom']['loc'], 'sc_nom': am_w.relmdl.hyl_beliefs['sc_nom']['loc'],
                        'k_lot': am_w.relmdl.hyl_beliefs['k_lot']['loc'], 'sc_lot': am_w.relmdl.hyl_beliefs['sc_lot']['loc']}}
 
-    prm_samples = am_w.relmdl.sample(k3, test_130_single, (400,))
+    prm_samples = am_w.relmdl.sample(k3, test_130_single.dims, test_130_single.conds, (400,))
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in eval_sites}
-    pst_probs = jnp.exp(am_w.relmdl.logp(k4, test_130_single, ltnt_vals, prm_samples, dims=(400,)))
+    pst_probs = jnp.exp(am_w.relmdl.logprob(k4, test_130_single.dims, test_130_single.conds, ltnt_vals, prm_samples, (400,)))
     pst_probs = likelihood_to_alpha(pst_probs, 0.4).flatten()
 
     pst_fits = weibull_cdf(x, prm_samples['e_ttf_k_pos'], prm_samples['e_ttf_sc_pos'])
 
     # Determine the probability of the simulation traces under the posterior inference model
     k1, k2 = rand.split(rand.key(7932854))
-    mean_prob = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': jnp.array([0.0]),
-                                                             'e_sc_lot_ls': jnp.array([0.0])}, post_cond))
-    p1 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': lot_vals[0][0], 'e_sc_lot_ls': lot_vals[1][0]}, post_cond))
-    p2 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': lot_vals[0][1], 'e_sc_lot_ls': lot_vals[1][1]}, post_cond))
-    p3 = jnp.exp(am_w.relmdl.logp(k1, test_130_single, {'e_k_lot_ls': lot_vals[0][2], 'e_sc_lot_ls': lot_vals[1][2]}, post_cond))
+    mean_prob = jnp.exp(am_w.relmdl.logprob(k1, test_130_single.dims, test_130_single.conds, {'e_k_lot_ls': jnp.array([0.0]), 'e_sc_lot_ls': jnp.array([0.0])}, post_cond))
+    p1 = jnp.exp(am_w.relmdl.logprob(k1, test_130_single.dims, test_130_single.conds, {'e_k_lot_ls': lot_vals[0][0], 'e_sc_lot_ls': lot_vals[1][0]}, post_cond))
+    p2 = jnp.exp(am_w.relmdl.logprob(k1, test_130_single.dims, test_130_single.conds, {'e_k_lot_ls': lot_vals[0][1], 'e_sc_lot_ls': lot_vals[1][1]}, post_cond))
+    p3 = jnp.exp(am_w.relmdl.logprob(k1, test_130_single.dims, test_130_single.conds, {'e_k_lot_ls': lot_vals[0][2], 'e_sc_lot_ls': lot_vals[1][2]}, post_cond))
     pst_sim_probs = jnp.array([p1, p2, p3]) / mean_prob
     print(f'Posterior normalized likelihood of simulation lot variability: {pst_sim_probs}')
 

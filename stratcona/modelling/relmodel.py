@@ -73,10 +73,10 @@ class TestDef:
 class ReliabilityModel:
     name: str
     spm: Callable
-    observes: list[str]
-    predictors: list[str]
+    observes: tuple[str]
+    predictors: tuple[str]
     obs_per_chp: dict[str, int]
-    fail_criteria: list[str]
+    fail_criteria: tuple[str]
     hyls: tuple[str]
     hyl_beliefs: dict[dict[str: float]]
     hyl_info: dict[dict]
@@ -114,7 +114,7 @@ class ReliabilityModel:
         super().__setattr__(name, value)
 
     @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'keep_sites', 'full_trace', 'compute_predictors'])
-    def sample(self, rng_key: rand.key, test_dims: tuple[ExpDims], test_conds: dict, batch_dims: tuple = (),
+    def sample(self, rng_key: rand.key, test_dims: tuple[ExpDims, ...], test_conds: dict, batch_dims: tuple = (),
                keep_sites: tuple = None, conditionals: dict = None, full_trace=False, compute_predictors=False):
         # Convert any keep_sites that need more complex node names
         if keep_sites is not None:
@@ -158,7 +158,7 @@ class ReliabilityModel:
     # Note that jax jit implicitly handles the dict arguments. Each unique set of keys for a dict arg leads to a
     # recompilation, so in reality almost all args are at least partially static
     @partial(jax.jit, static_argnames=['self', 'test_dims', 'batch_dims', 'sum_lps'])
-    def logprob(self, rng_key: rand.key, test_dims: tuple[ExpDims], test_conds: dict, site_vals: dict,
+    def logprob(self, rng_key: rand.key, test_dims: tuple[ExpDims, ...], test_conds: dict, site_vals: dict,
                 conditional: dict | None, batch_dims: tuple = (), sum_lps=True):
 
         def get_log_prob(rng, vals, cond):

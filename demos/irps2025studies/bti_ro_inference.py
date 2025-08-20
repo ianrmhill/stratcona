@@ -99,16 +99,16 @@ def vth_sensor_inference():
     priors = am.relmdl.hyl_beliefs
     params = am.relmdl.param_vals
     npyro.render_model(am.relmdl.spm, model_args=(dims, conds, priors, params),
-                       filename='renders/nbti_model.png')
+                       filename='../renders/renders/nbti_model.png')
 
     ####################################################
     # Generate some prior predictive curves and their epistemic probabilities
     ####################################################
     k1, k2 = rand.split(rand.key(292873410), 2)
-    prm_samples = am.relmdl.sample(k1, htol_end_test, (400,))
+    prm_samples = am.relmdl.sample(k1, htol_end_test.dims, htol_end_test.conds, (400,))
     ltnt_sites = ['a0_nom', 'e_aa_nom', 'alpha_nom', 'n_nom']
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in ltnt_sites}
-    pri_probs = jnp.exp(am.relmdl.logp(k2, htol_end_test, ltnt_vals, prm_samples, (400,)))
+    pri_probs = jnp.exp(am.relmdl.logprob(k2, htol_end_test.dims, htol_end_test.conds, ltnt_vals, prm_samples, (400,)))
     pri_probs = likelihood_to_alpha(pri_probs, 0.4).flatten()
 
     times = jnp.tile(jnp.linspace(0, 2000, 100), (400, 1)).T
@@ -121,10 +121,10 @@ def vth_sensor_inference():
     # Generate samples of the prior hyper-latents for computing and plotting LDDP entropy
     ####################################################
     def lp_f(vals, site, key, test):
-        return am.relmdl.logp(rng_key=key, test=test, site_vals={site: vals}, conditional=None, dims=(len(vals),))
+        return am.relmdl.logprob(key, test.dims, test.conds, {site: vals}, None, (len(vals),))
 
     k1, k2 = rand.split(rand.key(9273036857), 2)
-    hyl_samples = am.relmdl.sample(k1, htol_end_test, (ENTROPY_SAMPLES,))
+    hyl_samples = am.relmdl.sample(k1, htol_end_test.dims, htol_end_test.conds, (ENTROPY_SAMPLES,))
     hyls = ['a0_nom', 'e_aa_nom', 'alpha_nom', 'n_nom', 'a0_dev', 'e_aa_dev', 'a0_chp']
     pri_samples, pri_entropy = {}, {}
     for hyl in hyls:
@@ -146,7 +146,7 @@ def vth_sensor_inference():
     ####################################################
     # Calculate posterior entropy
     k1, k2 = rand.split(rand.key(9296245908724), 2)
-    hyl_samples = am.relmdl.sample(k1, htol_end_test, (ENTROPY_SAMPLES,))
+    hyl_samples = am.relmdl.sample(k1, htol_end_test.dims, htol_end_test.conds, (ENTROPY_SAMPLES,))
     pst_samples, pst_entropy = {}, {}
     for hyl in hyls:
         pst_samples[hyl] = hyl_samples[hyl]
@@ -160,9 +160,9 @@ def vth_sensor_inference():
     ####################################################
     # Generate some posterior predictive curves and their epistemic probabilities
     ####################################################
-    prm_samples = am.relmdl.sample(k1, htol_end_test, (400,))
+    prm_samples = am.relmdl.sample(k1, htol_end_test.dims, htol_end_test.conds, (400,))
     ltnt_vals = {site: data for site, data in prm_samples.items() if site in ltnt_sites}
-    pst_probs = jnp.exp(am.relmdl.logp(k2, htol_end_test, ltnt_vals, prm_samples, (400,)))
+    pst_probs = jnp.exp(am.relmdl.logprob(k2, htol_end_test.dims, htol_end_test.conds, ltnt_vals, prm_samples, (400,)))
     pst_probs = likelihood_to_alpha(pst_probs, 0.4).flatten()
     pst_fits = bti_vth_shift_empirical(
         time=times, k=BOLTZ_EV, temp=125 + CELSIUS_TO_KELVIN, vdd=0.88,

@@ -1,4 +1,4 @@
-# Copyright (c) 2024 Ian Hill
+# Copyright (c) 2025 Ian Hill
 # SPDX-License-Identifier: Apache-2.0
 
 import jax.numpy as jnp

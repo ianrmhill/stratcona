@@ -167,14 +167,13 @@ def htol_demo():
     htols = stratcona.TestDef('htols', {'htols': {'lot': 1, 'chp': 1}}, {'htols': {'temp': htol_temp, 't': 1000}})
     # Set the prior beliefs and evaluate entropy
     amf.relmdl.hyl_beliefs = {'a_nom': {'loc': 13.5, 'scale': 1}, 'eaa_nom': {'loc': 7, 'scale': 0.0001}}
-    jax.clear_caches()
 
     if run_htol_confidence_analysis:
         # Examine the prior predictive
         k, k1, k2 = rand.split(rand.key(9292873023), 3)
-        pri_dist = amf.relmdl.sample_new(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
+        pri_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
                                          keep_sites=('field_ftime',), compute_predictors=True)
-        pri_htol_dist = amf.relmdl.sample_new(k2, htols.dims, htols.conds, (1_000_000,),
+        pri_htol_dist = amf.relmdl.sample(k2, htols.dims, htols.conds, (1_000_000,),
                                               keep_sites=('htols_ftime', 'htols_failed'), compute_predictors=True)
         pri_lifespan = amf.evaluate_reliability('ftime')
 
@@ -198,13 +197,12 @@ def htol_demo():
         perf = amf.do_inference_is(y_success, n_x=5_000)
         print(perf)
         print(amf.relmdl.hyl_beliefs)
-        jax.clear_caches()
 
         # Examine the posterior predictive
         k, k1, k2 = rand.split(k, 3)
-        pst_dist = amf.relmdl.sample_new(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
+        pst_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
                                          keep_sites=('field_ftime',), compute_predictors=True)
-        pst_htol_dist = amf.relmdl.sample_new(k2, htols.dims, htols.conds, (1_000_000,),
+        pst_htol_dist = amf.relmdl.sample(k2, htols.dims, htols.conds, (1_000_000,),
                                               keep_sites=('htols_ftime',), compute_predictors=True)
         pst_lifespan = amf.evaluate_reliability('ftime')
 
@@ -217,12 +215,11 @@ def htol_demo():
 
         # Now repeat, but with a bit of uncertainty as to Eaa
         amf.relmdl.hyl_beliefs = {'a_nom': {'loc': 13.5, 'scale': 0.9}, 'eaa_nom': {'loc': 7, 'scale': 0.05}}
-        jax.clear_caches()
         # Examine the prior predictive
         k, k1, k2 = rand.split(k, 3)
-        pri_dist = amf.relmdl.sample_new(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
+        pri_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
                                          keep_sites=('field_ftime', 'eaa_nom'), compute_predictors=True)
-        pri_htol_dist = amf.relmdl.sample_new(k2, htols.dims, htols.conds, (1_000_000,),
+        pri_htol_dist = amf.relmdl.sample(k2, htols.dims, htols.conds, (1_000_000,),
                                               keep_sites=('htols_ftime', 'htols_failed'), compute_predictors=True)
         pri_lifespan = amf.evaluate_reliability('ftime')
 
@@ -238,16 +235,15 @@ def htol_demo():
         perf = amf.do_inference_is(y_success, n_x=5_000)
         print(perf)
         print(amf.relmdl.hyl_beliefs)
-        jax.clear_caches()
 
         # NOTE: The entropy reduction is higher for the second version with Eaa uncertainty, shows how higher IG does
         #       not necessarily imply improved reliability
 
         # Examine the posterior predictive
         k, k1, k2 = rand.split(k, 3)
-        pst_dist = amf.relmdl.sample_new(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
+        pst_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
                                          keep_sites=('field_ftime',), compute_predictors=True)
-        pst_htol_dist = amf.relmdl.sample_new(k2, htols.dims, htols.conds, (1_000_000,),
+        pst_htol_dist = amf.relmdl.sample(k2, htols.dims, htols.conds, (1_000_000,),
                                               keep_sites=('htols_ftime',), compute_predictors=True)
         pst_lifespan = amf.evaluate_reliability('ftime')
 
@@ -302,15 +298,14 @@ def htol_demo():
     amf.relmdl.hyl_beliefs = {'a_nom': {'loc': 13.2, 'scale': 1.7}, 'eaa_nom': {'loc': 7, 'scale': 0.43}}
     amd.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 13, 'scale': 0.6}, 'eaa_nom': {'loc': 7, 'scale': 0.1},
                               'l_a_chp': {'loc': 4, 'scale': 1.5}, 'l_a_lot': {'loc': 5, 'scale': 1.5}}
-    jax.clear_caches()
 
     ### Model tuning: get the two models to have nearly the same prior predictive distributions
     if check_model_similarity:
         k, k1, k2 = rand.split(k, 3)
         with jax.disable_jit():
-            fail_dist = amf.relmdl.sample_new(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
+            fail_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
                                               keep_sites=('field_ftime',), compute_predictors=True)
-            deg_dist = amd.relmdl.sample_new(k2, amd.field_test.dims, amd.field_test.conds, (1_000_000,),
+            deg_dist = amd.relmdl.sample(k2, amd.field_test.dims, amd.field_test.conds, (1_000_000,),
                                              keep_sites=('field_ftime',), compute_predictors=True)
             fail_lifespan = amf.evaluate_reliability('ftime')
             deg_lifespan = amd.evaluate_reliability('ftime')
