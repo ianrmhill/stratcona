@@ -20,12 +20,12 @@ from stratcona.modelling.relmodel import TestDef, ExpDims
 @partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
 def is_inner(rng_key, spm, batch_dims, test_dims, test_conds, y_t, y_noise):
     kx, kv, kdum = rand.split(rng_key, 3)
-    x_s = spm.sample_new(kx, test_dims, test_conds, (batch_dims[0],), spm.hyls)
+    x_s = spm.sample(kx, test_dims, test_conds, (batch_dims[0],), spm.hyls)
     lp_y_g_x, perf_stats = int_out_v(kv, spm, batch_dims, test_dims, test_conds, x_s, y_t, y_noise)
     return x_s, lp_y_g_x, perf_stats
 
 
-def inf_is_new(rng_key, spm, d, y, y_noise, n_x, n_v):
+def inf_is(rng_key, spm, d, y, y_noise, n_x, n_v):
     k, krs = rand.split(rng_key)
     y_t = {}
     for exp in y:
@@ -93,14 +93,14 @@ def get_inds_arr(n, dims):
 
 @jax.jit
 def count_unique(x):
-    """Credit to jakevdp for this approach: https://stackoverflow.com/questions/77082029/jax-count-unique-elements-in-array"""
+    """Credit to jakevdp for this approach: stackoverflow.com/questions/77082029/jax-count-unique-elements-in-array"""
     # Can't use a normal unique method as jax can't compile code that leads to dynamically-sized arrays
     x = jnp.sort(x.flatten())
     return 1 + (x[1:] != x[:-1]).sum()
 
 
 @partial(jax.jit, static_argnames=['spm', 'test_dims', 'batch_dims'])
-def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
+def int_out_v(rng_key, spm, batch_dims: tuple[int, int, int], test_dims: tuple[ExpDims], test_conds, x_s, y_s, y_noise):
     n_x, n_v, n_y = batch_dims
     k, k_init, kdum = rand.split(rng_key, 3)
     perf_stats = {}
@@ -123,8 +123,8 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
     x_s_t = {x: jnp.repeat(jnp.repeat(jnp.expand_dims(x_s[x], (1, 2)), n_v, axis=1), n_y, axis=2) for x in x_s}
     y_s_a_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s_a[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s_a}
     # Generate the spread of v values for each x sample and the corresponding log probabilities
-    v_init = spm.sample_new(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
-    lp_v_init = spm.logp_new(kdum, test_dims, test_conds, v_init, x_s_t, batch_dims, sum_lps=False)
+    v_init = spm.sample(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
+    lp_v_init = spm.logprob(kdum, test_dims, test_conds, v_init, x_s_t, batch_dims, sum_lps=False)
     # Define initial uniform zero deviation arrays for device and chip level variables since we first optimize lot level
     v_dev_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_dev' in v}
     v_chp_zeros = {v: jnp.zeros_like(v_init[v]) for v in v_init if '_chp' in v}
@@ -138,14 +138,14 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
             for e in test_dims:
                 e_ltnts = [ltnt for ltnt in lvl_ltnts if f'{e.name}_' in ltnt]
                 # Get a subset of the test defined by test_dims and test_conds, the single experiment
-                e_tst = TestDef(e.name, {e}, {e.name: test_conds[e.name]})
+                e_tst = TestDef(e.name, (e,), {e.name: test_conds[e.name]})
                 e_y_s_a_t = {y: y_s_a_t[y] for y in y_s_a_t if f'{e.name}_' in y}
                 v_s_init = {ltnt: v_init[ltnt] for ltnt in e_ltnts}
                 for ltnt in e_ltnts:
                     v_rs[lvl][ltnt] = v_s_init[ltnt]
                 conditional = x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev']
                 # Get the log probabilities without summing so each lot can be considered individually
-                lp_y_g_xv = spm.logp_new(kdum, e_tst.dims, e_tst.conds, e_y_s_a_t, conditional, batch_dims, sum_lps=False)
+                lp_y_g_xv = spm.logprob(kdum, e_tst.dims, e_tst.conds, e_y_s_a_t, conditional, batch_dims, sum_lps=False)
 
                 # Number of devices might be different for each observed variable
                 in_loops = {'lot': ['na'], 'chp': ['na'], 'dev': [y for y in e_y_s_a_t]}
@@ -195,14 +195,14 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
 
     # Debug stuff
     if True:
-        y_constructed = spm.sample_new(kdum, test_dims, test_conds, batch_dims, keep_sites=spm.observes,
+        y_constructed = spm.sample(kdum, test_dims, test_conds, batch_dims, keep_sites=spm.observes,
                                        conditionals=x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'])
         y_rounded = {y: jnp.round(y_constructed[y], 0) for y in y_constructed}
 
     y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s}
     # Final logp
-    lp_v_g_x = spm.logp_new(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
-    lp_y_g_xv = spm.logp_new(kdum, test_dims, test_conds, y_s_t, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'], batch_dims)
+    lp_v_g_x = spm.logprob(kdum, test_dims, test_conds, v_rs['lot'] | v_rs['chp'] | v_rs['dev'], x_s_t, batch_dims)
+    lp_y_g_xv = spm.logprob(kdum, test_dims, test_conds, y_s_t, x_s_t | v_rs['lot'] | v_rs['chp'] | v_rs['dev'], batch_dims)
     lp_y_g_x = logsumexp(lp_v_g_x + lp_y_g_xv, axis=1)
     # Variance of lp(v|x,d) across v samples indicates ?
     perf_stats['lp_v_g_x_var'] = jnp.mean(jnp.std(lp_v_g_x, axis=1) ** 2)
@@ -212,7 +212,7 @@ def int_out_v(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[Ex
     return lp_y_g_x, perf_stats
 
 
-def marginalize_v_naive(rng_key, spm, batch_dims: (int, int, int), test_dims: frozenset[ExpDims], test_conds, x_s, y_s, y_noise):
+def marginalize_v_naive(rng_key, spm, batch_dims: tuple[int, int, int], test_dims: tuple[ExpDims], test_conds, x_s, y_s, y_noise):
     """
     This algorithm implements basic importance sampling from the target distribution (in this case p(v|x,d)) to
     marginalize out v. It is extremely inefficient when V is high dimensional.
@@ -225,9 +225,9 @@ def marginalize_v_naive(rng_key, spm, batch_dims: (int, int, int), test_dims: fr
     y_s_t = {y: jnp.repeat(jnp.repeat(jnp.expand_dims(y_s[y], axis=(0, 1)), n_v, axis=1), n_x, axis=0) for y in y_s}
 
     # Generate samples v from p(v|x,d)
-    v_s = spm.sample_new(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
+    v_s = spm.sample(k_init, test_dims, test_conds, batch_dims, keep_sites=spm.ltnt_subsamples, conditionals=x_s_t)
     # Compute the individual probabilities p(y|v,x,d), then marginalize across v
-    lp_y_g_xv = spm.logp_new(kdum, test_dims, test_conds, y_s_t, x_s_t | v_s, batch_dims)
+    lp_y_g_xv = spm.logprob(kdum, test_dims, test_conds, y_s_t, x_s_t | v_s, batch_dims)
     lp_y_g_x = logsumexp(lp_y_g_xv, axis=1)
     return lp_y_g_x, perf_stats
 

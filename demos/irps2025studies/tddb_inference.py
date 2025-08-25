@@ -75,13 +75,13 @@ def tddb_inference():
     means['e'], vars['e'] = {}, {}
     am_e = stratcona.AnalysisManager(mb_e.build_model(), rng_seed=1395323)
     am_e.set_test_definition(test_s)
-    sim_tr = am_e.sim_test_measurements(rtrn_tr=False)
+    sim_tr = am_e.sim_test_meas()
     ttfs['s']['e'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['e']['el_s'], means['e']['em_s'], means['e']['eh_s'] = ttfs['s']['e']['el']['ttf'].mean(), ttfs['s']['e']['em']['ttf'].mean(), ttfs['s']['e']['eh']['ttf'].mean()
     vars['e']['el_s'], vars['e']['em_s'], vars['e']['eh_s'] = ttfs['s']['e']['el']['ttf'].var(), ttfs['s']['e']['em']['ttf'].var(), ttfs['s']['e']['eh']['ttf'].var()
     fails_s['el']['e'], fails_s['em']['e'], fails_s['eh']['e'] = convert(ttfs['s']['e']['el']), convert(ttfs['s']['e']['em']), convert(ttfs['s']['e']['eh'])
     am_e.set_test_definition(test_l)
-    sim_tr = am_e.sim_test_measurements(rtrn_tr=False)
+    sim_tr = am_e.sim_test_meas()
     ttfs['l']['e'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['e']['el_l'], means['e']['em_l'], means['e']['eh_l'] = ttfs['l']['e']['el']['ttf'].mean(), ttfs['l']['e']['em']['ttf'].mean(), ttfs['l']['e']['eh']['ttf'].mean()
     vars['e']['el_l'], vars['e']['em_l'], vars['e']['eh_l'] = ttfs['l']['e']['el']['ttf'].var(), ttfs['l']['e']['em']['ttf'].var(), ttfs['l']['e']['eh']['ttf'].var()
@@ -115,13 +115,13 @@ def tddb_inference():
     means['ie'], vars['ie'] = {}, {}
     am_inv_e = stratcona.AnalysisManager(mb_inv_e.build_model(), rng_seed=3229823)
     am_inv_e.set_test_definition(test_s)
-    sim_tr = am_inv_e.sim_test_measurements(rtrn_tr=False)
+    sim_tr = am_inv_e.sim_test_meas()
     ttfs['s']['ie'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['ie']['el_s'], means['ie']['em_s'], means['ie']['eh_s'] = ttfs['s']['ie']['el']['ttf'].mean(), ttfs['s']['ie']['em']['ttf'].mean(), ttfs['s']['ie']['eh']['ttf'].mean()
     vars['ie']['el_s'], vars['ie']['em_s'], vars['ie']['eh_s'] = ttfs['s']['ie']['el']['ttf'].var(), ttfs['s']['ie']['em']['ttf'].var(), ttfs['s']['ie']['eh']['ttf'].var()
     fails_s['el']['ie'], fails_s['em']['ie'], fails_s['eh']['ie'] = convert(ttfs['s']['ie']['el']), convert(ttfs['s']['ie']['em']), convert(ttfs['s']['ie']['eh'])
     am_inv_e.set_test_definition(test_l)
-    sim_tr = am_inv_e.sim_test_measurements(rtrn_tr=False)
+    sim_tr = am_inv_e.sim_test_meas()
     ttfs['l']['ie'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['ie']['el_l'], means['ie']['em_l'], means['ie']['eh_l'] = ttfs['l']['ie']['el']['ttf'].mean(), ttfs['l']['ie']['em']['ttf'].mean(), ttfs['l']['ie']['eh']['ttf'].mean()
     vars['ie']['el_l'], vars['ie']['em_l'], vars['ie']['eh_l'] = ttfs['l']['ie']['el']['ttf'].var(), ttfs['l']['ie']['em']['ttf'].var(), ttfs['l']['ie']['eh']['ttf'].var()
@@ -155,13 +155,13 @@ def tddb_inference():
     means['p'], vars['p'] = {}, {}
     am_p = stratcona.AnalysisManager(mb_p.build_model(), rng_seed=1299323)
     am_p.set_test_definition(test_s)
-    sim_tr = am_p.sim_test_measurements(rtrn_tr=False)
+    sim_tr = am_p.sim_test_meas()
     ttfs['s']['p'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['p']['el_s'], means['p']['em_s'], means['p']['eh_s'] = ttfs['s']['p']['el']['ttf'].mean(), ttfs['s']['p']['em']['ttf'].mean(), ttfs['s']['p']['eh']['ttf'].mean()
     vars['p']['el_s'], vars['p']['em_s'], vars['p']['eh_s'] = ttfs['s']['p']['el']['ttf'].var(), ttfs['s']['p']['em']['ttf'].var(), ttfs['s']['p']['eh']['ttf'].var()
     fails_s['el']['p'], fails_s['em']['p'], fails_s['eh']['p'] = convert(ttfs['s']['p']['el']), convert(ttfs['s']['p']['em']), convert(ttfs['s']['p']['eh'])
     am_p.set_test_definition(test_l)
-    sim_tr = am_p.sim_test_measurements(rtrn_tr=False)
+    sim_tr = am_p.sim_test_meas()
     ttfs['l']['p'] = {key: {'ttf': sim_tr[f'{key}_ttf']} for key in ['el', 'em', 'eh']}
     means['p']['el_l'], means['p']['em_l'], means['p']['eh_l'] = ttfs['l']['p']['el']['ttf'].mean(), ttfs['l']['p']['em']['ttf'].mean(), ttfs['l']['p']['eh']['ttf'].mean()
     vars['p']['el_l'], vars['p']['em_l'], vars['p']['eh_l'] = ttfs['l']['p']['el']['ttf'].var(), ttfs['l']['p']['em']['ttf'].var(), ttfs['l']['p']['eh']['ttf'].var()
@@ -237,8 +237,8 @@ def tddb_inference():
         {'e': {'temp': 300, 'vg': 1.1}, 'em': {'temp': tm, 'vg': 1.1}, 'eh': {'temp': th, 'vg': 1.1}})
     rng = rand.key(48408)
     k1, k2 = rand.split(rng)
-    prm_samples = am.relmdl.sample(k1, test, (num_curves,), keep_sites=['t_o_nom', 'n_nom', 'a_nom', 'b_nom'])
-    pri_sample_probs = jnp.exp(am.relmdl.logp(k2, test, prm_samples, None, (num_curves,)))
+    prm_samples = am.relmdl.sample(k1, test.dims, test.conds, (num_curves,), ('t_o_nom', 'n_nom', 'a_nom', 'b_nom'))
+    pri_sample_probs = jnp.exp(am.relmdl.logprob(k2, test.dims, test.conds, prm_samples, None, (num_curves,)))
     pri_sample_probs = pri_sample_probs / (jnp.max(pri_sample_probs) * 2)
     spm_temps = jnp.full((num_curves, 13), jnp.linspace(300, 420, 13)).T
     pri_spm_vals = p_model_ttf(spm_temps, prm_samples['t_o_nom'], prm_samples['n_nom'], prm_samples['a_nom'], prm_samples['b_nom'], 1.1)
@@ -249,16 +249,16 @@ def tddb_inference():
     am.relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_lbci_l, 95, 10)
     am.relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_hdcr_l, 95, 10)
     am.test = am.field_test
-    pri_dist = am.sim_test_meas_new(num=(300_000,))
+    pri_dist = am.sim_test_meas(num=(300_000,))
     pri_dist = pri_dist['field_ttf'].flatten()
 
     ### Evaluate the prior interpretable entropy ###
     entropy_samples = 30_000
     def lp_f(vals, site, key, test):
-        return am.relmdl.logp(rng_key=key, test=test, site_vals={site: vals}, conditional=None, dims=(len(vals),))
+        return am.relmdl.logprob(key, test.dims, test.conds, {site: vals}, None, (len(vals),))
     k1, k2, k3, k4 = rand.split(rand.key(84357345763), 4)
     hyls = ('t_o_nom', 't_o_var', 'n_nom', 'a_nom', 'a_var', 'b_nom', 'b_var')
-    hyl_samples = am.relmdl.sample_new(k1, am.test.dims, am.test.conds, (entropy_samples,), keep_sites=hyls)
+    hyl_samples = am.relmdl.sample(k1, am.test.dims, am.test.conds, (entropy_samples,), keep_sites=hyls)
     pri_entropy = {}
     for hyl in hyls:
         pri_entropy[hyl] = stratcona.engine.bed.entropy(
@@ -271,7 +271,6 @@ def tddb_inference():
     am.do_inference(ttfs['s']['e'])
     print(f'Inference time taken: {time.time() - start_time}')
     pprint(am.relmdl.hyl_beliefs)
-    jax.clear_caches()
 
     t_o_infd = am.relmdl.hyl_beliefs['t_o_nom']['loc']
     n_infd = am.relmdl.hyl_beliefs['n_nom']['loc']
@@ -285,14 +284,14 @@ def tddb_inference():
 
     # Sample curves from the posterior predictive
     rng, kx = rand.split(rand.key(27498))
-    prm_samples = am.relmdl.sample(rng, test, (num_curves,), keep_sites=['t_o_nom', 'n_nom', 'a_nom', 'b_nom'])
-    sample_probs = jnp.exp(am.relmdl.logp(k2, test, prm_samples, conditional=None, dims=(num_curves,)))
+    prm_samples = am.relmdl.sample(rng, test.dims, test.conds, (num_curves,), ('t_o_nom', 'n_nom', 'a_nom', 'b_nom'))
+    sample_probs = jnp.exp(am.relmdl.logprob(k2, test.dims, test.conds, prm_samples, None, (num_curves,)))
     sample_probs = sample_probs / (jnp.max(sample_probs) * 2)
     spm_vals = p_model_ttf(spm_temps, prm_samples['t_o_nom'], prm_samples['n_nom'], prm_samples['a_nom'], prm_samples['b_nom'], 1.1)
     spm_vals, spm_temps = spm_vals.T, spm_temps.T
 
     ### Evaluate the posterior entropy ###
-    hyl_samples = am.relmdl.sample_new(k3, am.test.dims, am.test.conds, (entropy_samples,), keep_sites=hyls)
+    hyl_samples = am.relmdl.sample(k3, am.test.dims, am.test.conds, (entropy_samples,), keep_sites=hyls)
     pst_entropy = {}
     for hyl in hyls:
         pst_entropy[hyl] = stratcona.engine.bed.entropy(
@@ -380,11 +379,11 @@ def tddb_inference():
     am.relreq = stratcona.ReliabilityRequirement(stratcona.engine.metrics.qx_hdcr_l, 95, 10)
     post_hdcr = am.evaluate_reliability('ttf_ttf_base')
     am.test = am.field_test
-    post_dist = am.sim_test_meas_new(num=(300_000,))
+    post_dist = am.sim_test_meas(num=(300_000,))
     post_dist = post_dist['field_ttf'].flatten()
     # Generate 'true' samples
     am_e.test = am.field_test
-    true_dist = am_e.sim_test_meas_new(num=(300_000,))['field_ttf'].flatten()
+    true_dist = am_e.sim_test_meas(num=(300_000,))['field_ttf'].flatten()
     # Generate mean predicted value from frequentist fit
     mle_mean = fits['s']['e']['e'][0]
     mle_pred_mean = e_model_ttf(330, mle_mean[0], mle_mean[1], BOLTZ_EV)

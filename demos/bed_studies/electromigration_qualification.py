@@ -11,15 +11,12 @@ from numpyro.distributions.transforms import ComposeTransform, AffineTransform, 
 # This call has to occur before importing jax
 numpyro.set_host_device_count(4)
 
-import jax
-import jax.numpy as jnp # noqa: ImportNotAtTopOfFile
+import jax.numpy as jnp
 import jax.random as rand
 import numpy as np
 
 import datetime as dt
-import certifi
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+import click
 
 import seaborn as sb
 from matplotlib import pyplot as plt
@@ -33,60 +30,44 @@ import stratcona
 
 BOLTZ_EV = 8.617e-5
 
-DB_NAME = 'stratcona'
-COLL_NAME = 'em-qual'
+# Various demo configuration variables to control the study
+ANALYZE_MODEL_PRIOR = False
+SMALL_ANALYSIS_FOR_DEMO_RUN = True
+EXAMINE_BED_DATA = False
+VIZ_SIM_MODELS = False
 
 
-def login_to_database():
-    tls_ca = certifi.where()
-    uri = "mongodb+srv://arbutus.6v6mkhr.mongodb.net/?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority"
-    mongo_client = MongoClient(uri, tls=True, tlsCertificatekeyFile='../cert/mongo_cert.pem', tlsCAFile=tls_ca)
-    db = mongo_client[DB_NAME]
-    dataset = db[COLL_NAME]
-    try:
-        mongo_client.admin.command('ping')
-    except PyMongoError as e:
-        print(e)
-        print("\nCould not connect to database successfully...")
-    return dataset
-
-
-def try_database_upload(dataset, formatted_data):
-    try:
-        dataset.insert_one(formatted_data)
-    except PyMongoError as e:
-        print(e)
-        print(f"Encountered error trying to upload data to database at {dt.datetime.now(tz=dt.UTC)}")
-
-
-def electromigration_qualification():
-    analyze_prior = False
-    run_bed_analysis = False
-    examine_utility_measures = False
-    viz_sim_models = True
-    run_inference = True
-    viz_posterior_predictions = True
+@click.command
+@click.option('--bed-data-from-file', is_flag=True, default=False, help='Use pre-computed BED analysis data.')
+@click.option('--inf-posterior-from-file', is_flag=True, default=False, help='Use pre-computed inference posteriors.')
+def electromigration_qualification(bed_data_from_file, inf_posterior_from_file):
+    mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
 
     '''
     ===== 1) Determine long-term reliability requirements =====
+    
     We will base the requirement on the SIL3 specification of less than 10^-3 (0.001) probability of failure on demand,
     which in the context of long-term reliability we will interpret as a less than 0.1% probability that
     electromigration failures occur before the 10 year intended product useful life. This translates to a metric of a
     worst case 0.1% quantile credible region of at least 10 years.
     '''
+    field_temp = 330
     trgt_life = 10 * 8760
     objective = stratcona.ReliabilityRequirement(metric=stratcona.engine.metrics.qx_lbci,
                                                  quantile=99.9, target_lifespan=trgt_life)
 
     """
     ===== 2) Test resource constraint identification =====
+    
     To determine the bounds of the possible test design space, need to decide on what costs are acceptable. We'll say
-    that the reliability team has been given an allocation of 5 chips to use for this qualification testing.
+    that the reliability team has been given an allocation of 15 chips to use for this qualification testing.
 
-    The maximum and minimum voltages and temperatures that can be used are [0.7, 0.95] and [300, 400] respectively.
+    Assuming temperature dependence is already pretty well characterized, the test design space focuses on voltage
+    dependence parameter mean and variability
+    
+    The maximum and minimum voltages that can be used are [0.7, 0.95], and three sub-tests will be conducted with 5
+    chips each, potentially at different voltages. All tests are at 400K.
     """
-    # Since the temperature dependence is already pretty well characterized, the test design space focuses on voltage
-    # dependence parameter mean and variability
     test_list, t, volts = [], 400, [0.85, 0.9, 0.95, 1.0, 1.05, 1.1]
     for i, v1 in enumerate(volts):
         for j, v2 in enumerate(volts[i:]):
@@ -101,14 +82,17 @@ def electromigration_qualification():
 
     '''
     ===== 3) Model selection =====
+    
     For our inference model we will use the classic electromigration model based on Black's equation. The current
     density is based on the custom IDFBCAMP chip designed by the Ivanov SoC lab.
     
     Physical parameters that are not directly related to wear-out are assumed to be already characterized
     (e.g., threshold voltage) and so are treated as fixed parameters, only the electromigration specific parameters form
     the latent variable space to learn.
+    
+    Prior beliefs are arbitrary for this hypothetical process but are chosen to represent a weak degree of prior
+    knowledge.
     '''
-    mb = stratcona.SPMBuilder(mdl_name='Black\'s Electromigration')
     num_devices = 5
     # Wire area in nm^2
     mb.add_params(vth_typ=0.32, i_base=2.8, wire_area=1.024 * 1000 * 1000, k=BOLTZ_EV)
@@ -141,43 +125,52 @@ def electromigration_qualification():
     mb.add_fail_criterion('lifespan', fail_time)
 
     am = stratcona.AnalysisManager(mb.build_model(), rel_req=objective, rng_seed=7623842)
-    am.set_field_use_conditions({'vdd': 0.85, 'temp': 330, 'n_fins': 48})
+    am.set_field_use_conditions({'vdd': 0.85, 'temp': field_temp, 'n_fins': 48})
 
     # Can visualize the prior model and see how inference is required to achieve the required predictive confidence.
-    if analyze_prior:
-        ta1 = stratcona.TestDef('accel1', {'s1': {'lot': 1, 'chp': 1}, 's2': {'lot': 1, 'chp': 1}},
-                                {'s1': {'vdd': 0.9, 'temp': 405, 'n_fins': 240}, 's2': {'vdd': 0.9, 'temp': 385, 'n_fins': 240}})
+    if ANALYZE_MODEL_PRIOR:
+        ta1 = stratcona.TestDef(
+            'accel1', {'s1': {'lot': 1, 'chp': 1}, 's2': {'lot': 1, 'chp': 1}},
+            {'s1': {'vdd': 0.9, 'temp': 400, 'n_fins': 240}, 's2': {'vdd': 0.8, 'temp': 400, 'n_fins': 240}})
 
         # Examine the prior predictive
-        with jax.disable_jit():
-            k, k1, k2 = rand.split(rand.key(9292873023), 3)
-            pri_dist = am.relmdl.sample_new(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
-                                            keep_sites=('field_lttf',), compute_predictors=True)
-            pri_accel_dist = am.relmdl.sample_new(k2, ta1.dims, ta1.conds, (1_000_000,),
-                                                  keep_sites=('s1_lttf', 's2_lttf'), compute_predictors=True)
-            pri_lifespan = am.evaluate_reliability('lifespan')
+        k, k1, k2 = rand.split(rand.key(9292873023), 3)
+        pri_dist = am.relmdl.sample(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
+                                    keep_sites=('field_lttf',), compute_predictors=True)
+        pri_accel_dist = am.relmdl.sample(k2, ta1.dims, ta1.conds, (1_000_000,),
+                                          keep_sites=('s1_lttf', 's2_lttf'), compute_predictors=True)
+        am.evaluate_reliability('lifespan')
 
         sb.set_theme(style='ticks', font='Times New Roman')
         sb.set_context('notebook')
         fig, p = plt.subplots(2, 1)
-        p[0].hist(pri_dist['field_lttf'].flatten(), 200, density=True, alpha=0.9, color='skyblue', histtype='stepfilled',
-                  label='Simulated true lifespan')
-        p[1].hist(pri_accel_dist['s1_lttf'].flatten(), 200, density=True, alpha=0.9, color='skyblue', histtype='stepfilled',
-                  label='Simulated HTOL lifespan')
-        p[1].hist(pri_accel_dist['s2_lttf'].flatten(), 200, density=True, alpha=0.9, color='hotpink', histtype='stepfilled',
-                  label='Simulated HTOL lifespan')
-
+        p[0].hist(pri_dist['field_lttf'].flatten(), 200, density=True, alpha=0.9, color='skyblue',
+                  histtype='stepfilled', label='Simulated true lifespan')
+        p[1].hist(pri_accel_dist['s1_lttf'].flatten(), 200, density=True, alpha=0.9, color='skyblue',
+                  histtype='stepfilled', label='Simulated HTOL lifespan')
+        p[1].hist(pri_accel_dist['s2_lttf'].flatten(), 200, density=True, alpha=0.9, color='hotpink',
+                  histtype='stepfilled', label='Simulated HTOL lifespan')
+        p.legend()
         plt.show()
 
     '''
     ===== 4) Accelerated test design analysis =====
+    
     Once we have BED statistics on all the possible tests we perform our analysis to determine which one to use.
     '''
     # Reset the prior beliefs to be sure they are correct for the BED analysis phase
-    am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3}, 'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-    jax.clear_caches()
+    am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
+                             'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
 
-    if run_bed_analysis:
+    if SMALL_ANALYSIS_FOR_DEMO_RUN:
+        batches, d_batch_size, n_y, n_v, n_x = 8, 7, 30, 100, 200
+    else:
+        batches, d_batch_size, n_y, n_v, n_x = 8, 7, 1_000, 250, 1_000
+
+    if bed_data_from_file:
+        with open(f'../data/electromigration_bed_evals.json', 'r') as f:
+            evals = json.load(f)
+    else:
         def em_u_func(ig, qx_lbci, test_duration):
             eig = jnp.sum(ig) / ig.size
             vig = jnp.sum(((ig - eig) ** 2) / ig.size)
@@ -189,50 +182,40 @@ def electromigration_qualification():
             return {'eig': eig, 'vig': vig, 'mig': mig, 'rpp': rpp, 'e-qx-lbci': e_lbci,
                     'etime': etime, 'maxtime': maxtime}
 
-        dataset = login_to_database()
-        n_y, n_v, n_x = 30, 100, 200
-        batches = 1 # 8
-        d_batch_size = 7
         d_samplers = [stratcona.assistants.iter_sampler(test_list[i*d_batch_size:(i*d_batch_size)+d_batch_size]) for i in range(batches)]
         keys = rand.split(am._derive_key(), batches)
-        eval_d_batch_p = partial(stratcona.engine.bed.pred_bed_apr25, n_d=d_batch_size, n_y=n_y, n_v=n_v, n_x=n_x,
+        eval_d_batch_p = partial(stratcona.engine.bed.pred_bed, n_d=d_batch_size, n_y=n_y, n_v=n_v, n_x=n_x,
                                  spm=am.relmdl, utility=em_u_func, field_d=am.field_test, predictor='lifespan')
 
+        evals = []
         for i in range(batches):
             udc, _ = eval_d_batch_p(keys[i], d_samplers[i])
-
             simplified = {'batch': i, 'batch-size': d_batch_size, 'submit-time': str(dt.datetime.now(tz=dt.UTC)),
                           'n-y': n_y, 'n-v': n_v, 'n-x': n_x}
             for j in range(d_batch_size):
                 simplified[f'{str(i)}-{str(j)}'] = {
-                    'v1': float(udc[j]['design'].conds['v1']['vdd']), 'v2': float(udc[j]['design'].conds['v2']['vdd']), 'v3': float(udc[j]['design'].conds['v3']['vdd']),
+                    'v1': float(udc[j]['design'].conds['v1']['vdd']), 'v2': float(udc[j]['design'].conds['v2']['vdd']),
+                    'v3': float(udc[j]['design'].conds['v3']['vdd']),
                     'eig': float(udc[j]['utility']['eig']), 'vig': float(udc[j]['utility']['vig']), 'mig': float(udc[j]['utility']['mig']),
                     'rpp': float(udc[j]['utility']['rpp']), 'e-qx-lbci': float(udc[j]['utility']['e-qx-lbci']),
                     'e-logtime': float(udc[j]['utility']['etime']), 'max-logtime': float(udc[j]['utility']['maxtime'])}
             with open(f'../bed_data/em_bed_evals_batch{i}.json', 'w') as f:
                 json.dump(simplified, f)
-            try_database_upload(dataset, simplified)
+            evals.append(simplified)
 
-    if examine_utility_measures:
-        # Connect to the weartest database
-        tls_ca = certifi.where()
-        uri = "mongodb+srv://arbutus.6v6mkhr.mongodb.net/?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority"
-        mongo_client = MongoClient(uri, tls=True, tlsCertificatekeyFile='../cert/mongo_cert.pem', tlsCAFile=tls_ca)
-        db = mongo_client['stratcona']
-        try:
-            mongo_client.admin.command('ping')
-        except PyMongoError as e:
-            print(e)
-            print("\nCould not connect to database successfully, exiting...")
-            exit()
-
-        dset_1 = db[COLL_NAME]
-        batches = dset_1.find()
-
+    '''
+    ===== 5) Tune utility to select a final test design and then conduct the selected test =====
+    
+    First a utility function is defined and used to select a test based on the BED analysis.
+    
+    The selected test is simulated for poor, barely acceptable, and good 'true' reliability cases to show how the
+    qualification results in different outcomes for different experimental scenarios.
+    '''
+    if EXAMINE_BED_DATA:
         x, y, z = [], [], []
         rpp, elbci, eig, vig, mig, eltime, maxltime = [], [], [], [], [], [], []
-        for i, b in enumerate(batches):
-            for j in range(7):
+        for i, b in enumerate(evals):
+            for j in range(d_batch_size):
                 d = b[f'{i}-{j}']
                 v1, v2, v3 = d['v1'], d['v2'], d['v3']
                 x.append(v1)
@@ -246,23 +229,14 @@ def electromigration_qualification():
                 eltime.append(d['e-logtime'])
                 maxltime.append(d['max-logtime'])
 
-        rpp_max = np.argmax(rpp)
-        rpp_min = np.argmin(rpp)
-        rpp_mean = np.mean(rpp)
-        elbci_max = np.argmax(elbci)
-        eig_max = np.argmax(eig)
-        vig_max = np.argmax(vig)
-        mig_max = np.argmax(mig)
-        eltime_max = np.argmax(eltime)
-        eltime_min = np.argmin(eltime)
-        maxltime_max = np.argmax(maxltime)
-
-        # Evaluate utility for each design to select one
+        # Evaluate the finalized utility function for each design to select one
+        min_e_time, min_time_design_rpp = 533, 0.278
         def u(rpp, eltime):
-            return (4000 * (rpp - 0.278)) + (533 - np.exp(eltime))
+            return (4000 * (rpp - min_time_design_rpp)) + (min_e_time - np.exp(eltime))
 
         d_u = u(np.array(rpp), np.array(eltime))
         u_max = np.argmax(d_u)
+        print(f'Best design: {test_list[u_max]}')
 
         # Generate the 3D plot
         sb.set_theme(style='ticks', font='Times New Roman')
@@ -273,7 +247,6 @@ def electromigration_qualification():
         plt.rcParams['font.family'] = 'Times New Roman'
 
         fig = plt.figure()
-
         p = fig.add_subplot(1, 2, 1, projection='3d')
         vals = p.scatter(x, y, zs=z, c=rpp, cmap='cividis', s=100, vmin=0.0, vmax=0.6)
         fig.colorbar(vals, ax=p, orientation='vertical', label='Requirement Pass Probability')
@@ -294,60 +267,49 @@ def electromigration_qualification():
 
         plt.show()
 
-    '''
-    ===== 5) Conduct the selected test =====
-    Here we use Gerabaldi to emulate running the test on a real-world product. The simulator only works with
-    temporal models, thus our electromigration failures are determined not by Black's equation but by an entirely
-    different custom probabilistic model.
-    
-    Optional fallbacks to Black's equation or manual entry failure data are provided.
-    '''
-    am.set_test_definition(test_list[55])
+    # Force select the optimal test according to the study utility definition in the dissertation
+    am.set_test_definition(test_list[54])
     kpri, k1, k2, k3 = rand.split(am._derive_key(), 4)
 
     # Reset the prior beliefs to be sure they are correct for the BED analysis phase
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                              'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-    jax.clear_caches()
-    pri_dist = am.relmdl.sample_new(kpri, am.field_test.dims, am.field_test.conds, (1_000_000,),
-                                    keep_sites=('field_lifespan',), compute_predictors=True)
+    pri_dist = am.relmdl.sample(kpri, am.field_test.dims, am.field_test.conds, (1_000_000,),
+                                keep_sites=('field_lifespan',), compute_predictors=True)
     pri_lifespan = am.evaluate_reliability('lifespan')
 
     # Poor reliability
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 0.0001}, 'n_dev': {'loc': 15, 'scale': 0.0001},
                              'n_chp': {'loc': 15, 'scale': 0.0001}, 'eaa_nom': {'loc': 39, 'scale': 0.0001}}
-    jax.clear_caches()
-    sd1 = am.sim_test_meas_new()
+    sd1 = am.sim_test_meas()
     sd1_inf = {'v1': {'lttf': sd1['v1_lttf']}, 'v2': {'lttf': sd1['v2_lttf']}, 'v3': {'lttf': sd1['v3_lttf']}}
-    if viz_sim_models:
-        s1_dist = am.relmdl.sample_new(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
-                                        keep_sites=('field_lifespan',), compute_predictors=True)
+    if VIZ_SIM_MODELS:
+        s1_dist = am.relmdl.sample(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
+                                   keep_sites=('field_lifespan',), compute_predictors=True)
         s1_lifespan = am.evaluate_reliability('lifespan')
 
     # Barely acceptable reliability
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 0.0001}, 'n_dev': {'loc': 17, 'scale': 0.0001},
                              'n_chp': {'loc': 16, 'scale': 0.0001}, 'eaa_nom': {'loc': 40, 'scale': 0.0001}}
-    jax.clear_caches()
-    sd2 = am.sim_test_meas_new()
+    sd2 = am.sim_test_meas()
     sd2_inf = {'v1': {'lttf': sd2['v1_lttf']}, 'v2': {'lttf': sd2['v2_lttf']}, 'v3': {'lttf': sd2['v3_lttf']}}
-    if viz_sim_models:
-        s2_dist = am.relmdl.sample_new(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
+    if VIZ_SIM_MODELS:
+        s2_dist = am.relmdl.sample(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                         keep_sites=('field_lifespan',), compute_predictors=True)
         s2_lifespan = am.evaluate_reliability('lifespan')
 
     # Good reliability
     am.relmdl.hyl_beliefs = {'n_nom': {'loc': 12.9, 'scale': 0.0001}, 'n_dev': {'loc': 11, 'scale': 0.0001},
                              'n_chp': {'loc': 12, 'scale': 0.0001}, 'eaa_nom': {'loc': 40, 'scale': 0.0001}}
-    jax.clear_caches()
-    sd3 = am.sim_test_meas_new()
+    sd3 = am.sim_test_meas()
     sd3_inf = {'v1': {'lttf': sd3['v1_lttf']}, 'v2': {'lttf': sd3['v2_lttf']}, 'v3': {'lttf': sd3['v3_lttf']}}
-    if viz_sim_models:
-        s3_dist = am.relmdl.sample_new(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
+    if VIZ_SIM_MODELS:
+        s3_dist = am.relmdl.sample(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
                                         keep_sites=('field_lifespan',), compute_predictors=True)
         s3_lifespan = am.evaluate_reliability('lifespan')
 
-    # Check the data
-    if viz_sim_models:
+    # Look at the simulation models
+    if VIZ_SIM_MODELS:
         # Examine the prior predictive
         sb.set_theme(style='ticks', font='Times New Roman')
         sb.set_context('talk')
@@ -388,105 +350,106 @@ def electromigration_qualification():
         p.legend(loc='upper right', fontsize='small')
         fig.subplots_adjust(bottom=0.3)
 
+        plt.show()
+
     '''
-    ===== 6) Perform model inference =====
+    ===== 6) Perform model inference and examine resulting reliability predictions for acceptability =====
+    
     Update our model based on the emulated test data. First need to extract the failure times from the measurements of
     fail states.
     '''
-    k1, k2, k3 = rand.split(am._derive_key(), 3)
+    if inf_posterior_from_file:
+        with open('../data/electromigration_poor_pst_hyls.json', 'r') as f:
+            pst_poor = json.load(f)
+        with open('../data/electromigration_marg_pst_hyls.json', 'r') as f:
+            pst_marg = json.load(f)
+        with open('../data/electromigration_good_pst_hyls.json', 'r') as f:
+            pst_good = json.load(f)
+    else:
+        k1, k2, k3 = rand.split(am._derive_key(), 3)
 
-    if run_inference:
         # Reset the prior beliefs
         am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                                  'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-        jax.clear_caches()
         start_time = time.time()
         am.do_inference(sd1_inf)
         print(f'Inference time taken: {time.time() - start_time}')
-        jax.clear_caches()
-    pst1_dist = am.relmdl.sample_new(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
-                                     keep_sites=('field_lifespan',), compute_predictors=True)
-    pst1_lifespan = am.evaluate_reliability('lifespan')
+        pst_poor = am.relmdl.hyl_beliefs
 
-    if run_inference:
         # Reset the prior beliefs
         am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                                  'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-        jax.clear_caches()
         start_time = time.time()
         am.do_inference(sd2_inf)
         print(f'Inference time taken: {time.time() - start_time}')
-        jax.clear_caches()
-    pst2_dist = am.relmdl.sample_new(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
-                                     keep_sites=('field_lifespan',), compute_predictors=True)
-    pst2_lifespan = am.evaluate_reliability('lifespan')
+        pst_marg = am.relmdl.hyl_beliefs
 
-    if run_inference:
         # Reset the prior beliefs
         am.relmdl.hyl_beliefs = {'n_nom': {'loc': 15, 'scale': 2}, 'n_dev': {'loc': 15, 'scale': 3},
                                  'n_chp': {'loc': 15, 'scale': 3}, 'eaa_nom': {'loc': 40, 'scale': 1}}
-        jax.clear_caches()
         start_time = time.time()
         am.do_inference(sd3_inf)
         print(f'Inference time taken: {time.time() - start_time}')
-        jax.clear_caches()
-    pst3_dist = am.relmdl.sample_new(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
-                                     keep_sites=('field_lifespan',), compute_predictors=True)
+        pst_good = am.relmdl.hyl_beliefs
+
+    # Now generate posterior predictive samples and reliability metrics for each of the three simulation cases
+    am.relmdl.hyl_beliefs = pst_poor
+    pst1_dist = am.relmdl.sample(k1, am.field_test.dims, am.field_test.conds, (1_000_000,),
+                                 keep_sites=('field_lifespan',), compute_predictors=True)
+    pst1_lifespan = am.evaluate_reliability('lifespan')
+
+    am.relmdl.hyl_beliefs = pst_marg
+    pst2_dist = am.relmdl.sample(k2, am.field_test.dims, am.field_test.conds, (1_000_000,),
+                                 keep_sites=('field_lifespan',), compute_predictors=True)
+    pst2_lifespan = am.evaluate_reliability('lifespan')
+
+    am.relmdl.hyl_beliefs = pst_good
+    pst3_dist = am.relmdl.sample(k3, am.field_test.dims, am.field_test.conds, (1_000_000,),
+                                 keep_sites=('field_lifespan',), compute_predictors=True)
     pst3_lifespan = am.evaluate_reliability('lifespan')
 
-    '''
-    ===== 7) Examine predicted reliability and metric reporting =====
-    Check whether we meet the long-term reliability target and with sufficient confidence.
-    '''
+    # Visualize the posterior predictive distributions and whether the knowledge regarding reliability is sufficient
+    # for the qualification to be successful for each of the three simulated cases
+    sb.set_theme(style='ticks', font='Times New Roman')
+    sb.set_context('talk')
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['mathtext.rm'] = 'Times New Roman'
+    plt.rcParams['mathtext.it'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman'
 
-    if viz_posterior_predictions:
-        # Examine the prior predictive
-        sb.set_theme(style='ticks', font='Times New Roman')
-        sb.set_context('talk')
-        plt.rcParams['mathtext.fontset'] = 'custom'
-        plt.rcParams['mathtext.rm'] = 'Times New Roman'
-        plt.rcParams['mathtext.it'] = 'Times New Roman'
-        plt.rcParams['font.family'] = 'Times New Roman'
+    fig, p = plt.subplots(1, 1)
+    p.axvline(jnp.log(87600), 0, 1, color='black', linestyle='dashed',
+              label=f'Required Q99.9%-LBCI: 10 years')
 
-        fig, p = plt.subplots(1, 1)
-        p.axvline(jnp.log(87600), 0, 1, color='black', linestyle='dashed',
-                  label=f'Required Q99.9%-LBCI: 10 years')
+    p.hist(jnp.log(pri_dist['field_lifespan']), 200, density=True, alpha=0.9, color='skyblue', histtype='stepfilled',
+           label='Prior predictive distribution')
+    p.axvline(jnp.log(pri_lifespan), 0, 1, color='skyblue', linestyle='dashed',
+              label=f'Prior Q99.9%-LBCI: {round(float(pri_lifespan / 8760), 2)} years')
 
-        p.hist(jnp.log(pri_dist['field_lifespan']), 200, density=True, alpha=0.9, color='skyblue', histtype='stepfilled',
-               label='Prior predictive distribution')
-        p.axvline(jnp.log(pri_lifespan), 0, 1, color='skyblue', linestyle='dashed',
-                  label=f'Prior Q99.9%-LBCI: {round(float(pri_lifespan / 8760), 2)} years')
+    p.hist(jnp.log(pst1_dist['field_lifespan']), 200, density=True, alpha=0.6, color='maroon', histtype='stepfilled',
+           label='Poor posterior predictive distribution')
+    p.axvline(jnp.log(pst1_lifespan), 0, 1, color='maroon', linestyle='dashed',
+              label=f'Poor posterior Q99.9%-LBCI: {round(float(pst1_lifespan / 8760), 2)} years')
 
-        p.hist(jnp.log(pst1_dist['field_lifespan']), 200, density=True, alpha=0.6, color='maroon', histtype='stepfilled',
-               label='Poor posterior predictive distribution')
-        p.axvline(jnp.log(pst1_lifespan), 0, 1, color='maroon', linestyle='dashed',
-                  label=f'Poor posterior Q99.9%-LBCI: {round(float(pst1_lifespan / 8760), 2)} years')
+    p.hist(jnp.log(pst2_dist['field_lifespan']), 200, density=True, alpha=0.6, color='goldenrod', histtype='stepfilled',
+           label='Barely posterior predictive distribution')
+    p.axvline(jnp.log(pst2_lifespan), 0, 1, color='goldenrod', linestyle='dashed',
+              label=f'Barely posterior Q99.9%-LBCI: {round(float(pst2_lifespan / 8760), 2)} years')
 
-        p.hist(jnp.log(pst2_dist['field_lifespan']), 200, density=True, alpha=0.6, color='goldenrod', histtype='stepfilled',
-               label='Barely posterior predictive distribution')
-        p.axvline(jnp.log(pst2_lifespan), 0, 1, color='goldenrod', linestyle='dashed',
-                  label=f'Barely posterior Q99.9%-LBCI: {round(float(pst2_lifespan / 8760), 2)} years')
+    p.hist(jnp.log(pst3_dist['field_lifespan']), 200, density=True, alpha=0.6, color='olivedrab', histtype='stepfilled',
+           label='High posterior predictive distribution')
+    p.axvline(jnp.log(pst3_lifespan), 0, 1, color='olivedrab', linestyle='dashed',
+              label=f'High posterior Q99.9%-LBCI: {round(float(pst3_lifespan / 8760), 2)} years')
 
-        p.hist(jnp.log(pst3_dist['field_lifespan']), 200, density=True, alpha=0.6, color='olivedrab', histtype='stepfilled',
-               label='High posterior predictive distribution')
-        p.axvline(jnp.log(pst3_lifespan), 0, 1, color='olivedrab', linestyle='dashed',
-                  label=f'High posterior Q99.9%-LBCI: {round(float(pst3_lifespan / 8760), 2)} years')
-
-        p.set_xlim(9, 15)
-        p.set_xticks([jnp.log(8760), jnp.log(26280), jnp.log(87600), jnp.log(262800), jnp.log(876000)],
-                     ['1', '3', '10', '30', '100'])
-        p.set_xlabel('Predicted Lifespan (log years)')
-        p.set_ylabel('Probability Density')
-        p.legend(loc='upper right', fontsize='small')
-        fig.subplots_adjust(bottom=0.3)
+    p.set_xlim(9, 15)
+    p.set_xticks([jnp.log(8760), jnp.log(26280), jnp.log(87600), jnp.log(262800), jnp.log(876000)],
+                 ['1', '3', '10', '30', '100'])
+    p.set_xlabel('Predicted Lifespan (log years)')
+    p.set_ylabel('Probability Density')
+    p.legend(loc='upper right', fontsize='small')
+    fig.subplots_adjust(bottom=0.3)
 
     plt.show()
-
-    '''
-    ===== 8) Metrics reporting =====
-    Generate the regulatory and consumer metrics we can use to market and/or certify the product.
-    '''
-    # TODO
 
 
 if __name__ == '__main__':
