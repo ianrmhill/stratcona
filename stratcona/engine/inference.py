@@ -138,7 +138,7 @@ def int_out_v(rng_key, spm, batch_dims: tuple[int, int, int], test_dims: tuple[E
             for e in test_dims:
                 e_ltnts = [ltnt for ltnt in lvl_ltnts if f'{e.name}_' in ltnt]
                 # Get a subset of the test defined by test_dims and test_conds, the single experiment
-                e_tst = TestDef(e.name, {e}, {e.name: test_conds[e.name]})
+                e_tst = TestDef(e.name, (e,), {e.name: test_conds[e.name]})
                 e_y_s_a_t = {y: y_s_a_t[y] for y in y_s_a_t if f'{e.name}_' in y}
                 v_s_init = {ltnt: v_init[ltnt] for ltnt in e_ltnts}
                 for ltnt in e_ltnts:

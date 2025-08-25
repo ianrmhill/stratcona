@@ -321,7 +321,7 @@ def idfbcamp_qualification(bed_data_from_file, inf_posterior_from_file):
     ===== Accelerated test design analysis using BED =====
     '''
     if bed_data_from_file:
-        with open(f'../data/idfbcamp-bed-evals.json', 'r') as f:
+        with open(f'../data/idfbcamp_bed_evals.json', 'r') as f:
             evals = json.load(f)
     else:
         def p_u_func(ig, l_qx_hdcr_width):

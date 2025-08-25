@@ -4,6 +4,7 @@
 import numpyro as npyro
 import numpyro.distributions as dist
 from numpyro.distributions.transforms import ComposeTransform, AffineTransform, SoftplusTransform
+
 npyro.set_host_device_count(4)
 
 import jax
@@ -12,21 +13,11 @@ import jax.random as rand
 import numpy as np
 
 import json
-import time as time
-from functools import partial
-
 import datetime as dt
-import certifi
-import pymongo
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
 
 import seaborn as sb
 from matplotlib import pyplot as plt
-from mayavi import mlab
-
-import gerabaldi
-from gerabaldi.models import *
+import click
 
 import os
 import sys
@@ -35,51 +26,21 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 import stratcona
 
-DB_NAME = 'stratcona'
-COLL_NAME = 'htol-qual'
+# Various demo configuration variables to control the study
+RUN_HTOL_CONFIDENCE_ANALYSIS = False
+CHECK_MODEL_PRIOR_SIMILARITY = False
+SMALL_ANALYSIS_FOR_DEMO_RUN = True
 
 
-def login_to_database():
-    tls_ca = certifi.where()
-    uri = "mongodb+srv://arbutus.6v6mkhr.mongodb.net/?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority"
-    mongo_client = MongoClient(uri, tls=True, tlsCertificatekeyFile='../cert/mongo_cert.pem', tlsCAFile=tls_ca)
-    db = mongo_client[DB_NAME]
-    dataset = db[COLL_NAME]
-    try:
-        mongo_client.admin.command('ping')
-    except PyMongoError as e:
-        print(e)
-        print("\nCould not connect to database successfully...")
-    return dataset
-
-
-def try_database_upload(dataset, formatted_data):
-    try:
-        dataset.insert_one(formatted_data)
-    except PyMongoError as e:
-        print(e)
-        print(f"Encountered error trying to upload data to database at {dt.datetime.now(tz=dt.UTC)}")
-
-
-def htol_demo():
-    ### Define some constants ###
+@click.command
+@click.option('--bed-data-from-file', is_flag=True, default=False, help='Use pre-computed BED analysis data.')
+def htol_demo(bed_data_from_file):
     boltz_ev = 8.617e-5
-    # 125C in Kelvin
-    htol_temp, field_temp = 398.15, 328.15
-    fail_at_deg_mv = 25
 
-    # Disables and enables for different portions of the study
-    run_htol_confidence_analysis = False
-    check_model_similarity = False
-    run_test_design_analysis = False
-    run_test_duration_investigation = False
-    run_sample_count_investigation = False
-    run_multi_stress_investigation = True
-
-    ########################################################################
-    ### Define the Arrhenius wear-out model to infer                     ###
-    ########################################################################
-    # Define the model we will use to fit degradation
+    '''
+    ===== Define the two versions of the simple Arrhenius model to describe wear-out progression =====
+    '''
+    # First model is based on converting the Arrhenius FIT into a failure probability
     mb = stratcona.SPMBuilder(mdl_name='Arrhenius')
 
     # Log-scale Arrhenius model
@@ -88,8 +49,6 @@ def htol_demo():
         return jnp.log(1e9) + jnp.log(a) + temp_coeff
 
     mb.add_hyperlatent('a_nom', dist.LogNormal, {'loc': 14, 'scale': 0.0001})
-    # This linear version is only used for computing entropy to avoid needing to write a log-scale LDDP function
-    #mb.add_hyperlatent('a_lin_nom', dist.Normal, {'loc': 14, 'scale': 0.0001})
     pos_scale_tf = ComposeTransform([SoftplusTransform(), AffineTransform(0, 0.1)])
     mb.add_hyperlatent('eaa_nom', dist.Normal, {'loc': 7, 'scale': 0.0001}, pos_scale_tf)
     mb.add_latent('a', 'a_nom')
@@ -108,13 +67,10 @@ def htol_demo():
     mb.add_predictor('ftime', fail_time)
     amf = stratcona.AnalysisManager(mb.build_model(), rng_seed=6248742)
 
-    ########################################################################
-    ### Define the degradation wear-out model to infer
-    ########################################################################
+    # Second model translates the Arrhenius equation into a degradation curve, lifespan determined through numerical
+    # approximation of the inverse equation
     mb = stratcona.SPMBuilder(mdl_name='deg-general')
 
-    # Model provided in JEDEC's JEP122H as generally used NBTI degradation model, equation 5.3.1,
-    # log(1000) term to convert to mV
     def dvth_mv(t, l_a, eaa, n, temp):
         return jnp.exp(jnp.log(100) + jnp.log(1000) + l_a + ((-eaa) / (boltz_ev * temp)) + jnp.log(t ** n))
 
@@ -125,7 +81,6 @@ def htol_demo():
     mb.add_hyperlatent('l_a_lot', dist.Normal, {'loc': 2.5, 'scale': 0.0001}, var_tf)
     mb.add_hyperlatent('eaa_nom', dist.Normal, {'loc': 7, 'scale': 0.0001}, pos_scale_tf)
     mb.add_latent('l_a', nom='l_a_nom', chp='l_a_chp', lot='l_a_lot')
-    #mb.add_latent('l_a', nom='l_a_nom')
     mb.add_latent('eaa', nom='eaa_nom')
 
     mb.add_intermediate('degn', dvth_mv)
@@ -142,6 +97,9 @@ def htol_demo():
     mb.add_predictor('ftime', fail_thresh)
     amd = stratcona.AnalysisManager(mb.build_model(), rng_seed=833483473)
 
+    # 125C in Kelvin
+    htol_temp, field_temp = 398.15, 328.15
+    fail_at_deg_mv = 25
     # Set the main test and field use conditions for the two models
     htol = stratcona.TestDef('htol', {'htol': {'lot': 3, 'chp': 77}}, {'htol': {'temp': htol_temp, 't': 1000}})
     amf.set_test_definition(htol)
@@ -149,9 +107,9 @@ def htol_demo():
     amf.set_field_use_conditions({'temp': field_temp, 't': 8.865 * 8760})
     amd.set_field_use_conditions({'temp': field_temp, 't': 8.865 * 8760})
 
-    ####################################
-    ### Define reliability requirements
-    ####################################
+    '''
+    ===== Definitions of requirements for product-level reliability =====
+    '''
     req_lifespan = 8.865 * 8760
     req_q = 99
     metric = stratcona.engine.metrics.qx_lbci
@@ -159,16 +117,16 @@ def htol_demo():
     rreq = stratcona.ReliabilityRequirement(metric, req_q, req_lifespan)
     amf.relreq, amd.relreq = rreq, rreq
 
-    ####################################
-    ### First analysis: how does epistemic uncertainty in Eaa impact reliability prediction in the pass/fail model
-    ####################################
+    '''
+    ===== Analysis of how epistemic uncertainty as to Eaa degrades standard HTOL demonstration test results =====
+    '''
     k = rand.key(9292873023)
     # Define the HTOL and field tests with 1 chip and lot
     htols = stratcona.TestDef('htols', {'htols': {'lot': 1, 'chp': 1}}, {'htols': {'temp': htol_temp, 't': 1000}})
     # Set the prior beliefs and evaluate entropy
     amf.relmdl.hyl_beliefs = {'a_nom': {'loc': 13.5, 'scale': 1}, 'eaa_nom': {'loc': 7, 'scale': 0.0001}}
 
-    if run_htol_confidence_analysis:
+    if RUN_HTOL_CONFIDENCE_ANALYSIS:
         # Examine the prior predictive
         k, k1, k2 = rand.split(rand.key(9292873023), 3)
         pri_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
@@ -235,7 +193,6 @@ def htol_demo():
         perf = amf.do_inference_is(y_success, n_x=5_000)
         print(perf)
         print(amf.relmdl.hyl_beliefs)
-
         # NOTE: The entropy reduction is higher for the second version with Eaa uncertainty, shows how higher IG does
         #       not necessarily imply improved reliability
 
@@ -258,25 +215,22 @@ def htol_demo():
         p[0].set_xlim(8.5, 16)
         p[0].set_xticks([jnp.log(8760), jnp.log(26280), jnp.log(77657.4), jnp.log(175200), jnp.log(876000)],
                         ['1', '3', '8.865', '20', '100'])
-        p[0].set_xlabel('Predicted Lifespan (log years)')
+        p[0].set_xlabel('Predicted Field Lifespan (log years)')
+        p[1].set_xlabel('Predicted HTOL Lifespan (log years)')
         p[0].set_ylabel('Probability Density')
+        p[1].set_ylabel('Probability Density')
         p[0].legend(loc='upper right', fontsize='small')
 
         plt.show()
 
-    ####################################
-    ### Define the test space
-    ####################################
+    '''
+    ===== Define the possible test designs to perform a BED analysis for =====
+    '''
     # Start with the examination of changing the test duration
     half_time = stratcona.TestDef('HTOL500', {'htol': {'lot': 3, 'chp': 77}}, {'htol': {'temp': htol_temp, 't': 500}})
     tenth_time = stratcona.TestDef('HTOL100', {'htol': {'lot': 3, 'chp': 77}}, {'htol': {'temp': htol_temp, 't': 100}})
     dbl_time = stratcona.TestDef('HTOL2000', {'htol': {'lot': 3, 'chp': 77}}, {'htol': {'temp': htol_temp, 't': 2000}})
     test_space = [htol, half_time, tenth_time, dbl_time]
-
-    # Now an examination of reducing the number of chips
-    half_chps = stratcona.TestDef('39chpHTOL', {'htol': {'lot': 3, 'chp': 39}}, {'htol': {'temp': htol_temp, 't': 1000}})
-    tenth_chps = stratcona.TestDef('8chpHTOL', {'htol': {'lot': 3, 'chp': 8}}, {'htol': {'temp': htol_temp, 't': 1000}})
-    test_space.extend([half_chps, tenth_chps])
 
     # Finally, an analysis of multilevel temperature testing
     temps = [htol_temp - 100, htol_temp - 75, htol_temp - 50, htol_temp - 25, htol_temp - 10, htol_temp, htol_temp + 10, htol_temp + 25]
@@ -294,21 +248,21 @@ def htol_demo():
     ########################################################################
     ### 3. Determine the best experiment to conduct                      ###
     ########################################################################
+    '''
+    Run a BED analysis for the two models
+    '''
     # These priors give virtually identical prior predictive distributions, making p(y|d) comparable for both BED runs
     amf.relmdl.hyl_beliefs = {'a_nom': {'loc': 13.2, 'scale': 1.7}, 'eaa_nom': {'loc': 7, 'scale': 0.43}}
     amd.relmdl.hyl_beliefs = {'l_a_nom': {'loc': 13, 'scale': 0.6}, 'eaa_nom': {'loc': 7, 'scale': 0.1},
                               'l_a_chp': {'loc': 4, 'scale': 1.5}, 'l_a_lot': {'loc': 5, 'scale': 1.5}}
 
-    ### Model tuning: get the two models to have nearly the same prior predictive distributions
-    if check_model_similarity:
+    # Model tuning: get the two models to have nearly the same prior predictive distributions
+    if CHECK_MODEL_PRIOR_SIMILARITY:
         k, k1, k2 = rand.split(k, 3)
-        with jax.disable_jit():
-            fail_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
-                                              keep_sites=('field_ftime',), compute_predictors=True)
-            deg_dist = amd.relmdl.sample(k2, amd.field_test.dims, amd.field_test.conds, (1_000_000,),
-                                             keep_sites=('field_ftime',), compute_predictors=True)
-            fail_lifespan = amf.evaluate_reliability('ftime')
-            deg_lifespan = amd.evaluate_reliability('ftime')
+        fail_dist = amf.relmdl.sample(k1, amf.field_test.dims, amf.field_test.conds, (1_000_000,),
+                                          keep_sites=('field_ftime',), compute_predictors=True)
+        deg_dist = amd.relmdl.sample(k2, amd.field_test.dims, amd.field_test.conds, (1_000_000,),
+                                         keep_sites=('field_ftime',), compute_predictors=True)
 
         print(jnp.mean(jnp.log(deg_dist['field_ftime'])))
         sb.set_theme(style='ticks', font='Times New Roman')
@@ -322,33 +276,42 @@ def htol_demo():
 
         plt.show()
 
-    def p_u_func(ig, qx_lbci):
-        eig = jnp.sum(ig) / ig.size
-        vig = jnp.sum(((ig - eig) ** 2) / ig.size)
-        mig = jnp.min(ig)
-        rpp = jnp.sum(jnp.where(qx_lbci > req_lifespan, 1, 0)) / qx_lbci.size
-        mean_lbci = jnp.sum(qx_lbci) / qx_lbci.size
-        return {'eig': eig, 'vig': vig, 'mig': mig, 'rpp': rpp, 'mean-qx-lbci': mean_lbci}
+    # Now run the full BED analysis
+    if bed_data_from_file:
+        with open(f'../data/htol_bed_evals.json', 'r') as f:
+            evals = json.load(f)
+    else:
+        def p_u_func(ig, qx_lbci):
+            eig = jnp.sum(ig) / ig.size
+            vig = jnp.sum(((ig - eig) ** 2) / ig.size)
+            mig = jnp.min(ig)
+            rpp = jnp.sum(jnp.where(qx_lbci > req_lifespan, 1, 0)) / qx_lbci.size
+            mean_lbci = jnp.sum(qx_lbci) / qx_lbci.size
+            return {'eig': eig, 'vig': vig, 'mig': mig, 'rpp': rpp, 'mean-qx-lbci': mean_lbci}
 
-    if run_test_design_analysis:
-        dataset = login_to_database()
-        n_y_f, n_v_f, n_x_f = 1_000, 1, 1_000
-        n_y_d, n_v_d, n_x_d = 50, 250, 500
-        #for i in range(len(test_space)):
-        for i in range(3):
+        if SMALL_ANALYSIS_FOR_DEMO_RUN:
+            n_y_f, n_v_f, n_x_f = 400, 1, 400
+            n_y_d, n_v_d, n_x_d = 50, 50, 100
+        else:
+            n_y_f, n_v_f, n_x_f = 10_000, 1, 10_000
+            n_y_d, n_v_d, n_x_d = 1_000, 250, 1_000
+
+        evals = []
+        for i in range(len(test_space)):
             k, kf, kd = rand.split(k, 3)
             d = test_space[i]
             sampler = lambda _: d
-            u_d_comp_f, perf_stats_f = stratcona.engine.bed.pred_bed_apr25(kf, sampler, 1, n_y_f, n_v_f, n_x_f, amf.relmdl,
-                                                                           p_u_func, amf.field_test, 'ftime')
-            u_d_comp_d, perf_stats_d = stratcona.engine.bed.pred_bed_apr25(kd, sampler, 1, n_y_d, n_v_d, n_x_d, amd.relmdl,
-                                                                           p_u_func, amd.field_test, 'ftime')
+            u_d_comp_f, perf_stats_f = stratcona.engine.bed.pred_bed(kf, sampler, 1, n_y_f, n_v_f, n_x_f, amf.relmdl,
+                                                                     p_u_func, amf.field_test, 'ftime')
+            u_d_comp_d, perf_stats_d = stratcona.engine.bed.pred_bed(kd, sampler, 1, n_y_d, n_v_d, n_x_d, amd.relmdl,
+                                                                     p_u_func, amd.field_test, 'ftime')
             if len(test_space[i].conds.keys()) == 1:
                 dims = next(iter(d.dims))
                 test_info = {'test-type': 'htol-variant', 'temp': float(d.conds['htol']['temp']), 't': float(d.conds['htol']['t']),
                              'chps': dims.chp, 'lots': dims.lot}
             else:
                 test_info = {'test-type': 'multitemp', 't1': d.conds['t1']['temp'], 't2': d.conds['t2']['temp'], 't3': d.conds['t3']['temp']}
+
             f_entry = {'model': 'fail', 'submit-time': str(dt.datetime.now(tz=dt.UTC)), 'n-y': n_y_f, 'n-x': n_x_f,
                        'eig': float(u_d_comp_f[0]['utility']['eig']), 'vig': float(u_d_comp_f[0]['utility']['vig']),
                        'mig': float(u_d_comp_f[0]['utility']['mig']), 'rpp': float(u_d_comp_f[0]['utility']['rpp']),
@@ -357,186 +320,115 @@ def htol_demo():
                        'eig': float(u_d_comp_d[0]['utility']['eig']), 'vig': float(u_d_comp_d[0]['utility']['vig']),
                        'mig': float(u_d_comp_d[0]['utility']['mig']), 'rpp': float(u_d_comp_d[0]['utility']['rpp']),
                        'mean-qx-lbci': float(u_d_comp_d[0]['utility']['mean-qx-lbci'])} | test_info
+            evals.append(f_entry)
+            evals.append(d_entry)
+            print(f'Design {i} analyzed...')
 
-            with open(f'../bed_data/htol_bed_evals_f{i}.json', 'w') as f:
-                json.dump(f_entry, f)
-            with open(f'../bed_data/htol_bed_evals_d{i}.json', 'w') as f:
-                json.dump(d_entry, f)
-            try_database_upload(dataset, f_entry)
-            try_database_upload(dataset, d_entry)
+    '''
+    ===== Interpret the results of the BED analysis =====
+    '''
+    # Generate the plot comparing different utility measures between models and test duration
+    # Small data set so here it is entered manually instead of extracting from the evals file
+    ts = [100, 500, 1000, 2000]
 
-    ########################################################################
-    ### Interpret the results of the BED analysis
-    ########################################################################
-    if run_test_duration_investigation:
-        # Small data set so here it is entered manually instead of querying from database
-        ts = [100, 500, 1000, 2000]
+    f_eigs = [0.787, 1.365, 1.520, 1.544]
+    f_vigs = [0.756, 2.234, 3.167, 3.906]
+    f_rpp = [0.0, 0.0, 0.470, 0.468]
+    f_elbci = [10075, 38037, 63622, 101556]
 
-        f_eigs = [0.787, 1.365, 1.520, 1.544]
-        f_vigs = [0.756, 2.234, 3.167, 3.906]
-        f_rpp = [0.0, 0.0, 0.470, 0.468]
-        f_elbci = [10075, 38037, 63622, 101556]
+    d_eigs = [6.654, 6.637, 6.607, 6.591]
+    d_vigs = [1.947, 2.052, 1.835, 1.832]
+    d_rpp = [0.266, 0.218, 0.249, 0.38]
+    d_elbci = [94299, 93516, 112364, 423671]
 
-        d_eigs = [6.654, 6.637, 6.607, 6.591]
-        d_vigs = [1.947, 2.052, 1.835, 1.832]
-        d_rpp = [0.266, 0.218, 0.249, 0.38]
-        d_elbci = [94299, 93516, 112364, 423671]
+    sb.set_theme(style='ticks', font='Times New Roman')
+    sb.set_context('talk')
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['mathtext.rm'] = 'Times New Roman'
+    plt.rcParams['mathtext.it'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman'
 
-        sb.set_theme(style='ticks', font='Times New Roman')
-        sb.set_context('talk')
-        plt.rcParams['mathtext.fontset'] = 'custom'
-        plt.rcParams['mathtext.rm'] = 'Times New Roman'
-        plt.rcParams['mathtext.it'] = 'Times New Roman'
-        plt.rcParams['font.family'] = 'Times New Roman'
+    fig, p = plt.subplots()
+    # Create second axis sharing the same x-axis
+    p2 = p.twinx()
 
-        fig, p = plt.subplots()
-        # Create second axis sharing the same x-axis
-        p2 = p.twinx()
+    # Plot first line (left y-axis)
+    p.errorbar(jnp.array(ts) - 20, f_eigs, yerr=jnp.sqrt(jnp.array(f_vigs)), marker='<', markersize=18, capsize=5, linestyle='', color='turquoise',
+               label='Pass/fail model - $EIG \pm \sqrt{VIG}$')
+    p.errorbar(jnp.array(ts) - 20, d_eigs, yerr=jnp.sqrt(jnp.array(d_vigs)), marker='<', markersize=18, capsize=5, linestyle='', color='mediumorchid',
+               label='Degradation model - $EIG \pm \sqrt{VIG}$')
 
-        # Plot first line (left y-axis)
-        p.errorbar(jnp.array(ts) - 20, f_eigs, yerr=jnp.sqrt(jnp.array(f_vigs)), marker='<', markersize=18, capsize=5, linestyle='', color='turquoise',
-                   label='Pass/fail model - $EIG \pm \sqrt{VIG}$')
-        p.errorbar(jnp.array(ts) - 20, d_eigs, yerr=jnp.sqrt(jnp.array(d_vigs)), marker='<', markersize=18, capsize=5, linestyle='', color='mediumorchid',
-                   label='Degradation model - $EIG \pm \sqrt{VIG}$')
+    p2.plot(jnp.array(ts) + 20, jnp.array(f_elbci) / 8760, color='teal', linestyle='', marker='>', markersize=18,
+            label='Pass/fail model - expected Q99%-LBCI')
+    p2.plot(jnp.array(ts) + 20, jnp.array(d_elbci) / 8760, color='indigo', linestyle='', marker='>', markersize=18,
+            label='Degradation model - expected Q99%-LBCI')
 
-        p2.plot(jnp.array(ts) + 20, jnp.array(f_elbci) / 8760, color='teal', linestyle='', marker='>', markersize=18,
-                label='Pass/fail model - expected Q99%-LBCI')
-        p2.plot(jnp.array(ts) + 20, jnp.array(d_elbci) / 8760, color='indigo', linestyle='', marker='>', markersize=18,
-                label='Degradation model - expected Q99%-LBCI')
+    p.set_ylabel('Information Gain (nats)')
+    p.set_ylim(-1, 10)
+    p2.set_ylabel('Expected Q99%-LBCI (log years)')
+    p2.set_ylim(1, 200)
+    p2.set_yscale('log')
 
-        p.set_ylabel('Information Gain (nats)')
-        p.set_ylim(-1, 10)
-        p2.set_ylabel('Expected Q99%-LBCI (log years)')
-        p2.set_ylim(1, 200)
-        p2.set_yscale('log')
+    for i in range(len(ts)):
+        p2.text(ts[i], f_elbci[i] / 8760, f'RPP: {round(f_rpp[i] * 100, 1)}%\n ', ha='center', fontsize='small')
+        p2.text(ts[i], d_elbci[i] / 8760, f'RPP: {round(d_rpp[i] * 100, 1)}%\n ', ha='center', fontsize='small')
 
-        for i in range(len(ts)):
-            p2.text(ts[i], f_elbci[i] / 8760, f'RPP: {round(f_rpp[i] * 100, 1)}%\n ', ha='center', fontsize='small')
-            p2.text(ts[i], d_elbci[i] / 8760, f'RPP: {round(d_rpp[i] * 100, 1)}%\n ', ha='center', fontsize='small')
+    p.set_xlabel('HTOL Test Duration (hours)')
+    p.set_xticks([100, 500, 1000, 2000])
 
-        p.set_xlabel('HTOL Test Duration (hours)')
-        p.set_xticks([100, 500, 1000, 2000])
+    p.legend(loc='upper left', fontsize='small')
+    p2.legend(loc='upper right', fontsize='small')
 
-        p.legend(loc='upper left', fontsize='small')
-        p2.legend(loc='upper right', fontsize='small')
+    plt.show()
 
-        plt.show()
+    # Generate the vizualization of EIG
+    df = [eval for eval in evals if eval['test-type'] == 'multitemp' and eval['model'] == 'fail']
+    dd = [eval for eval in evals if eval['test-type'] == 'multitemp' and eval['model'] == 'deg']
 
-    if run_sample_count_investigation:
-        # Small data set so here it is entered manually instead of querying from database
-        ts = [24, 117, 231]
+    x, y, z = [], [], []
+    f_rpp, d_rpp, f_elbci, d_elbci, f_eig, d_eig, f_vig, d_vig = [], [], [], [], [], [], [], []
+    for d in df:
+        t1, t2, t3 = d['t1'], d['t2'], d['t3']
+        x.append(t1)
+        y.append(t2)
+        z.append(t3)
+        f_rpp.append(d['rpp'])
+        f_elbci.append(d['mean-qx-lbci'])
+        f_eig.append(d['eig'])
+        f_vig.append(d['vig'])
 
-        f_eigs = [1.085, 1.372, 1.520]
-        f_vigs = [1.941, 2.678, 3.167]
-        f_rpp = [0.488, 0.457, 0.470]
-        f_elbci = [51429, 58623, 63622]
+    for d in dd:
+        d_rpp.append(d['rpp'])
+        d_elbci.append(d['mean-qx-lbci'])
+        d_eig.append(d['eig'])
+        d_vig.append(d['vig'])
 
-        d_eigs = [5.201, 6.377, 6.607]
-        d_vigs = [2.182, 1.957, 1.835]
-        d_rpp = [0.047, 0.267, 0.249]
-        d_elbci = [370832, 137356, 112364]
+    f_rpp_max = np.argmax(f_rpp)
+    f_elbci_max = np.argmax(f_elbci)
+    f_eig_max = np.argmax(f_elbci)
+    f_vig_max = np.argmax(f_elbci)
+    d_rpp_max = np.argmax(d_rpp)
+    d_elbci_max = np.argmax(d_elbci)
+    d_eig_max = np.argmax(d_elbci)
+    d_vig_max = np.argmax(d_elbci)
 
-        #sb.set_theme(style='ticks', font='Times New Roman')
-        #sb.set_context('talk')
-        #plt.rcParams['mathtext.fontset'] = 'custom'
-        #plt.rcParams['mathtext.rm'] = 'Times New Roman'
-        #plt.rcParams['mathtext.it'] = 'Times New Roman'
-        #plt.rcParams['font.family'] = 'Times New Roman'
+    sb.set_theme(style='ticks', font='Times New Roman')
+    sb.set_context('talk')
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['mathtext.rm'] = 'Times New Roman'
+    plt.rcParams['mathtext.it'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman'
 
-        #fig, p = plt.subplots()
-        ## Create second axis sharing the same x-axis
-        #p2 = p.twinx()
+    fig = plt.figure()
+    p = fig.add_subplot(projection='3d')
+    vals = p.scatter(x, y, zs=z, c=f_eig, cmap='cividis', s=100)
 
-        ## Plot first line (left y-axis)
-        #p.errorbar(jnp.array(ts) - 20, f_eigs, yerr=jnp.sqrt(jnp.array(f_vigs)), marker='<', markersize=18, capsize=5, linestyle='', color='turquoise',
-        #           label='Pass/fail model - $EIG \pm \sqrt{VIG}$')
-        #p.errorbar(jnp.array(ts) - 20, d_eigs, yerr=jnp.sqrt(jnp.array(d_vigs)), marker='<', markersize=18, capsize=5, linestyle='', color='mediumorchid',
-        #           label='Degradation model - $EIG \pm \sqrt{VIG}$')
+    fig.colorbar(vals, ax=p, orientation='vertical', label='Estimated EIG (nats)')
+    p.set_xlabel('Sub-test temperature (K)', labelpad=10)
+    p.set_ylabel('Sub-test temperature (K)', labelpad=10)
+    p.set_zlabel('Sub-test temperature (K)', labelpad=10)
 
-        #p2.plot(jnp.array(ts) + 20, jnp.array(f_elbci) / 8760, color='teal', linestyle='', marker='>', markersize=18,
-        #        label='Pass/fail model - expected Q99%-LBCI')
-        #p2.plot(jnp.array(ts) + 20, jnp.array(d_elbci) / 8760, color='indigo', linestyle='', marker='>', markersize=18,
-        #        label='Degradation model - expected Q99%-LBCI')
-
-        #p.set_ylabel('Information Gain (nats)')
-        #p.set_ylim(-1, 10)
-        #p2.set_ylabel('Expected Q99%-LBCI (log years)')
-        #p2.set_ylim(1, 200)
-        #p2.set_yscale('log')
-
-        #for i in range(len(ts)):
-        #    p2.text(ts[i], f_elbci[i] / 8760, f'RPP: {round(f_rpp[i] * 100, 1)}%\n ', ha='center', fontsize='small')
-        #    p2.text(ts[i], d_elbci[i] / 8760, f'RPP: {round(d_rpp[i] * 100, 1)}%\n ', ha='center', fontsize='small')
-
-        #p.set_xlabel('HTOL Test Duration (hours)')
-        #p.set_xticks([100, 500, 1000, 2000])
-
-        #p.legend(loc='upper left', fontsize='small')
-        #p2.legend(loc='upper right', fontsize='small')
-
-        #plt.show()
-
-    if run_multi_stress_investigation:
-        # Connect to the weartest database
-        tls_ca = certifi.where()
-        uri = "mongodb+srv://arbutus.6v6mkhr.mongodb.net/?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority"
-        mongo_client = MongoClient(uri, tls=True, tlsCertificatekeyFile='../cert/mongo_cert.pem', tlsCAFile=tls_ca)
-        db = mongo_client['stratcona']
-        try:
-            mongo_client.admin.command('ping')
-        except PyMongoError as e:
-            print(e)
-            print("\nCould not connect to database successfully, exiting...")
-            exit()
-
-        dset_1 = db['htol-qual-2']
-        df = dset_1.find({'test-type': 'multitemp', 'model': 'fail'})
-        dd = dset_1.find({'test-type': 'multitemp', 'model': 'deg'})
-
-        x, y, z = [], [], []
-        f_rpp, d_rpp, f_elbci, d_elbci, f_eig, d_eig, f_vig, d_vig = [], [], [], [], [], [], [], []
-        for d in df:
-            t1, t2, t3 = d['t1'], d['t2'], d['t3']
-            x.append(t1)
-            y.append(t2)
-            z.append(t3)
-            f_rpp.append(d['rpp'])
-            f_elbci.append(d['mean-qx-lbci'])
-            f_eig.append(d['eig'])
-            f_vig.append(d['vig'])
-
-        for d in dd:
-            d_rpp.append(d['rpp'])
-            d_elbci.append(d['mean-qx-lbci'])
-            d_eig.append(d['eig'])
-            d_vig.append(d['vig'])
-
-        f_rpp_max = np.argmax(f_rpp)
-        f_elbci_max = np.argmax(f_elbci)
-        f_eig_max = np.argmax(f_elbci)
-        f_vig_max = np.argmax(f_elbci)
-        d_rpp_max = np.argmax(d_rpp)
-        d_elbci_max = np.argmax(d_elbci)
-        d_eig_max = np.argmax(d_elbci)
-        d_vig_max = np.argmax(d_elbci)
-
-        sb.set_theme(style='ticks', font='Times New Roman')
-        sb.set_context('talk')
-        plt.rcParams['mathtext.fontset'] = 'custom'
-        plt.rcParams['mathtext.rm'] = 'Times New Roman'
-        plt.rcParams['mathtext.it'] = 'Times New Roman'
-        plt.rcParams['font.family'] = 'Times New Roman'
-
-        fig = plt.figure()
-        p = fig.add_subplot(projection='3d')
-        vals = p.scatter(x, y, zs=z, c=f_eig, cmap='cividis', s=100)
-
-        fig.colorbar(vals, ax=p, orientation='vertical', label='Estimated EIG (nats)')
-        p.set_xlabel('Sub-test temperature (K)', labelpad=10)
-        p.set_ylabel('Sub-test temperature (K)', labelpad=10)
-        p.set_zlabel('Sub-test temperature (K)', labelpad=10)
-
-        plt.show()
+    plt.show()
 
 
 if __name__ == '__main__':
